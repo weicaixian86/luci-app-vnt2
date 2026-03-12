@@ -1,0 +1,55 @@
+<!-- VNT2 服务端日志展示模板（最终版） -->
+<!-- 路径：/luasrc/view/vnt2/vnts2_log.htm -->
+<!-- 适配 OpenWRT LuCI 风格，支持日志滚动、等宽字体、刷新功能 -->
+<fieldset class="cbi-section">
+    <!-- 日志标题：使用LuCI翻译函数，兼容多语言 -->
+    <legend><%:VNT2 Server Log%></legend>
+    
+    <!-- 日志显示核心区域：固定高度、滚动条、等宽字体（适配日志排版） -->
+    <div style="
+        height: 400px;          /* 固定高度，避免页面过长 */
+        overflow-y: auto;       /* 垂直滚动条（日志过多时显示） */
+        background: #f8f8f8;    /* 浅灰色背景，区分页面主体 */
+        padding: 12px;          /* 内边距，优化阅读体验 */
+        border: 1px solid #ddd; /* 浅边框，增强视觉区分 */
+        font-family: monospace, 'Consolas', 'Courier New'; /* 等宽字体，日志排版整齐 */
+        font-size: 12px;        /* 适配LuCI默认字体大小 */
+        line-height: 1.5;       /* 行高，提升可读性 */
+    ">
+        <%
+            -- 核心逻辑：读取VNT2服务端日志
+            local function get_vnts2_log()
+                -- 1. 优先读取VNT2服务端专用日志文件（推荐）
+                local log_file = "/var/log/vnts.log"
+                local log_content = luci.sys.exec("cat " .. log_file .. " 2>/dev/null")
+                
+                -- 2. 专用日志文件为空时，读取系统日志中VNT2相关内容（兼容方案）
+                if log_content == "" then
+                    -- 只取最后200行，避免日志过多导致页面卡顿
+                    log_content = luci.sys.exec("logread | grep -i 'vnts' | tail -200")
+                end
+                
+                -- 3. 无任何日志时显示友好提示
+                if log_content == "" then
+                    log_content = "<%:No VNT2 server logs found.%> <%:Tips%>: <%:1. Check if VNT2 server is enabled; 2. Verify /var/log/vnts.log exists; 3. Check vnts process status.%>"
+                end
+                
+                -- 4. 转义HTML特殊字符（避免日志中的<、>、&等破坏页面渲染）
+                return luci.util.pcdata(log_content)
+            end
+            
+            -- 输出日志内容到页面
+            write(get_vnts2_log())
+        %>
+    </div>
+    
+    <!-- 刷新按钮：LuCI原生样式，点击刷新当前页面 -->
+    <div style="margin-top: 10px;">
+        <input 
+            type="button" 
+            class="cbi-button cbi-button-apply"  <!-- LuCI原生按钮样式，统一界面 -->
+            value="<%:Refresh Log%>" 
+            onclick="window.location.reload();"  <!-- 刷新页面，重新加载日志 -->
+        >
+    </div>
+</fieldset>
