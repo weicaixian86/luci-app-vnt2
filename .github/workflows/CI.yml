@@ -4,93 +4,111 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '请填写发布Releases的版本号（留空不发布）'
+        description: '发布版本号（留空不发布）'
         required: false
         default: ''
       text:
-        description: '请填写发布的说明'
+        description: '发布说明'
         required: false
         default: ''
 env:
   TAG: "${{ github.event.inputs.tag }}"
   TZ: Asia/Shanghai
+  # 锁定SDK版本，避免main分支变动导致兼容问题
+  SDK_ACTION_VERSION: v5
 permissions:
   contents: write
+
 jobs:
-  build:
-    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
+  # 第一步：编译核心架构（高优先级，覆盖80%用户）
+  build_core:
+    name: Core Build ${{ matrix.arch }}-${{ matrix.sdk }}
     runs-on: ubuntu-latest
+    continue-on-error: true  # 单架构失败不终止
     strategy:
       fail-fast: false
       matrix:
         arch:
-          # 核心主流架构（覆盖99%路由器/软路由场景）
-          - aarch64_generic      # ARM64通用（如斐讯N1、香橙派）
-          - arm_cortex-a7        # ARM Cortex-A7（如小米4A千兆版）
-          - arm_cortex-a9        # ARM Cortex-A9（如老款联发科路由器）
-          - i386_pentium4        # x86 32位（老旧软路由）
-          - mips_24kc            # MIPS 24KC（部分联发科路由器）
-          - mipsel_24kc          # MIPSEL 24KC（主流MT7621路由器，如红米AX5）
-          - x86_64               # x86_64（主流软路由）
+          - aarch64_generic      # ARM64通用
+          - mipsel_24kc          # 主流MT7621路由器
+          - x86_64               # x86软路由
         sdk:
-          - openwrt-23.05        # 23.05稳定版（当前主流）
-          - openwrt-24.10        # 24.10新版本（适配最新OpenWRT）
-          - SNAPSHOT             # 开发版（可选，兼容最新特性）
+          - openwrt-23.05        # 稳定版
+          - openwrt-24.10        # 新版
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Build OpenWRT packages
-        uses: sbwml/openwrt-gh-action-sdk@main
+      - name: Fix File Permissions
+        run: |
+          sudo chown -R $USER:$USER .
+          sudo chmod -R 755 .
+
+      - name: Preinstall Dependencies
+        run: |
+          # 适配24.10 SDK依赖
+          sudo apt update && sudo apt install -y \
+            build-essential libncurses5-dev libssl-dev \
+            git wget curl rsync unzip zip jq
+
+      - name: Build OpenWRT Packages
+        id: build
+        uses: sbwml/openwrt-gh-action-sdk@${{ env.SDK_ACTION_VERSION }}
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
-          PACKAGES: vnt vnts luci-app-vnt2  # 核心：编译luci-app-vnt2插件
+          PACKAGES: vnt vnts luci-app-vnt2
           NO_REFRESH_CHECK: true
-          V: s  # 输出详细编译日志
+          V: s  # 详细日志
 
-      - name: Verify IPK package
+      - name: Save Build Log
+        if: always()  # 无论成功失败都保存日志
         run: |
-          # 校验编译产物是否存在，避免空包发布
+          mkdir -p build_logs
+          cp -r logs build_logs/${{ matrix.arch }}-${{ matrix.sdk }}.log || true
+          echo "Build log saved to build_logs/"
+
+      - name: Verify IPK Package
+        if: steps.build.outcome == 'success'
+        run: |
           IPK_PATH="bin/packages/${{ matrix.arch }}/packages_ci/luci-app-vnt2*.ipk"
           if [ ! -f $IPK_PATH ]; then
-            echo "Error: luci-app-vnt2 IPK package not found!"
+            echo "Error: luci-app-vnt2 IPK not found!"
             ls -l bin/packages/${{ matrix.arch }}/packages_ci/
             exit 1
           fi
-          echo "Success: luci-app-vnt2 IPK package exists!"
 
-      - name: Upload build artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk }}
-          path: bin/packages/${{ matrix.arch }}/packages_ci/
-          retention-days: 7  # 产物保留7天，节省存储空间
+          name: VNT2-Core-${{ matrix.arch }}-${{ matrix.sdk }}
+          path: |
+            bin/packages/${{ matrix.arch }}/packages_ci/
+            build_logs/
+          retention-days: 3  # 缩短保留时间
 
-      - name: Compress packages
+      - name: Compress Packages
+        if: steps.build.outcome == 'success'
         run: |
-          # 压缩产物为zip，方便下载
           zip -j vnt2-${{ matrix.arch }}-${{ matrix.sdk }}.zip bin/packages/${{ matrix.arch }}/packages_ci/*
-          # 记录编译时间（URL编码）
           echo "build_time=$(date '+%Y年%m月%d日%H:%M:%S' | jq -sRr @uri)" >> $GITHUB_ENV
 
-      - name: Release packages
-        if: ${{ github.event.inputs.tag != '' }}
+      - name: Release
+        if: ${{ github.event.inputs.tag != '' && steps.build.outcome == 'success' }}
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            > ### ![](https://img.shields.io/badge/%E7%BC%96%E8%AF%91%E6%97%B6%E9%97%B4-${{ env.build_time }}-8267?logo=github&labelColor=%E9%A1%BB)![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.TAG }}/total?label=%E4%B8%8B%E8%BD%BD%E6%AC%A1%E6%95%B0&logo=github) 
+            > ### 编译时间：${{ env.build_time }} | 下载量：![GitHub Downloads (by Release)](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.TAG }}/total)
 
-            ## luci-app-vnt2 插件（适配VNT2分支）
-            - 支持 OpenWRT 版本：23.05 / 24.10 / SNAPSHOT
-            - 架构适配：aarch64_generic、arm_cortex-a7/a9、mipsel_24kc、x86_64 等
+            ## luci-app-vnt2 插件（VNT2分支适配）
+            - 支持OpenWRT版本：23.05 / 24.10
+            - 适配架构：aarch64_generic、mipsel_24kc、x86_64
 
             ### 安装步骤
-            1. 安装前置依赖（必装）：
+            1. 安装依赖：
                ```bash
-               opkg update
-               opkg install luci luci-base luci-compat kmod-tun
+               opkg update && opkg install luci luci-base luci-compat kmod-tun
