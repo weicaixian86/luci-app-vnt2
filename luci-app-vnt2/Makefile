@@ -1,46 +1,41 @@
+# Copyright (C) 2008-2014 The LuCI Team <luci@lists.subsignal.org>
+#
+# This is free software, licensed under the Apache License, Version 2.0 .
+#
+
 include $(TOPDIR)/rules.mk
 
-LUCI_TITLE:=LuCI Support for VNT2 (Virtual Network Tunnel)
-LUCI_PKGARCH:=all
-LUCI_DEPENDS:=+luci-base +luci-compat +bash +iproute2
-
-PKG_NAME:=luci-app-vnt2
 PKG_VERSION:=1.2.16
 PKG_RELEASE:=1
 
-include $(TOPDIR)/feeds/luci/luci.mk
+LUCI_TITLE:=LuCI Support for VNT2 (Virtual Network Tunnel)
+LUCI_DEPENDS:=+kmod-tun +luci-compat  # 仅保留核心依赖，移除bash/iproute2
+LUCI_PKGARCH:=all  # LuCI插件为全架构包
 
-# 安装VNT2二进制文件和配置
-define Package/luci-app-vnt2/install
-	# 安装VNT-CLI二进制
-	$(INSTALL_DIR) $(1)/usr/sbin
-	$(INSTALL_BIN) ./root/usr/sbin/vnt-cli $(1)/usr/sbin/
-	
-	# 安装UCI配置文件
-	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) ./root/etc/config/vnt2 $(1)/etc/config/
-	
-	# 安装启动脚本
-	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) ./root/etc/init.d/vnt2 $(1)/etc/init.d/
-	chmod +x $(1)/etc/init.d/vnt2
-	
-	# 安装LuCI控制器
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
-	$(INSTALL_DATA) ./luasrc/controller/vnt2.lua $(1)/usr/lib/lua/luci/controller/
-	
-	# 安装CBI配置界面
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi
-	$(INSTALL_DATA) ./luasrc/model/cbi/vnt2.lua $(1)/usr/lib/lua/luci/model/cbi/
-	
-	# 新增：安装状态页面模板
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/vnt2
-	$(INSTALL_DATA) ./luasrc/view/vnt2/status.htm $(1)/usr/lib/lua/luci/view/vnt2/
-	
-	# 新增：安装UCI初始化脚本
-	$(INSTALL_DIR) $(1)/etc/uci-defaults
-	$(INSTALL_BIN) ./root/etc/uci-defaults/luci-vnt2 $(1)/etc/uci-defaults/
-	chmod +x $(1)/etc/uci-defaults/luci-vnt2
+PKG_NAME:=luci-app-vnt2
+
+# 预卸载脚本：备份V2配置，避免丢失
+define Package/$(PKG_NAME)/prerm
+#!/bin/sh
+if [ -f /etc/config/vnt2 ] ; then
+  echo "备份vnt2配置文件/etc/config/vnt2到/tmp/vnt2_backup"
+  echo "不重启设备之前再次安装luci-app-vnt2 配置不丢失,不用重新配置"
+  mv -f /etc/config/vnt2 /tmp/vnt2_backup
+fi
 endef
 
-$(eval $(call BuildPackage,luci-app-vnt2))
+# 安装后脚本：恢复配置+赋予启动脚本执行权限
+define Package/$(PKG_NAME)/postinst
+#!/bin/sh
+chmod +x /etc/init.d/vnt2
+if [ -f /tmp/vnt2_backup ] ; then
+  echo "发现vnt2备份配置文件/tmp/vnt2_backup，开始恢复到/etc/config/vnt2"
+  mv -f /tmp/vnt2_backup /etc/config/vnt2
+  echo "请前往 VPN - VNT2 界面进行重启插件"
+fi
+endef
+
+include $(TOPDIR)/feeds/luci/luci.mk
+
+# 无需自定义install段！luci.mk会自动安装luasrc/root下的所有文件
+# call BuildPackage - OpenWrt buildroot signature
