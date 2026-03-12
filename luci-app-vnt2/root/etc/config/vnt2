@@ -1,13 +1,29 @@
-config vnt2 'global'
-    option enabled '0'                  # 是否启用
-    option token ''                     # 组网标识(-k)
-    option device_id ''                 # 设备标识(-d)
-    option device_name ''               # 设备名称(-n)
-    option server 'vnt.wherewego.top:29872'  # 服务器地址(-s)
-    option stun_server 'stun.qq.com:3478'    # STUN服务器(-e)
-    option password ''                  # 客户端加密(-w)
-    option server_encrypt '0'           # 服务端加密(-W)
-    option mtu '1430'                   # MTU(-u)
-    option virtual_ip ''                # 虚拟IP(--ip)
-    option port_mapping ''              # 端口映射(--mapping)
-    option log_level 'info'             # 日志级别
+# VNT 客户端配置块（vnt-cli）
+[config vnt-cli
+    option enabled '0'                # 客户端是否启用：0=禁用，1=启用
+    option mode 'static'              # IP 分配模式：static=静态IP，dhcp=动态获取
+    option ipaddr '10.26.0.6'         # 客户端静态IP地址（mode=static时生效）
+    option desvice_id '10.26.0.6'     # 设备ID（通常与IP一致，用于服务端识别）
+    option punch 'ipv4/ipv6'          # 打洞协议：同时启用IPv4和IPv6打洞
+    option forward '1'                # 转发功能：1=启用，0=禁用（开启后可转发隧道流量）
+    option serverw '0'                # Web管理开关：0=禁用，1=启用
+    option finger '0'                 # 指纹识别：0=禁用，1=启用（用于设备唯一性验证）
+    option relay '0'                  # 中继模式：0=禁用，1=启用（节点间流量中继）
+    option first_latency '0'          # 首次延迟检测：0=禁用，1=启用（连接时检测延迟）
+    option multicast '0'              # 组播功能：0=禁用，1=启用
+    option tunmode 'tun'              # 隧道模式：tun=三层IP隧道（常用），tap=二层以太网隧道
+    option passmode 'off'             # 透传模式：off=关闭，on=开启（透传原始数据包）
+    option clibin '/usr/bin/vnt-cli'  # VNT客户端可执行文件路径（固定，无需修改）
+    option vnt_input 'vnt'            # 输入配置标识（固定，无需修改）
+]
+
+# VNT 服务端配置块（vnts）
+[config vnts
+    option enabled '0'                # 服务端是否启用：0=禁用，1=启用
+    option server_port '29872'        # 服务端监听端口（默认29872，需确保端口未被占用）
+    option subnet '10.26.0.1'         # 服务端子网网关（隧道网络的网关IP）
+    option vntsbin '/usr/bin/vnts'    # VNT服务端可执行文件路径（固定，无需修改）
+    option logs '1'                   # 日志功能：1=启用，0=禁用（建议开启便于排错）
+    option web '0'                    # 服务端Web管理界面：0=禁用，1=启用（启用后可通过网页管理）
+    option sfinger '0'                # 服务端指纹验证：0=禁用，1=启用（需与客户端finger配合）
+]
