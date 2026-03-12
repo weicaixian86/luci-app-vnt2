@@ -1,0 +1,8 @@
+config vnt2 'default'
+    option enabled '0'
+    option server ''
+    option port '10086'
+    option token ''
+    option interface 'lan'
+    option encrypt 'aes-128'
+    option mtu '1400'
