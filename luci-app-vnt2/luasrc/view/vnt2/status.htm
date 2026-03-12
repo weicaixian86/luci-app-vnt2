@@ -1,66 +1,36 @@
-<%+header%>
-<script type="text/javascript">
-// 实时查询VNT2状态
-function updateStatus() {
-    XHR.get('<%=luci.dispatcher.build_url("admin", "network", "vnt2", "status")%>', null,
-        function(x, res) {
-            var statusEl = document.getElementById('vnt2-status');
-            var versionEl = document.getElementById('vnt2-version');
-            if (res && res.running) {
-                statusEl.innerHTML = '<span style="color: green;">✓ VNT2 运行中</span>';
-                versionEl.innerHTML = res.version || '未知版本';
-            } else {
-                statusEl.innerHTML = '<span style="color: red;">✗ VNT2 已停止</span>';
-                versionEl.innerHTML = '-';
+<%
+	local uci = require 'luci.model.uci'.cursor()
+	protocol="http://"
+%>
+<script type="text/javascript">//<![CDATA[
+XHR.poll(3, '<%=url([[admin]], [[vpn]], [[vnt2]], [[status]])%>', null,
+    function(x, data) {
+        var st = document.getElementById('vnt_status');
+        if (data && st) {
+            var clientStatus = data.crunning ? "<span style='color:green;'> 运行中</span><img src='https://www.right.com.cn/forum/data/attachment/album/202401/30/081238k459q2d5klacs8rk.gif' width='30px' alt=''>" : "<span style='color:red;'> 未运行</span>";
+            var serverStatus = data.srunning ? "<span style='color:green;'> 运行中</span><img src='https://www.right.com.cn/forum/data/attachment/album/202401/30/081238k459q2d5klacs8rk.gif' width='30px' alt=''>" : "<span style='color:red;'> 未运行</span>";
+            var vntstaContent = data.crunning ? "已运行：" + "<span style='color:#DA70D6;'>" + data.vntsta + "</span>" : "";    
+            var vntcpuContent = data.crunning ? "<br>" + "CPU占用：" + "<span style='color:#6A5ACD;'>" + data.vntcpu + "</span>" : "";  
+            var vntramContent = data.crunning ? "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;&nbsp;&nbsp;内存占用：" + "<span style='color:#0000CD;'>" + data.vntram + "</span>" : ""; 
+            var vntsta2Content = data.srunning ? "&nbsp;&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;已&nbsp;运&nbsp;行&nbsp;：" + "<span style='color:#DA70D6;'>" + data.vntsta2 + "</span>" : "";    
+            var vntscpuContent = data.srunning ? "<br>" + "CPU占用：" + "<span style='color:#6A5ACD;'>" + data.vntscpu + "</span>" : "";  
+            var vntsramContent = data.srunning ? "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;&nbsp;内存占用：" + "<span style='color:#0000CD;'>" + data.vntsram + "</span>" : "";
+            var vnttagContent = data.crunning ? "<br>" + "当前版本：" + "<span style='color:#CD853F;'>" + data.vnttag + "</span>" : ""; 
+            var vntnewtagContent = data.crunning ? "&nbsp;&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;&nbsp;最新版本：" + "<span style='color:#FFA500;'>" + data.vntnewtag + "</span>" : "";    
+            var vntstagContent = data.srunning ? "<br>" + "当前版本：" + "<span style='color:#CD853F;'>" + data.vntstag + "</span>" : "";  
+            var vntsnewtagContent = data.srunning ? "&nbsp;&nbsp;&nbsp;" + "最新版本：" + "<span style='color:#FFA500;'>" + data.vntsnewtag + "</span>" : "";
+            var vntswebContent = "";
+            if (data.web !== 0 && data.srunning) {
+                vntswebContent = "&nbsp;&nbsp;&nbsp;" + "<input class=\"cbi-button cbi-button-reload mar-10\" type=\"button\" value=\" <%:Web 界面%> \" onclick=\"window.open('<%=protocol%>" + window.location.hostname + ":" + data.port + "/')\"/>";
             }
+            st.innerHTML = "<em><b>vnt-cli " + clientStatus + vntstaContent + vntcpuContent + vntramContent + vnttagContent + vntnewtagContent + "</b></em><br><br><em><b>vnts " + serverStatus + vntsta2Content + vntscpuContent + vntsramContent + vntstagContent + vntsnewtagContent + vntswebContent + "</b></em>";          
         }
-    );
-
-    // 实时查询日志
-    XHR.get('<%=luci.dispatcher.build_url("admin", "network", "vnt2", "log")%>', null,
-        function(x, res) {
-            var logEl = document.getElementById('vnt2-log');
-            logEl.innerHTML = res || '暂无日志';
-        }
-    );
-
-    // 刷新设备列表
-    XHR.get('<%=luci.dispatcher.build_url("admin", "network", "vnt2", "list")%>', null,
-        function(x, res) {
-            var listEl = document.getElementById('vnt2-list');
-            listEl.innerHTML = res || '暂无组网设备';
-        }
-    );
-}
-
-// 页面加载时刷新，之后每5秒刷新一次
-window.onload = function() {
-    updateStatus();
-    setInterval(updateStatus, 5000);
-};
+    }
+);
+//]]>
 </script>
-
-<div class="cbi-map">
-    <h2><%:VNT2 运行状态%></h2>
-    <div class="cbi-section">
-        <div class="cbi-value">
-            <label class="cbi-value-title"><%:运行状态%></label>
-            <div class="cbi-value-field" id="vnt2-status">加载中...</div>
-        </div>
-        <div class="cbi-value">
-            <label class="cbi-value-title"><%:版本信息%></label>
-            <div class="cbi-value-field" id="vnt2-version">-</div>
-        </div>
-    </div>
-
-    <h3><%:组网设备列表%></h3>
-    <div class="cbi-section">
-        <pre id="vnt2-list" style="background: #f5f5f5; padding: 10px; border-radius: 4px; max-height: 200px; overflow-y: auto;">加载中...</pre>
-    </div>
-
-    <h3><%:运行日志%></h3>
-    <div class="cbi-section">
-        <pre id="vnt2-log" style="background: #f5f5f5; padding: 10px; border-radius: 4px; max-height: 300px; overflow-y: auto;">加载中...</pre>
-    </div>
-</div>
-<%+footer%>
+<fieldset class="cbi-section">
+    <p id="vnt_status">
+        <em><%:Collecting data...%></em>
+    </p>
+</fieldset>
