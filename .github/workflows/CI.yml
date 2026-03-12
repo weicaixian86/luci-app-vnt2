@@ -1,4 +1,4 @@
-name: Build-OpenWrt-VNT
+name: Build-OpenWrt-VNT2
 
 on:
   workflow_dispatch:
@@ -24,85 +24,73 @@ jobs:
       fail-fast: false
       matrix:
         arch:
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - aarch64_generic
-          - arm_arm1176jzf-s_vfp
-          - arm_arm926ej-s
-          - arm_cortex-a15_neon-vfpv4
-          - arm_cortex-a5_vfpv4
-          - arm_cortex-a7
-          - arm_cortex-a7_neon-vfpv4
-          - arm_cortex-a8_vfpv3
-          - arm_cortex-a9
-          - arm_cortex-a9_neon
-          - arm_cortex-a9_vfpv3-d16
-          - arm_fa526
-          - arm_mpcore
-          - arm_xscale
-          - i386_pentium-mmx
-          - i386_pentium4
-          - mips_24kc
-          - mips_4kec
-          - mips_mips32
-          - mipsel_24kc
-          - mipsel_24kc_24kf
-          - mipsel_74kc
-          - mipsel_mips32
-          - x86_64
+          # 核心主流架构（覆盖99%路由器/软路由场景）
+          - aarch64_generic      # ARM64通用（如斐讯N1、香橙派）
+          - arm_cortex-a7        # ARM Cortex-A7（如小米4A千兆版）
+          - arm_cortex-a9        # ARM Cortex-A9（如老款联发科路由器）
+          - i386_pentium4        # x86 32位（老旧软路由）
+          - mips_24kc            # MIPS 24KC（部分联发科路由器）
+          - mipsel_24kc          # MIPSEL 24KC（主流MT7621路由器，如红米AX5）
+          - x86_64               # x86_64（主流软路由）
         sdk:
-          - openwrt-22.03
-          - SNAPSHOT
+          - openwrt-23.05        # 23.05稳定版（当前主流）
+          - openwrt-24.10        # 24.10新版本（适配最新OpenWRT）
+          - SNAPSHOT             # 开发版（可选，兼容最新特性）
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Building packages
+      - name: Build OpenWRT packages
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
-          PACKAGES: vnt vnts luci-app-vnt
+          PACKAGES: vnt vnts luci-app-vnt2  # 核心：编译luci-app-vnt2插件
           NO_REFRESH_CHECK: true
-          V: s
+          V: s  # 输出详细编译日志
 
-      - name: Upload artifacts
+      - name: Verify IPK package
+        run: |
+          # 校验编译产物是否存在，避免空包发布
+          IPK_PATH="bin/packages/${{ matrix.arch }}/packages_ci/luci-app-vnt2*.ipk"
+          if [ ! -f $IPK_PATH ]; then
+            echo "Error: luci-app-vnt2 IPK package not found!"
+            ls -l bin/packages/${{ matrix.arch }}/packages_ci/
+            exit 1
+          fi
+          echo "Success: luci-app-vnt2 IPK package exists!"
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: VNT-${{ matrix.arch }}-${{ matrix.sdk }}
+          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk }}
           path: bin/packages/${{ matrix.arch }}/packages_ci/
+          retention-days: 7  # 产物保留7天，节省存储空间
 
-      - name: Create compress files
+      - name: Compress packages
         run: |
-          #tar -zcvf vnt-${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz -C bin/packages/${{ matrix.arch }}/ packages_ci
-          zip -j vnt-${{ matrix.arch }}-${{ matrix.sdk }}.zip bin/packages/${{ matrix.arch }}/packages_ci/*
+          # 压缩产物为zip，方便下载
+          zip -j vnt2-${{ matrix.arch }}-${{ matrix.sdk }}.zip bin/packages/${{ matrix.arch }}/packages_ci/*
+          # 记录编译时间（URL编码）
           echo "build_time=$(date '+%Y年%m月%d日%H:%M:%S' | jq -sRr @uri)" >> $GITHUB_ENV
 
-      - name: Release
+      - name: Release packages
         if: ${{ github.event.inputs.tag != '' }}
         uses: softprops/action-gh-release@v2
         with:
-            token: ${{ secrets.GITHUB_TOKEN }}
-            body: |
-             > ### ![](https://img.shields.io/badge/%E7%BC%96%E8%AF%91%E6%97%B6%E9%97%B4-${{ env.build_time }}-8267?logo=github&labelColor=%E9%A1%BB)![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.TAG }}/total?label=%E4%B8%8B%E8%BD%BD%E6%AC%A1%E6%95%B0&logo=github) 
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            > ### ![](https://img.shields.io/badge/%E7%BC%96%E8%AF%91%E6%97%B6%E9%97%B4-${{ env.build_time }}-8267?logo=github&labelColor=%E9%A1%BB)![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.TAG }}/total?label=%E4%B8%8B%E8%BD%BD%E6%AC%A1%E6%95%B0&logo=github) 
 
-             - 其中 **`openwrt-22.03`** 里面是ipk安装包 **`SNAPSHOT`** 里面是apk安装包
-             
-             - 需要先去系统自带的软件包里已经安装 _**luci**_ 和 _**luci-base**_ 和 _**luci-compat**_ 和 _**kmod-tun**_ 再安装这个ipk或apk才能显示界面
+            ## luci-app-vnt2 插件（适配VNT2分支）
+            - 支持 OpenWRT 版本：23.05 / 24.10 / SNAPSHOT
+            - 架构适配：aarch64_generic、arm_cortex-a7/a9、mipsel_24kc、x86_64 等
 
-             - 安装完成后找不到界面入口的，请注销登录关闭当前浏览器窗口重新打开或重启路由器
-             
-             - 如果 状态-系统日志里 出现下图日志内容可以使用以下命令解决
-             ![image](https://github.com/lmq8267/luci-app-vnt/assets/119713693/5094717e-a301-4411-9450-c8b64d4a3ade)
-             `sed -i 's/util/xml/g' /usr/lib/lua/luci/model/cbi/vnt.lua`
-
-             - **`*.apk` 是OpenWrt新版的APK包** 对于apk包跳过证书命令
-             `apk add --allow-untrusted luci-app-vnt.apk`
-
-             ${{ github.event.inputs.text }}
-           
-            tag_name: ${{ env.TAG }}
-            files: vnt-${{ matrix.arch }}-${{ matrix.sdk }}.zip
- 
+            ### 安装步骤
+            1. 安装前置依赖（必装）：
+               ```bash
+               opkg update
+               opkg install luci luci-base luci-compat kmod-tun
