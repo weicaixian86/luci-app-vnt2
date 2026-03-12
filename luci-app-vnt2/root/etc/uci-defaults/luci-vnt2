@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# 初始化VNT2配置跟踪
+uci -q batch <<-EOF >/dev/null
+	delete ucitrack.@vnt2[-1]
+	add ucitrack vnt2
+	set ucitrack.@vnt2[-1].init=vnt2
+	commit ucitrack
+EOF
+
+# 赋予VNT2启动脚本执行权限
+chmod +x /etc/init.d/vnt2
+
+# 清理LuCI缓存（确保页面实时生效）
+rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
+
+exit 0
