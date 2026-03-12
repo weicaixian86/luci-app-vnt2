@@ -1,39 +1,41 @@
-#
-# Copyright (C) 2008-2014 The LuCI Team <luci@lists.subsignal.org>
-#
-# This is free software, licensed under the Apache License, Version 2.0 .
-#
-
 include $(TOPDIR)/rules.mk
 
-PKG_VERSION:=1.2.16
-PKG_RELEASE:=1
-
-LUCI_TITLE:=LuCI support for vnt
-LUCI_DEPENDS:=+kmod-tun
+LUCI_TITLE:=LuCI Support for VNT2 (Virtual Network Tunnel V2)
 LUCI_PKGARCH:=all
+LUCI_DEPENDS:=+bash +iproute2
 
-PKG_NAME:=luci-app-vnt
-
-define Package/$(PKG_NAME)/prerm
-#!/bin/sh
-if [ -f /etc/config/vnt ] ; then
-  echo "备份vnt配置文件/etc/config/vnt到/tmp/vnt_backup"
-  echo "不重启设备之前再次安装luci-app-vnt 配置不丢失,不用重新配置"
-  mv -f /etc/config/vnt /tmp/vnt_backup
-fi
-endef
-
-define Package/$(PKG_NAME)/postinst
-#!/bin/sh
-chmod +x /etc/init.d/vnt
-if [ -f /tmp/vnt_backup ] ; then
-  echo "发现vnt备份配置文件/tmp/vnt_backup，开始恢复到/etc/config/vnt"
-  mv -f /tmp/vnt_backup /etc/config/vnt
-  echo "请前往 VPN - VNT 界面进行重启插件"
-fi
-endef
+PKG_NAME:=luci-app-vnt2
+PKG_VERSION:=2.0.0
+PKG_RELEASE:=1
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
-# call BuildPackage - OpenWrt buildroot signature
+define Build/Compile
+    git clone https://github.com/vnt-dev/vnt.git $(BUILD_DIR)/vnt
+    cd $(BUILD_DIR)/vnt && git checkout v2
+    cd $(BUILD_DIR)/vnt && GOOS=linux GOARCH=$(ARCH) go build -o vnt2 ./cmd/vnt
+    mkdir -p $(PKG_BUILD_DIR)/root/usr/bin
+    cp $(BUILD_DIR)/vnt/vnt2 $(PKG_BUILD_DIR)/root/usr/bin/
+endef
+
+define Package/luci-app-vnt2/install
+    $(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
+    $(INSTALL_DATA) ./luasrc/controller/vnt2.lua $(1)/usr/lib/lua/luci/controller/
+    
+    $(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi
+    $(INSTALL_DATA) ./luasrc/model/cbi/vnt2.lua $(1)/usr/lib/lua/luci/model/cbi/
+    
+    $(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/vnt2
+    $(INSTALL_DATA) ./luasrc/view/vnt2/status.htm $(1)/usr/lib/lua/luci/view/vnt2/
+    
+    $(INSTALL_DIR) $(1)/etc/config
+    $(INSTALL_CONF) ./root/etc/config/vnt2 $(1)/etc/config/
+    
+    $(INSTALL_DIR) $(1)/etc/init.d
+    $(INSTALL_BIN) ./root/etc/init.d/vnt2 $(1)/etc/init.d/
+    
+    $(INSTALL_DIR) $(1)/usr/bin
+    $(INSTALL_BIN) $(PKG_BUILD_DIR)/root/usr/bin/vnt2 $(1)/usr/bin/
+endef
+
+$(eval $(call BuildPackage,luci-app-vnt2))
