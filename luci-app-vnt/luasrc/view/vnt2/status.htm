@@ -1,0 +1,19 @@
+<%+header%>
+<h2><%:VNT2 Running Status%></h2>
+<div class="cbi-section">
+    <%- if luci.sys.call("pidof vnt2 >/dev/null") == 0 then -%>
+        <p style="color: green;"><%:VNT2 is running%> (PID: <%=luci.sys.exec("pidof vnt2")%>)</p>
+    <%- else -%>
+        <p style="color: red;"><%:VNT2 is not running%></p>
+    <%- end -%>
+</div>
+
+<h3><%:Recent Logs%></h3>
+<div class="cbi-section" style="max-height: 300px; overflow-y: auto; background: #f5f5f5; padding: 10px;">
+    <%- if nixio.fs.access("/var/log/vnt2.log") then -%>
+        <pre><%=luci.sys.exec("tail -20 /var/log/vnt2.log")%></pre>
+    <%- else -%>
+        <p><%:No log file found%></p>
+    <%- end -%>
+</div>
+<%+footer%>
