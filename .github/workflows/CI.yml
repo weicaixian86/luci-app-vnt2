@@ -1,107 +1,46 @@
-# GitHub Actions 工作流：编译 OpenWRT VNT2 包
 name: Build-OpenWrt-VNT2
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '请填写发布Releases的版本号（留空不发布）'
+        description: 'Release tag'
         required: false
         default: ''
-      text:
-        description: '请填写发布的说明'
-        required: false
-        default: ''
+
 env:
   TAG: "${{ github.event.inputs.tag }}"
   TZ: Asia/Shanghai
+
 permissions:
   contents: write
+
 jobs:
   build:
-    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         arch:
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - aarch64_generic
-          - arm_arm1176jzf-s_vfp
-          - arm_arm926ej-s
-          - arm_cortex-a15_neon-vfpv4
-          - arm_cortex-a5_vfpv4
-          - arm_cortex-a7
-          - arm_cortex-a7_neon-vfpv4
-          - arm_cortex-a8_vfpv3
-          - arm_cortex-a9
-          - arm_cortex-a9_neon
-          - arm_cortex-a9_vfpv3-d16
-          - arm_fa526
-          - arm_mpcore
-          - arm_xscale
-          - i386_pentium-mmx
-          - i386_pentium4
-          - mips_24kc
-          - mips_4kec
-          - mips_mips32
-          - mipsel_24kc
-          - mipsel_24kc_24kf
-          - mipsel_74kc
-          - mipsel_mips32
           - x86_64
+          - aarch64_cortex-a53
+          - arm_cortex-a7_neon-vfpv4
+          - mipsel_24kc
         sdk:
-          - openwrt-22.03
-          - SNAPSHOT
+          - openwrt-24.10
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Building packages
+      - name: Build packages
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: packages_ci
-          PACKAGES: vnt2 vnts2 luci-app-vnt2  # 核心修改：替换为V2包名
+          FEEDNAME: vnt2
+          PACKAGES: vnt2 vnts2 luci-app-vnt2
           NO_REFRESH_CHECK: true
           V: s
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk }}  # 标识V2
-          path: bin/packages/${{ matrix.arch }}/packages_ci/
-
-      - name: Create compress files
-        run: |
-          zip -j vnt2-${{ matrix.arch }}-${{ matrix.sdk }}.zip bin/packages/${{ matrix.arch }}/packages_ci/*  # 压缩包名加2
-          echo "build_time=$(date '+%Y年%m月%d日%H:%M:%S' | jq -sRr @uri)" >> $GITHUB_ENV
-
-      - name: Release
-        if: ${{ github.event.inputs.tag != '' }}
-        uses: softprops/action-gh-release@v2
-        with:
-            token: ${{ secrets.GITHUB_TOKEN }}
-            body: |
-             > ### ![](https://img.shields.io/badge/%E7%BC%96%E8%AF%91%E6%97%B6%E9%97%B4-${{ env.build_time }}-8267?logo=github&labelColor=%E9%A1%BB)![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.TAG }}/total?label=%E4%B8%8B%E8%BD%BD%E6%AC%A1%E6%95%B0&logo=github) 
-
-             - 其中 **`openwrt-22.03`** 里面是ipk安装包 **`SNAPSHOT`** 里面是apk安装包
-             
-             - 需要先去系统自带的软件包里已经安装 _**luci**_ 和 _**luci-base**_ 和 _**luci-compat**_ 和 _**kmod-tun**_ 再安装这个ipk或apk才能显示界面
-
-             - 安装完成后找不到界面入口的，请注销登录关闭当前浏览器窗口重新打开或重启路由器
-             
-             - 如果 状态-系统日志里 出现下图日志内容可以使用以下命令解决
-             ![image](https://github.com/lmq8267/luci-app-vnt/assets/119713693/5094717e-a301-4411-9450-c8b64d4a3ade)
-             `sed -i 's/util/xml/g' /usr/lib/lua/luci/model/cbi/vnt2.lua`  # 适配V2的cbi文件
-             
-             - **`*.apk` 是OpenWrt新版的APK包** 对于apk包跳过证书命令
-             `apk add --allow-untrusted luci-app-vnt2.apk`  # 适配V2包名
-
-             ${{ github.event.inputs.text }}
-           
-            tag_name: ${{ env.TAG }}
-            files: vnt2-${{ matrix.arch }}-${{ matrix.sdk }}.zip  # 发布V2的ZIP包
+          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk }}
+          path: bin/packages/${{ matrix.arch }}/vnt2/
