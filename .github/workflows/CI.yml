@@ -21,8 +21,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 修正：OpenWrt 容器标签用 x86-64 而不是 x86_64
         arch:
-          - x86_64
+          - x86-64
         sdk_version:
           - "24.10"
 
@@ -37,10 +38,10 @@ jobs:
           cp -r ./luci-app-vnt2/* custom-feed/
           ls -la custom-feed/
 
-      # ✅ 用官方 SDK Action，自动下载+配置，完全不用管地址
       - name: Build with OpenWrt SDK
         uses: openwrt/gh-action-sdk@v6
         env:
+          # 修正：ARCH 变量也改为 x86-64-24.10
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk_version }}
           FEED_CONF: |
             src/gz openwrt_core https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/targets/x86/64/packages
