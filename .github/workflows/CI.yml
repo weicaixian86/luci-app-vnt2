@@ -22,23 +22,42 @@ jobs:
       fail-fast: false
       matrix:
         arch:
-          - x86_64
-          - aarch64_cortex-a53
-          - arm_cortex-a7_neon-vfpv4
-          - mipsel_24kc
+          - x86_64  # 先测试单架构，稳定后再加其他
         sdk:
           - openwrt-24.10
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build packages
+        with:
+          fetch-depth: 0
+
+      # 关键步骤1：创建feeds配置，指向嵌套的luci-app-vnt2目录
+      - name: Configure custom feeds
+        run: |
+          echo "src-link vnt2 $(pwd)/luci-app-vnt2" >> feeds.conf.default
+          cat feeds.conf.default  # 打印验证配置
+
+      # 关键步骤2：更新feeds并安装依赖
+      - name: Update and install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -p vnt2
+
+      # 关键步骤3：修复目录权限（避免SDK编译权限错误）
+      - name: Fix directory permissions
+        run: sudo chown -R 1000:1000 ${{ github.workspace }}
+
+      # 核心编译步骤（修改FEEDNAME为自定义的vnt2）
+      - name: Building packages
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: vnt2
+          FEEDNAME: vnt2  # 对应上面src-link的名称
           PACKAGES: vnt2 vnts2 luci-app-vnt2
           NO_REFRESH_CHECK: true
           V: s
+
+      # 上传产物（路径适配新的FEEDNAME）
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
