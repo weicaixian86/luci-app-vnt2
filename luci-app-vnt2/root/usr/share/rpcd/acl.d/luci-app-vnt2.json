@@ -1,0 +1,30 @@
+{
+    "luci-app-vnt2": {
+        "description": "Grant access to VNT2 plugin",
+        "read": {
+            "ubus": {
+                "system": ["*"]
+            },
+            "file": {
+                "/tmp/vnt2.log": ["read"],
+                "/tmp/vnts2.log": ["read"],
+                "/usr/bin/vnt2-cli": ["read", "exec"],
+                "/usr/bin/vnts2": ["read", "exec"]
+            },
+            "uci": ["vnt2"]
+        },
+        "write": {
+            "ubus": {
+                "system": ["*"]
+            },
+            "file": {
+                "/tmp/vnt2.log": ["write"],
+                "/tmp/vnts2.log": ["write"],
+                "/usr/bin/vnt2-cli": ["write", "exec"],
+                "/usr/bin/vnts2": ["write", "exec"]
+            },
+            "uci": ["vnt2"],
+            "service": ["vnt2"]
+        }
+    }
+}
