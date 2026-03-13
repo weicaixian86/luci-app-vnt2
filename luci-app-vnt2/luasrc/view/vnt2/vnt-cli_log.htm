@@ -1,0 +1,14 @@
+<fieldset class="cbi-section">
+    <legend><%:VNT2 Client Log%></legend>
+    <div style="height:400px; overflow:auto; background:#f8f8f8; padding:10px; font-family:monospace;">
+        <%
+            local log = luci.sys.exec("cat /tmp/vnt.log 2>/dev/null || logread | grep -i vnt2-cli | tail -200")
+            log = luci.util.pcdata(log)
+            if log == "" then log = "<%:No client logs found.%>" end
+            write(log)
+        %>
+    </div>
+    <div style="margin-top:10px;">
+        <input type="button" class="cbi-button cbi-button-apply" value="<%:Refresh Log%>" onclick="location.reload()">
+    </div>
+</fieldset>
