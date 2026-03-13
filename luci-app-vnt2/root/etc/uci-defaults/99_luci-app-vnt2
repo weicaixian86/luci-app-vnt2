@@ -1,0 +1,8 @@
+#!/bin/sh
+
+# 设置启动脚本权限
+chmod 755 /etc/init.d/vnt2
+# 启用开机自启
+/etc/init.d/vnt2 enable
+
+exit 0
