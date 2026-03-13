@@ -1,0 +1,154 @@
+<%+header%>
+<style>
+    .status-card {
+        background: #fff;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .status-running {
+        color: #00a65a;
+        font-weight: bold;
+        font-size: 18px;
+    }
+    .status-stopped {
+        color: #dd4b39;
+        font-weight: bold;
+        font-size: 18px;
+    }
+    .status-info {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-top: 15px;
+    }
+    .info-item {
+        display: flex;
+        flex-direction: column;
+    }
+    .info-label {
+        color: #666;
+        font-size: 14px;
+        margin-bottom: 5px;
+    }
+    .info-value {
+        font-size: 16px;
+        font-weight: 500;
+    }
+    .desc-box {
+        margin-bottom: 20px;
+        color: #333;
+        line-height: 1.6;
+    }
+</style>
+
+<div class="cbi-map">
+    <h2>VNT2 运行状态</h2>
+
+    <div class="desc-box">
+        <p>vnt是一个简便高效的异地组网、内网穿透工具。</p>
+        <p>官网：<a href="https://rustvnt.com" target="_blank">rustvnt.com</a>
+        项目地址：<a href="https://github.com/vnt-dev/vnt" target="_blank">github.com/vnt-dev/vnt</a>
+        安卓端、GUI：VntApp</p>
+    </div>
+
+    <div class="status-card">
+        <div>
+            <span id="client-status" class="status-stopped">vnt2-cli 未运行</span>
+        </div>
+        <div class="status-info">
+            <div class="info-item">
+                <span class="info-label">已运行</span>
+                <span class="info-value" id="client-uptime">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">CPU占用</span>
+                <span class="info-value" id="client-cpu">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">内存占用</span>
+                <span class="info-value" id="client-mem">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">当前版本</span>
+                <span class="info-value" id="client-cur-ver">-</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-card">
+        <div>
+            <span id="server-status" class="status-stopped">vnts2 未运行</span>
+        </div>
+        <div class="status-info">
+            <div class="info-item">
+                <span class="info-label">已运行</span>
+                <span class="info-value" id="server-uptime">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">CPU占用</span>
+                <span class="info-value" id="server-cpu">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">内存占用</span>
+                <span class="info-value" id="server-mem">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">当前版本</span>
+                <span class="info-value" id="server-cur-ver">-</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script type="text/javascript">
+function refreshStatus() {
+    XHR.get('<%=luci.dispatcher.build_url("admin", "services", "vnt2", "api_status")%>', null, function(xhr, result) {
+        if (!xhr || xhr.status !== 200) return;
+
+        // 客户端状态
+        if (result.client.running) {
+            document.getElementById('client-status').className = 'status-running';
+            document.getElementById('client-status').innerText = 'vnt2-cli 运行中';
+            document.getElementById('client-uptime').innerText = result.client.uptime;
+            document.getElementById('client-cpu').innerText = result.client.cpu;
+            document.getElementById('client-mem').innerText = result.client.mem;
+            document.getElementById('client-cur-ver').innerText = result.client.cur_version;
+        } else {
+            document.getElementById('client-status').className = 'status-stopped';
+            document.getElementById('client-status').innerText = 'vnt2-cli 未运行';
+            document.getElementById('client-uptime').innerText = '-';
+            document.getElementById('client-cpu').innerText = '-';
+            document.getElementById('client-mem').innerText = '-';
+            document.getElementById('client-cur-ver').innerText = '-';
+        }
+
+        // 服务端状态
+        if (result.server.running) {
+            document.getElementById('server-status').className = 'status-running';
+            document.getElementById('server-status').innerText = 'vnts2 运行中';
+            document.getElementById('server-uptime').innerText = result.server.uptime;
+            document.getElementById('server-cpu').innerText = result.server.cpu;
+            document.getElementById('server-mem').innerText = result.server.mem;
+            document.getElementById('server-cur-ver').innerText = result.server.cur_version;
+        } else {
+            document.getElementById('server-status').className = 'status-stopped';
+            document.getElementById('server-status').innerText = 'vnts2 未运行';
+            document.getElementById('server-uptime').innerText = '-';
+            document.getElementById('server-cpu').innerText = '-';
+            document.getElementById('server-mem').innerText = '-';
+            document.getElementById('server-cur-ver').innerText = '-';
+        }
+    });
+}
+
+// 页面加载时刷新
+document.addEventListener('DOMContentLoaded', function() {
+    refreshStatus();
+    // 每5秒自动刷新
+    setInterval(refreshStatus, 5000);
+});
+</script>
+
+<%+footer%>
