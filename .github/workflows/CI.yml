@@ -18,15 +18,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 修正：OpenWrt 容器标签用 x86-64 而不是 x86_64
-        arch:
-          - x86-64
-        sdk_version:
-          - "24.10"
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,26 +29,36 @@ jobs:
           cp -r ./luci-app-vnt2/* custom-feed/
           ls -la custom-feed/
 
-      - name: Build with OpenWrt SDK
-        uses: openwrt/gh-action-sdk@v6
-        env:
-          # 修正：ARCH 变量也改为 x86-64-24.10
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk_version }}
-          FEED_CONF: |
-            src/gz openwrt_core https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/targets/x86/64/packages
-            src/gz openwrt_base https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/x86_64/packages/base
-            src/gz openwrt_luci https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/x86_64/packages/luci
-            src/gz openwrt_packages https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/x86_64/packages/packages
-            src/gz openwrt_routing https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/x86_64/packages/routing
-            src/gz openwrt_telephony https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/x86_64/packages/telephony
-            src-link custom_feed $GITHUB_WORKSPACE/custom-feed
-          FEEDNAME: custom_feed
-          PACKAGES: vnt2 vnts2 luci-app-vnt2
-          NO_REFRESH_CHECK: true
-          V: s
+      # ✅ 正确的 24.10 x86_64 SDK 下载地址
+      - name: Download OpenWrt SDK
+        run: |
+          wget https://downloads.openwrt.org/releases/24.10/targets/x86/64/openwrt-sdk-24.10-x86-64_gcc-13.3_musl.Linux-x86_64.tar.xz
+          tar xJf openwrt-sdk-24.10-x86-64_gcc-13.3_musl.Linux-x86_64.tar.xz
+          mv openwrt-sdk-24.10-x86-64_gcc-13.3_musl.Linux-x86_64 sdk
+
+      - name: Configure SDK
+        run: |
+          cd sdk
+          echo "src-link custom_feed $(pwd)/../custom-feed" >> feeds.conf
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Build packages
+        run: |
+          cd sdk
+          make defconfig
+          make package/vnt2/compile V=s
+          make package/vnts2/compile V=s
+          make package/luci-app-vnt2/compile V=s
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          cp sdk/bin/packages/x86_64/custom_feed/*.ipk artifacts/
+          ls -la artifacts/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk_version }}
-          path: bin/packages/${{ matrix.arch }}/custom_feed/
+          name: VNT2-x86_64-24.10
+          path: artifacts/
