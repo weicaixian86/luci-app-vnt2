@@ -26,10 +26,10 @@ jobs:
       - name: Prepare custom feed
         run: |
           mkdir -p custom-feed
-          # 关键：确保复制的是正确目录，这里假设 luci-app-vnt2 下的三个包目录直接放入
-          cp -r ./luci-app-vnt2/vnt2 custom-feed/ || true
-          cp -r ./luci-app-vnt2/vnts2 custom-feed/ || true
-          cp -r ./luci-app-vnt2/luci-app-vnt2 custom-feed/ || true
+          # 直接从仓库根目录复制三个包（修正路径！）
+          cp -r ./vnt2 custom-feed/
+          cp -r ./vnts2 custom-feed/
+          cp -r ./luci-app-vnt2 custom-feed/
           ls -la custom-feed/
           # 检查是否有三个包目录
           if [ ! -d "custom-feed/vnt2" ] || [ ! -d "custom-feed/vnts2" ] || [ ! -d "custom-feed/luci-app-vnt2" ]; then
@@ -48,33 +48,25 @@ jobs:
       - name: Configure SDK
         run: |
           cd sdk
-          # 彻底清空 feeds.conf，避免旧内容干扰
           > feeds.conf
-          # 逐行添加官方 feeds，确保格式正确（src/gz 空格 仓库名 空格 地址）
           echo "src/gz openwrt_core https://downloads.openwrt.org/releases/24.10.5/targets/x86/64/packages" >> feeds.conf
           echo "src/gz openwrt_base https://downloads.openwrt.org/releases/24.10.5/x86_64/packages/base" >> feeds.conf
           echo "src/gz openwrt_luci https://downloads.openwrt.org/releases/24.10.5/x86_64/packages/luci" >> feeds.conf
           echo "src/gz openwrt_packages https://downloads.openwrt.org/releases/24.10.5/x86_64/packages/packages" >> feeds.conf
           echo "src/gz openwrt_routing https://downloads.openwrt.org/releases/24.10.5/x86_64/packages/routing" >> feeds.conf
           echo "src/gz openwrt_telephony https://downloads.openwrt.org/releases/24.10.5/x86_64/packages/telephony" >> feeds.conf
-          # 添加自定义 feed（路径必须正确）
           echo "src-link custom_feed $(pwd)/../custom-feed" >> feeds.conf
-          # 打印验证
           cat feeds.conf
-          # 更新 feeds
           ./scripts/feeds update -a
-          # 安装 custom_feed 里的包
           ./scripts/feeds install -a -p custom_feed
 
       - name: Build packages
         run: |
           cd sdk
           make defconfig
-          # 确认包已安装
           ./scripts/feeds search vnt2
           ./scripts/feeds search vnts2
           ./scripts/feeds search luci-app-vnt2
-          # 编译
           make package/vnt2/compile V=s
           make package/vnts2/compile V=s
           make package/luci-app-vnt2/compile V=s
