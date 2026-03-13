@@ -29,13 +29,14 @@ jobs:
           cp -r ./luci-app-vnt2/* custom-feed/
           ls -la custom-feed/
 
-      # ✅ 直接使用你确认的 24.10.5 SDK 地址
+      # ✅ 完全匹配你截图里的真实文件名和后缀
       - name: Download OpenWrt SDK
         run: |
-          SDK_FILE="openwrt-sdk-24.10.5-x86-64_gcc-13.3_musl.Linux-x86_64.tar.xz"
+          SDK_FILE="openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
           wget https://downloads.openwrt.org/releases/24.10.5/targets/x86/64/$SDK_FILE
-          tar xJf $SDK_FILE
-          mv openwrt-sdk-24.10.5-x86-64_gcc-13.3_musl.Linux-x86_64 sdk
+          # 用 tar 解压 .tar.zst 文件
+          tar -I zstd -xf $SDK_FILE
+          mv openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64 sdk
           ls -la sdk/
 
       - name: Configure SDK
