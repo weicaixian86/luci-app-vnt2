@@ -23,48 +23,62 @@ jobs:
       matrix:
         arch:
           - x86_64
-        sdk:
-          - openwrt-24.10
+        sdk_version:
+          - "24.10"
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # 安装 Rust（源码编译必需）
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           targets: x86_64-unknown-linux-musl
 
-      - name: Prepare custom feed structure
+      # 准备自定义 feed（把嵌套目录展开成标准 feed）
+      - name: Prepare custom feed
         run: |
           mkdir -p custom-feed
           cp -r ./luci-app-vnt2/* custom-feed/
           ls -la custom-feed/
 
-      - name: Building packages
-        uses: sbwml/openwrt-gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEED_CONF: |
-            src/gz openwrt_core https://downloads.openwrt.org/releases/${{ matrix.sdk }}/targets/${{ matrix.arch }}/packages
-            src/gz openwrt_base https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/base
-            src/gz openwrt_luci https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/luci
-            src/gz openwrt_packages https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/packages
-            src/gz openwrt_routing https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/routing
-            src/gz openwrt_telephony https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/telephony
-            src-link custom_feed $GITHUB_WORKSPACE/custom-feed
-          FEEDNAME: custom_feed
-          PACKAGES: vnt2 vnts2 luci-app-vnt2
-          NO_REFRESH_CHECK: true
-          V: s
-          RUSTUP_HOME: /usr/local/rustup
-          CARGO_HOME: /usr/local/cargo
-          PATH: /usr/local/cargo/bin:$PATH
+      # 下载 OpenWrt SDK
+      - name: Download OpenWrt SDK
+        run: |
+          wget https://downloads.openwrt.org/releases/${{ matrix.sdk_version }}/targets/x86/64/openwrt-sdk-${{ matrix.sdk_version }}-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          tar xJf openwrt-sdk-${{ matrix.sdk_version }}-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          mv openwrt-sdk-${{ matrix.sdk_version }}-x86-64_gcc-12.3.0_musl.Linux-x86_64 sdk
 
+      # 配置 SDK 并添加自定义 feed
+      - name: Configure SDK
+        run: |
+          cd sdk
+          echo "src-link custom_feed $(pwd)/../custom-feed" >> feeds.conf
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # 编译 V2 包
+      - name: Build packages
+        run: |
+          cd sdk
+          make defconfig
+          make package/vnt2/compile V=s
+          make package/vnts2/compile V=s
+          make package/luci-app-vnt2/compile V=s
+
+      # 收集产物
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          cp sdk/bin/packages/x86_64/custom_feed/*.ipk artifacts/
+          ls -la artifacts/
+
+      # 上传产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk }}
-          path: bin/packages/${{ matrix.arch }}/custom_feed/
+          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk_version }}
+          path: artifacts/
