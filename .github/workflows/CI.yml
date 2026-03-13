@@ -29,12 +29,19 @@ jobs:
           cp -r ./luci-app-vnt2/* custom-feed/
           ls -la custom-feed/
 
-      # ✅ 正确的 24.10 x86_64 SDK 下载地址
+      # ✅ 用 curl 获取真实 SDK 文件名，再下载，彻底避免 404
       - name: Download OpenWrt SDK
         run: |
-          wget https://downloads.openwrt.org/releases/24.10/targets/x86/64/openwrt-sdk-24.10-x86-64_gcc-13.3_musl.Linux-x86_64.tar.xz
-          tar xJf openwrt-sdk-24.10-x86-64_gcc-13.3_musl.Linux-x86_64.tar.xz
-          mv openwrt-sdk-24.10-x86-64_gcc-13.3_musl.Linux-x86_64 sdk
+          # 获取真实的 SDK 文件名
+          SDK_FILE=$(curl -s https://downloads.openwrt.org/releases/24.10/targets/x86/64/ | grep -o 'openwrt-sdk-24\.10-x86-64_gcc-.*\.Linux-x86_64\.tar\.xz' | head -1)
+          echo "Found SDK file: $SDK_FILE"
+          # 下载
+          wget https://downloads.openwrt.org/releases/24.10/targets/x86/64/$SDK_FILE
+          # 解压
+          tar xJf $SDK_FILE
+          # 重命名为 sdk
+          mv openwrt-sdk-24.10-x86-64_gcc-* sdk
+          ls -la sdk/
 
       - name: Configure SDK
         run: |
