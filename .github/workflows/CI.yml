@@ -6,10 +6,10 @@ on:
       tag:
         description: 'Release tag'
         required: false
-        default: ''
+        default: 'v1.0.0'  # 默认版本号
 
 env:
-  TAG: "${{ github.event.inputs.tag }}"
+  TAG: "${{ github.event.inputs.tag || 'v1.0.0' }}"  # 兼容空标签
   TZ: Asia/Shanghai
 
 permissions:
@@ -31,7 +31,6 @@ jobs:
           cp -r ./luci-app-vnt2 custom-feed/
           ls -la custom-feed/
 
-      # 直接用 openwrt/gh-action-sdk，把 FEED_CONF 当环境变量传
       - name: Build with OpenWrt SDK
         uses: openwrt/gh-action-sdk@v6
         env:
@@ -54,3 +53,29 @@ jobs:
         with:
           name: VNT2-x86_64-24.10.5
           path: bin/packages/x86_64/custom_feed/
+
+      # ✅ 步骤1：打包编译产物（方便上传）
+      - name: Package release files
+        run: |
+          mkdir -p release
+          cp bin/packages/x86_64/custom_feed/*.ipk release/
+          ls -la release/
+          # 压缩成 zip 包（可选，方便下载）
+          zip -r VNT2-x86_64-24.10.5.zip release/
+
+      # ✅ 步骤2：创建 GitHub Release
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: VNT2 ${{ env.TAG }} (x86_64-24.10.5)
+          body: |
+            🚀 OpenWrt VNT2 编译包
+            - 架构：x86_64
+            - OpenWrt 版本：24.10.5
+            - 包含：vnt2-cli、vnts2、luci-app-vnt2
+          files: |
+            release/*.ipk
+            VNT2-x86_64-24.10.5.zip
+          draft: false  # 非草稿
+          prerelease: false  # 非预发布
