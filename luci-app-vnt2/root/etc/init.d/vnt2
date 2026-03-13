@@ -1,0 +1,26 @@
+#!/bin/sh /etc/rc.common
+START=90
+STOP=10
+USE_PROCD=1
+
+start_service() {
+    local enabled=$(uci get vnt2.client.enabled)
+    if [ "$enabled" = "1" ]; then
+        procd_open_instance vnt2-cli
+        procd_set_param command /usr/bin/vnt2-cli -c /etc/config/vnt2
+        procd_set_param respawn
+        procd_close_instance
+    fi
+
+    local senabled=$(uci get vnt2.server.enabled)
+    if [ "$senabled" = "1" ]; then
+        procd_open_instance vnts2
+        procd_set_param command /usr/bin/vnts2 -c /etc/config/vnt2
+        procd_set_param respawn
+        procd_close_instance
+    fi
+}
+
+stop_service() {
+    killall vnt2-cli vnts2 >/dev/null 2>&1
+}
