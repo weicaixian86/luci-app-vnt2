@@ -18,7 +18,12 @@ load_config() {
     config_get cli_log_level client log_level "info"
     config_get cli_log_path client log_path "/tmp/vnt2.log"
     config_get cli_custom_args client custom_args ""
-    config_list_get client route cli_routes
+    # ✅ 修复：用 config_list_foreach 读取路由列表
+    cli_routes=""
+    config_list_foreach client route add_route
+    add_route() {
+        cli_routes="$cli_routes $1"
+    }
 
     # 服务端配置
     config_get_bool srv_enabled server enabled 0
@@ -34,7 +39,12 @@ load_config() {
     config_get_bool srv_port_forward server port_forward 0
     config_get srv_port_forward_bind server port_forward_bind "0.0.0.0"
     config_get srv_custom_args server custom_args ""
-    config_list_get server token_whitelist srv_tokens
+    # ✅ 修复：用 config_list_foreach 读取Token白名单
+    srv_tokens=""
+    config_list_foreach server token_whitelist add_token
+    add_token() {
+        srv_tokens="$srv_tokens $1"
+    }
 }
 
 # 生成客户端启动参数
@@ -49,7 +59,7 @@ build_client_args() {
     [ -n "$cli_log_path" ] && cli_args="$cli_args --log-file $cli_log_path"
     # 路由
     for route in $cli_routes; do
-        cli_args="$cli_args --route $route"
+        [ -n "$route" ] && cli_args="$cli_args --route $route"
     done
     # 自定义参数
     [ -n "$cli_custom_args" ] && cli_args="$cli_args $cli_custom_args"
@@ -68,7 +78,7 @@ build_server_args() {
     [ "$srv_port_forward" = "1" ] && srv_args="$srv_args --port-forward --port-forward-bind $srv_port_forward_bind"
     # Token白名单
     for token in $srv_tokens; do
-        srv_args="$srv_args --token-white-list $token"
+        [ -n "$token" ] && srv_args="$srv_args --token-white-list $token"
     done
     # 自定义参数
     [ -n "$srv_custom_args" ] && srv_args="$srv_args $srv_custom_args"
