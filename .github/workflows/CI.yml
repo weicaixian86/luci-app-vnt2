@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         arch:
-          - x86_64  # 先测试单架构，稳定后再加其他
+          - x86_64
         sdk:
           - openwrt-24.10
 
@@ -31,35 +31,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 关键步骤1：创建feeds配置，指向嵌套的luci-app-vnt2目录
-      - name: Configure custom feeds
+      # 关键：把嵌套目录打包成 SDK 能识别的 feed 结构
+      - name: Prepare custom feed structure
         run: |
-          echo "src-link vnt2 $(pwd)/luci-app-vnt2" >> feeds.conf.default
-          cat feeds.conf.default  # 打印验证配置
+          # 创建临时 feeds 目录，把 luci-app-vnt2 放进去
+          mkdir -p custom-feed
+          cp -r ./luci-app-vnt2/* custom-feed/
+          ls -la custom-feed/  # 验证目录结构
 
-      # 关键步骤2：更新feeds并安装依赖
-      - name: Update and install feeds
-        run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a -p vnt2
-
-      # 关键步骤3：修复目录权限（避免SDK编译权限错误）
-      - name: Fix directory permissions
-        run: sudo chown -R 1000:1000 ${{ github.workspace }}
-
-      # 核心编译步骤（修改FEEDNAME为自定义的vnt2）
+      # 用 sbwml/openwrt-gh-action-sdk 编译，指定自定义 feed
       - name: Building packages
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: vnt2  # 对应上面src-link的名称
+          # 关键：把当前仓库的 custom-feed 目录作为额外 feed 传入
+          FEED_CONF: |
+            src/gz openwrt_core https://downloads.openwrt.org/releases/${{ matrix.sdk }}/targets/${{ matrix.arch }}/packages
+            src/gz openwrt_base https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/base
+            src/gz openwrt_luci https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/luci
+            src/gz openwrt_packages https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/packages
+            src/gz openwrt_routing https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/routing
+            src/gz openwrt_telephony https://downloads.openwrt.org/releases/${{ matrix.sdk }}/x86_64/packages/telephony
+            src-link custom_feed $GITHUB_WORKSPACE/custom-feed
+          FEEDNAME: custom_feed
           PACKAGES: vnt2 vnts2 luci-app-vnt2
           NO_REFRESH_CHECK: true
           V: s
 
-      # 上传产物（路径适配新的FEEDNAME）
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: VNT2-${{ matrix.arch }}-${{ matrix.sdk }}
-          path: bin/packages/${{ matrix.arch }}/vnt2/
+          path: bin/packages/${{ matrix.arch }}/custom_feed/
