@@ -227,3 +227,22 @@ function api_update_bin()
 
     http.write_json({success = true, msg = "更新成功，版本: "..version})
 end
+
+-- 清空日志API
+function api_clear_log()
+    local http = require "luci.http"
+    local log_type = http.formvalue("type")
+    local log_path
+
+    if log_type == "client" then
+        log_path = luci.model.uci.cursor():get("vnt2", "client", "log_path") or "/tmp/vnt2.log"
+    elseif log_type == "server" then
+        log_path = luci.model.uci.cursor():get("vnt2", "server", "log_path") or "/tmp/vnts2.log"
+    else
+        http.write_json({success = false, msg = "无效的日志类型"})
+        return
+    end
+
+    luci.sys.exec("echo '' > "..log_path)
+    http.write_json({success = true, msg = "日志已清空"})
+end
