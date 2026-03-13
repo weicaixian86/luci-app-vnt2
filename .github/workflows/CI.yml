@@ -31,21 +31,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 关键：安装Rust编译环境（V2源码编译必需）
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf
+          targets: x86_64-unknown-linux-musl
 
-      # 准备自定义feed结构
       - name: Prepare custom feed structure
         run: |
           mkdir -p custom-feed
           cp -r ./luci-app-vnt2/* custom-feed/
           ls -la custom-feed/
 
-      # 编译（添加RUST_PATH环境变量）
       - name: Building packages
         uses: sbwml/openwrt-gh-action-sdk@main
         env:
@@ -62,7 +59,6 @@ jobs:
           PACKAGES: vnt2 vnts2 luci-app-vnt2
           NO_REFRESH_CHECK: true
           V: s
-          # 传递Rust环境变量
           RUSTUP_HOME: /usr/local/rustup
           CARGO_HOME: /usr/local/cargo
           PATH: /usr/local/cargo/bin:$PATH
