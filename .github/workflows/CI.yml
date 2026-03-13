@@ -27,14 +27,12 @@ jobs:
         run: |
           mkdir -p custom-feed
           cp -r ./luci-app-vnt2/* custom-feed/
-          ls -la custom-feed/
+          ls -la custom-feed/  # 验证三个包目录都在
 
-      # ✅ 完全匹配你截图里的真实文件名和后缀
       - name: Download OpenWrt SDK
         run: |
           SDK_FILE="openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
           wget https://downloads.openwrt.org/releases/24.10.5/targets/x86/64/$SDK_FILE
-          # 用 tar 解压 .tar.zst 文件
           tar -I zstd -xf $SDK_FILE
           mv openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64 sdk
           ls -la sdk/
@@ -42,14 +40,23 @@ jobs:
       - name: Configure SDK
         run: |
           cd sdk
+          > feeds.conf
+          echo "src/gz openwrt_core https://downloads.openwrt.org/releases/24.10.5/targets/x86/64/packages" >> feeds.conf
+          echo "src/gz openwrt_base https://downloads.openwrt.org/releases/24.10.5/x86_64/packages/base" >> feeds.conf
+          echo "src/gz openwrt_luci https://downloads.openwrt.org/releases/24.10.5/x86_64/packages/luci" >> feeds.conf
+          echo "src/gz openwrt_packages https://downloads.openwrt.org/releases/24.10.5/x86_64/packages/packages" >> feeds.conf
           echo "src-link custom_feed $(pwd)/../custom-feed" >> feeds.conf
+          cat feeds.conf
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds install -a -p custom_feed
 
       - name: Build packages
         run: |
           cd sdk
           make defconfig
+          ./scripts/feeds search vnt2
+          ./scripts/feeds search vnts2
+          ./scripts/feeds search luci-app-vnt2
           make package/vnt2/compile V=s
           make package/vnts2/compile V=s
           make package/luci-app-vnt2/compile V=s
