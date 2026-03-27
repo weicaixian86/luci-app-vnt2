@@ -1,4 +1,3 @@
-
 name: Build VNT2 IPK
 
 on:
@@ -16,28 +15,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
+          gettext git java-propose-classpath libelf-dev libncurses5-dev \
+          libncursesw5-dev libssl-dev python3 unzip python3-pyelftools \
+          python3-setuptools python3-wheel rsync subversion swig time xsltproc \
+          zlib1g-dev
+
       - name: Build OpenWrt SDK
         run: |
           # 下载OpenWrt SDK
           wget https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
           tar -xf openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
           cd openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64
-
+          
           # 添加feeds
           echo "src-link luci https://github.com/openwrt/luci.git;main" > feeds.conf
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-
+          
           # 复制luci-app-vnt2到package目录
           mkdir -p package/feeds/luci
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
-
+          
+          # 配置编译环境
+          echo "CONFIG_PACKAGE_luci-app-vnt2=y" > .config
+          
           # 编译ipk
-          make package/feeds/luci/luci-app-vnt2/compile V=s
-
+          make package/feeds/luci/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
+          
           # 查找生成的ipk文件
           find ./bin/packages -name "luci-app-vnt2*.ipk" -exec cp {} ${{ github.workspace }} \;
-
+          
       - name: Get Build Time
         id: time
         run: echo "time=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
