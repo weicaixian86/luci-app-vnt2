@@ -70,6 +70,8 @@ jobs:
           # 删除有问题的包
           rm -rf feeds/luci/contrib/package/lucihttp
           rm -rf feeds/luci/libs/rpcd-mod-luci
+          rm -rf feeds/luci/libs/ucode
+          rm -rf feeds/luci/modules/luci-base
           rm -rf feeds/luci/contrib/package/ucode-mod-html
           rm -rf feeds/luci/contrib/package/ucode-mod-lua
           rm -rf feeds/packages/net/cgi-io
