@@ -71,6 +71,8 @@ jobs:
           # 删除有问题的包
           rm -rf feeds/luci/contrib/package/lucihttp
           rm -rf feeds/luci/libs/rpcd-mod-luci
+          rm -rf feeds/luci/contrib/package/ucode-mod-html
+          rm -rf feeds/luci/contrib/package/ucode-mod-lua
           
           # 直接编译luci-app-vnt2
           make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
