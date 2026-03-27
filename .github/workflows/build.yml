@@ -41,7 +41,10 @@ jobs:
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
           
           # 配置编译环境
+          export TERM=xterm
+          export TERMINFO=/usr/share/terminfo
           echo "CONFIG_PACKAGE_luci-app-vnt2=y" > .config
+          make defconfig
           
           # 编译ipk
           make package/feeds/luci/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
