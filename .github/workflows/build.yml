@@ -41,11 +41,15 @@ jobs:
           # 安装feeds
           ./scripts/feeds install -a
           
+          # 复制luci-app-vnt2到package目录
+          mkdir -p package/feeds/luci
+          cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
+          
           # 配置编译环境
           export TERM=xterm
           export TERMINFO=/usr/share/terminfo
           
-          # 创建配置文件
+          # 创建最小配置文件
           cat > .config << EOF
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
@@ -55,27 +59,24 @@ jobs:
           CONFIG_TARGET_SUFFIX=musl
           CONFIG_LUCI_LANG_zh_Hans=y
           CONFIG_LUCI_LANG_en=y
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-lib-ip=y
-          CONFIG_PACKAGE_luci-lib-jsonc=y
           CONFIG_PACKAGE_luci-app-vnt2=y
           EOF
           
           make defconfig
           
-          # 复制luci-app-vnt2到package目录
-          mkdir -p package/feeds/luci
-          cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
-          
           # 删除有问题的包
           rm -rf feeds/luci/contrib/package/lucihttp
           rm -rf feeds/luci/libs/rpcd-mod-luci
           rm -rf feeds/luci/libs/ucode
+          rm -rf feeds/luci/libs/luci-lib-jsonc
           rm -rf feeds/luci/modules/luci-base
           rm -rf feeds/luci/contrib/package/ucode-mod-html
           rm -rf feeds/luci/contrib/package/ucode-mod-lua
           rm -rf feeds/packages/net/cgi-io
           rm -rf feeds/packages/lang/python/python3
+          
+          # 重新计算依赖
+          make defconfig
           
           # 直接编译luci-app-vnt2
           make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
