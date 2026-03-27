@@ -38,12 +38,16 @@ jobs:
           # 更新feeds
           ./scripts/feeds update -a
           
-          # 安装feeds
-          ./scripts/feeds install -a
+          # 安装feeds到feeds目录
+          ./scripts/feeds install -a -p feeds/luci
+          
+          # 验证feeds/luci目录是否存在
+          ls -la feeds/
+          ls -la feeds/luci/ || echo "feeds/luci directory not found"
           
           # 复制luci-app-vnt2到package目录
           mkdir -p package/feeds/luci
-          cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
+          cp -r ${{ github.workspace }}/luci-app-vnt2/luci-app-vnt2 package/feeds/luci/
           
           # 配置编译环境
           export TERM=xterm
