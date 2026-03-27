@@ -1,9 +1,0 @@
-#!/bin/sh
-# uci-defaults for luci-app-vnt2
-
-# Create default config if not exists
-[ -f /etc/config/vnt2 ] || {
-    touch /etc/config/vnt2
-}
-
-exit 0
