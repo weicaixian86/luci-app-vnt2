@@ -1,99 +1,74 @@
-name: Build VNT2 IPK
+name: Build VNT2
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version tag'
+      tag:
+        description: '发布Releases的版本号（留空不发布）'
         required: false
         default: ''
-
+      text:
+        description: '发布的说明'
+        required: false
+        default: ''
+env:
+  TAG: "${{ github.event.inputs.tag }}"
+  TZ: Asia/Shanghai
+permissions:
+  contents: write
 jobs:
   build:
+    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - x86_64
+          - aarch64_generic
+        sdk:
+          - openwrt-23.05
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
-          gettext git java-propose-classpath libelf-dev libncurses5-dev \
-          libncursesw5-dev libssl-dev python3 unzip python3-pyelftools \
-          python3-setuptools python3-wheel rsync subversion swig time xsltproc \
-          zlib1g-dev
+      - name: Building packages
+        uses: sbwml/openwrt-gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: vnt2
+          PACKAGES: luci-app-vnt2
+          NO_REFRESH_CHECK: true
+          V: s
 
-      - name: Build OpenWrt SDK
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk }}
+          path: bin/packages/${{ matrix.arch }}/vnt2/
+
+      - name: Create compress files
         run: |
-          # 下载OpenWrt SDK
-          wget https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          tar -xf openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          cd openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64
-          
-          # 添加feeds
-          echo "src-git luci https://github.com/openwrt/luci.git;openwrt-23.05" > feeds.conf
-          echo "src-git packages https://github.com/openwrt/packages.git;openwrt-23.05" >> feeds.conf
-          
-          # 更新feeds
-          ./scripts/feeds update -a
-          
-          # 安装feeds（包含ucode和luci-base）
-          ./scripts/feeds install -a
-          
-          # 删除有问题的包
-          rm -rf feeds/luci/contrib/package/lucihttp
-          rm -rf feeds/packages/net/cgi-io
-          rm -rf feeds/packages/lang/python/python3
-          
-          # 复制luci-app-vnt2到package目录
-          mkdir -p package/feeds/luci
-          cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
-          
-          # 配置编译环境
-          export TERM=xterm
-          export TERMINFO=/usr/share/terminfo
-          
-          # 创建配置文件（包含luci-base和ucode）
-          cat > .config << EOF
-          CONFIG_TARGET_x86=y
-          CONFIG_TARGET_x86_64=y
-          CONFIG_TARGET_ARCH_PACKAGES="x86_64"
-          CONFIG_USE_MUSL=y
-          CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -fno-caller-saves -fno-plt"
-          CONFIG_TARGET_SUFFIX=musl
-          CONFIG_LUCI_LANG_zh_Hans=y
-          CONFIG_LUCI_LANG_en=y
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-app-vnt2=y
-          EOF
-          
-          make defconfig
-          
-          # 直接编译luci-app-vnt2
-          make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
-          
-          # 查找并重命名IPK文件，使用release tag作为版本号
-          TAG="${{ github.event.inputs.version || 'latest' }}"
-          if [ "$TAG" = "latest" ]; then
-            TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | grep tag_name | cut -d'"' -f4)
-          fi
-          # 移除v前缀
-          TAG=${TAG#v}
-          find ./bin/packages -name "luci-app-vnt2*.ipk" -exec cp {} ${{ github.workspace }}/luci-app-vnt2_${TAG}_all.ipk \;
-          
-      - name: Get Build Time
-        id: time
-        run: echo "time=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+          zip -j vnt2-${{ matrix.arch }}-${{ matrix.sdk }}.zip bin/packages/${{ matrix.arch }}/vnt2/*
+          echo "build_time=$(date '+%Y年%m月%d日%H:%M:%S' | jq -sRr @uri)" >> $GITHUB_ENV
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        if: ${{ github.event.inputs.tag != '' }}
+        uses: softprops/action-gh-release@v2
         with:
-          files: luci-app-vnt2_*.ipk
-          body: |
-            编译时间: ${{ steps.time.outputs.time }}
-          tag_name: ${{ github.event.inputs.version || 'latest' }}
-          name: VNT2 ${{ github.event.inputs.version || 'latest' }}
-          draft: false
-          prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
+            token: ${{ secrets.GITHUB_TOKEN }}
+            body: |
+             > ### ![](https://img.shields.io/badge/%E7%BC%96%E8%AF%91%E6%97%B6%E9%97%B4-${{ env.build_time }}-8267?logo=github&labelColor=%E9%A1%BB)![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.TAG }}/total?label=%E4%B8%8B%E8%BD%BD%E6%AC%A1%E6%95%B0&logo=github) 
+
+             - 其中 **`openwrt-23.05`** 里面是ipk安装包
+
+             - 需要先去系统自带的软件包里已经安装 **_luci_** 和 **_luci-base_** 和 **_luci-compat_** 和 **_kmod-tun_** 再安装这个ipk才能显示界面
+
+             - 安装完成后找不到界面入口的，请注销登录关闭当前浏览器窗口重新打开或重启路由器
+
+             ${{ github.event.inputs.text }}
+
+            tag_name: ${{ env.TAG }}
+            files: vnt2-${{ matrix.arch }}-${{ matrix.sdk }}.zip
