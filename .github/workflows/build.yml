@@ -56,7 +56,6 @@ jobs:
           CONFIG_LUCI_LANG_zh_Hans=y
           CONFIG_LUCI_LANG_en=y
           CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-base=y
           CONFIG_PACKAGE_luci-lib-ip=y
           CONFIG_PACKAGE_luci-lib-jsonc=y
           CONFIG_PACKAGE_luci-app-vnt2=y
@@ -71,8 +70,6 @@ jobs:
           # 删除有问题的包
           rm -rf feeds/luci/contrib/package/lucihttp
           rm -rf feeds/luci/libs/rpcd-mod-luci
-          rm -rf feeds/luci/contrib/package/ucode-mod-html
-          rm -rf feeds/luci/contrib/package/ucode-mod-lua
           rm -rf feeds/packages/net/cgi-io
           rm -rf feeds/packages/lang/python/python3
           
