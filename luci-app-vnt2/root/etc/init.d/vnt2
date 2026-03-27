@@ -39,7 +39,7 @@ detect_cpu() {
 	[ -n "$(echo $cputype | grep -E "linux.*armv.*")" ] && cpucore="arm"
 	[ -n "$(echo $cputype | grep -E "linux.*armv7.*")" ] && [ -n "$(cat /proc/cpuinfo | grep vfp)" ] && cpucore="armv7"
 	[ -n "$(echo $cputype | grep -E "linux.*aarch64.*|linux.*armv8.*")" ] && cpucore="aarch64"
-	[ -n "$(echo $cputype | grep -E "linux.*86.*")" ] && && cpucore="i386"
+	[ -n "$(echo $cputype | grep -E "linux.*86.*")" ] && cpucore="i386"
 	[ -n "$(echo $cputype | grep -E "linux.*86_64.*")" ] && cpucore="x86_64"
 	if [ -n "$(echo $cputype | grep -E "linux.*mips.*")" ] ; then
 		mipstype=$(echo -n I | hexdump -o 2>/dev/null | awk '{ print substr($2,6,1); exit}') 

@@ -38,31 +38,23 @@ jobs:
           # 更新feeds
           ./scripts/feeds update -a
           
-          # 安装feeds
+          # 安装feeds（包含ucode和luci-base）
           ./scripts/feeds install -a
           
-          # 删除所有luci相关包，只保留luci-app-vnt2
-          rm -rf feeds/luci/libs/*
-          rm -rf feeds/luci/modules/*
-          rm -rf feeds/luci/applications/*
+          # 删除有问题的包
           rm -rf feeds/luci/contrib/package/lucihttp
-          rm -rf feeds/luci/contrib/package/ucode-mod-html
-          rm -rf feeds/luci/contrib/package/ucode-mod-lua
-          rm -rf feeds/luci/contrib/package/luci-lua-example
+          rm -rf feeds/packages/net/cgi-io
+          rm -rf feeds/packages/lang/python/python3
           
           # 复制luci-app-vnt2到package目录
           mkdir -p package/feeds/luci
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
           
-          # 删除其他有问题的包
-          rm -rf feeds/packages/net/cgi-io
-          rm -rf feeds/packages/lang/python/python3
-          
           # 配置编译环境
           export TERM=xterm
           export TERMINFO=/usr/share/terminfo
           
-          # 创建最小配置文件
+          # 创建配置文件（包含luci-base和ucode）
           cat > .config << EOF
           CONFIG_TARGET_x86=y
           CONFIG_TARGET_x86_64=y
@@ -72,6 +64,7 @@ jobs:
           CONFIG_TARGET_SUFFIX=musl
           CONFIG_LUCI_LANG_zh_Hans=y
           CONFIG_LUCI_LANG_en=y
+          CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-app-vnt2=y
           EOF
           
