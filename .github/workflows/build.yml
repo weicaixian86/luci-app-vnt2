@@ -68,8 +68,9 @@ jobs:
           mkdir -p package/feeds/luci
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
           
-          # 删除lucihttp包，避免编译错误
+          # 删除有问题的包
           rm -rf feeds/luci/contrib/package/lucihttp
+          rm -rf feeds/luci/libs/rpcd-mod-luci
           
           # 直接编译luci-app-vnt2
           make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
