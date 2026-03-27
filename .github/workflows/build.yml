@@ -69,11 +69,7 @@ jobs:
           mkdir -p package/feeds/luci
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
           
-          # 先编译所有依赖的包（包括lua、liblua、luci-lib-lucihttp）
-          make package/lua/compile V=s IGNORE_ERRORS=1
-          make package/liblua/compile V=s IGNORE_ERRORS=1
-          
-          # 再编译luci-app-vnt2
+          # 直接编译luci-app-vnt2，让OpenWrt构建系统自动处理依赖
           make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
           
           # 查找生成的ipk文件
