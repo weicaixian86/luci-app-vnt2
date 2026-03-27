@@ -1,0 +1,31 @@
+<div class="cbi-section">
+	<h3><%:設備信息%></h3>
+	<div id="vnt2_info_container">
+		<p><%:加載中...%></p>
+	</div>
+</div>
+
+<script type="text/javascript">
+function loadVnt2Info() {
+	XHR.get('<%=url([[admin]], [[vpn]], [[vnt2]], [[vnt2_info]])%>', null,
+		function(x, data) {
+			var container = document.getElementById('vnt2_info_container');
+			if (data && data.info) {
+				container.innerHTML = '<pre style="background:#f5f5f5;padding:10px;border-radius:4px;overflow-x:auto;">' + data.info + '</pre>';
+			} else {
+				container.innerHTML = '<p style="color:red;"><%:無法獲取設備信息%></p>';
+			}
+		}
+	);
+}
+
+setTimeout(loadVnt2Info, 500);
+XHR.poll(5, '<%=url([[admin]], [[vpn]], [[vnt2]], [[vnt2_info]])%>', null,
+	function(x, data) {
+		var container = document.getElementById('vnt2_info_container');
+		if (data && data.info) {
+			container.innerHTML = '<pre style="background:#f5f5f5;padding:10px;border-radius:4px;overflow-x:auto;">' + data.info + '</pre>';
+		}
+	}
+);
+</script>
