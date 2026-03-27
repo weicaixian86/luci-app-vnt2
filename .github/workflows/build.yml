@@ -69,10 +69,9 @@ jobs:
           mkdir -p package/feeds/luci
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
           
-          # 先编译Lua和liblua
-          make package/lua/prepare
-          make package/lua/compile V=s IGNORE_ERRORS=1
-          make package/liblua/compile V=s IGNORE_ERRORS=1
+          # 先编译Lua和liblua（使用feeds路径）
+          make package/feeds/packages/lua/compile V=s IGNORE_ERRORS=1
+          make package/feeds/packages/liblua/compile V=s IGNORE_ERRORS=1
           
           # 再编译luci-app-vnt2及其依赖
           make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
