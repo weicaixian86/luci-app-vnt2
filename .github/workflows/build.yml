@@ -33,7 +33,12 @@ jobs:
           
           # 添加feeds
           echo "src-link luci https://github.com/openwrt/luci.git;openwrt-23.05" > feeds.conf
+          echo "src-link packages https://github.com/openwrt/packages.git;openwrt-23.05" >> feeds.conf
+          
+          # 更新feeds
           ./scripts/feeds update -a
+          
+          # 安装feeds
           ./scripts/feeds install -a
           
           # 复制luci-app-vnt2到package目录
