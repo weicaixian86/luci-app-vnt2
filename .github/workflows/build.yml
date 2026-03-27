@@ -27,12 +27,12 @@ jobs:
       - name: Build OpenWrt SDK
         run: |
           # 下载OpenWrt SDK
-          wget https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          tar -xf openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          cd openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64
+          wget https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          tar -xf openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+          cd openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64
           
           # 添加feeds
-          echo "src-link luci https://github.com/openwrt/luci.git;main" > feeds.conf
+          echo "src-link luci https://github.com/openwrt/luci.git;openwrt-23.05" > feeds.conf
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           
