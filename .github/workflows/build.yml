@@ -41,21 +41,36 @@ jobs:
           # 安装feeds
           ./scripts/feeds install -a
           
-          # 验证feeds/luci目录
-          ls -la feeds/
-          [ -d feeds/luci ] && ls -la feeds/luci/ || echo "feeds/luci directory not found"
-          
-          # 复制luci-app-vnt2到package目录
-          mkdir -p package/feeds/luci
-          cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
-          
-          # 配置编译环境
+          # 配置编译环境，添加必要的依赖
           export TERM=xterm
           export TERMINFO=/usr/share/terminfo
-          echo "CONFIG_PACKAGE_luci-app-vnt2=y" > .config
+          
+          # 创建完整的配置文件
+          cat > .config << EOF
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_TARGET_ARCH_PACKAGES="x86_64"
+          CONFIG_USE_MUSL=y
+          CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -fno-caller-saves -fno-plt"
+          CONFIG_TARGET_SUFFIX=musl
+          CONFIG_LUCI_LANG_zh_Hans=y
+          CONFIG_LUCI_LANG_en=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_lua=y
+          CONFIG_PACKAGE_liblua=y
+          CONFIG_PACKAGE_luci-lib-lucihttp=y
+          CONFIG_PACKAGE_luci-app-vnt2=y
+          EOF
+          
           make defconfig
           
-          # 编译ipk
+          # 先编译Lua相关包
+          make package/lua/compile V=s IGNORE_ERRORS=1
+          make package/liblua/compile V=s IGNORE_ERRORS=1
+          make package/feeds/luci/luci-lib-lucihttp/compile V=s IGNORE_ERRORS=1
+          
+          # 编译luci-app-vnt2
           make package/feeds/luci/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
           
           # 查找生成的ipk文件
