@@ -66,8 +66,8 @@ jobs:
           make defconfig
           
           # 先编译Lua相关包
-          make package/lua/compile V=s IGNORE_ERRORS=1
-          make package/liblua/compile V=s IGNORE_ERRORS=1
+          make package/feeds/packages/lua/compile V=s IGNORE_ERRORS=1
+          make package/feeds/packages/liblua/compile V=s IGNORE_ERRORS=1
           make package/feeds/luci/luci-lib-lucihttp/compile V=s IGNORE_ERRORS=1
           
           # 编译luci-app-vnt2
