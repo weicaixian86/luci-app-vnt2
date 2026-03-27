@@ -1,0 +1,47 @@
+
+<%
+local fs = require "nixio.fs"
+local log_file = "/tmp/vnt2-cli.log"
+local log_content = ""
+
+if fs.access(log_file) then
+    log_content = io.open(log_file, "r"):read("*all")
+end
+%>
+
+<script type="text/javascript">//<![CDATA[
+function clear_log() {
+    XHR.get('<%=url([[admin]], [[vpn]], [[vnt2]], [[clear_log]])%>', null,
+        function(x, data) {
+            if (x && x.status == 200) {
+                document.getElementById('log_content').innerHTML = "日志已清空";
+            }
+        }
+    );
+}
+
+function refresh_log() {
+    XHR.get('<%=url([[admin]], [[vpn]], [[vnt2]], [[get_log]])%>', null,
+        function(x, data) {
+            if (x && x.status == 200) {
+                document.getElementById('log_content').innerText = data;
+            }
+        }
+    );
+}
+
+// 每5秒自动刷新日志
+setInterval(refresh_log, 5000);
+//]]>
+</script>
+
+<fieldset class="cbi-section">
+    <legend>操作</legend>
+    <input class="cbi-button cbi-button-reset" type="button" value="<%:清空日志%>" onclick="clear_log()" />
+    <input class="cbi-button cbi-button-reload" type="button" value="<%:刷新日志%>" onclick="refresh_log()" />
+</fieldset>
+
+<fieldset class="cbi-section">
+    <legend><%:日志内容%></legend>
+    <pre id="log_content" style="background-color: #f5f5f5; padding: 10px; border: 1px solid #ddd; max-height: 500px; overflow-y: auto;"><%=log_content%></pre>
+</fieldset>

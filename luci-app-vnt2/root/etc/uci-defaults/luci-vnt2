@@ -1,0 +1,6 @@
+
+#!/bin/sh
+# Copyright (C) 2024 OpenWrt.org
+
+rm -f /tmp/luci-indexcache
+exit 0

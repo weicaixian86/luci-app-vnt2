@@ -1,0 +1,10 @@
+
+<%+cbi/dvalue%>
+<% if self.value and #self.value > 0 then %>
+<div class="cbi-section">
+	<h3><%=self.title%></h3>
+	<div class="cbi-value">
+		<pre><%=self.value%></pre>
+	</div>
+</div>
+<% end %>
