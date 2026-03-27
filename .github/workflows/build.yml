@@ -41,9 +41,22 @@ jobs:
           # 安装feeds
           ./scripts/feeds install -a
           
+          # 删除所有luci相关包，只保留luci-app-vnt2
+          rm -rf feeds/luci/libs/*
+          rm -rf feeds/luci/modules/*
+          rm -rf feeds/luci/applications/*
+          rm -rf feeds/luci/contrib/package/lucihttp
+          rm -rf feeds/luci/contrib/package/ucode-mod-html
+          rm -rf feeds/luci/contrib/package/ucode-mod-lua
+          rm -rf feeds/luci/contrib/package/luci-lua-example
+          
           # 复制luci-app-vnt2到package目录
           mkdir -p package/feeds/luci
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
+          
+          # 删除其他有问题的包
+          rm -rf feeds/packages/net/cgi-io
+          rm -rf feeds/packages/lang/python/python3
           
           # 配置编译环境
           export TERM=xterm
@@ -62,20 +75,6 @@ jobs:
           CONFIG_PACKAGE_luci-app-vnt2=y
           EOF
           
-          make defconfig
-          
-          # 删除有问题的包
-          rm -rf feeds/luci/contrib/package/lucihttp
-          rm -rf feeds/luci/libs/rpcd-mod-luci
-          rm -rf feeds/luci/libs/ucode
-          rm -rf feeds/luci/libs/luci-lib-jsonc
-          rm -rf feeds/luci/modules/luci-base
-          rm -rf feeds/luci/contrib/package/ucode-mod-html
-          rm -rf feeds/luci/contrib/package/ucode-mod-lua
-          rm -rf feeds/packages/net/cgi-io
-          rm -rf feeds/packages/lang/python/python3
-          
-          # 重新计算依赖
           make defconfig
           
           # 直接编译luci-app-vnt2
