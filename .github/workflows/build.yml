@@ -65,13 +65,14 @@ jobs:
           
           make defconfig
           
-          # 先编译Lua相关包
-          make package/feeds/packages/lua/compile V=s IGNORE_ERRORS=1
-          make package/feeds/packages/liblua/compile V=s IGNORE_ERRORS=1
-          make package/feeds/luci/luci-lib-lucihttp/compile V=s IGNORE_ERRORS=1
+
           
-          # 编译luci-app-vnt2
-          make package/feeds/luci/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
+          # 复制luci-app-vnt2到package目录
+          mkdir -p package/feeds/luci
+          cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
+
+          # 编译luci-app-vnt2及其依赖
+          make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
           
           # 查找生成的ipk文件
           find ./bin/packages -name "luci-app-vnt2*.ipk" -exec cp {} ${{ github.workspace }} \;
