@@ -73,8 +73,14 @@ jobs:
           # 直接编译luci-app-vnt2
           make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
           
-          # 查找生成的ipk文件
-          find ./bin/packages -name "luci-app-vnt2*.ipk" -exec cp {} ${{ github.workspace }} \;
+          # 查找并重命名IPK文件，使用release tag作为版本号
+          TAG="${{ github.event.inputs.version || 'latest' }}"
+          if [ "$TAG" = "latest" ]; then
+            TAG=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | grep tag_name | cut -d'"' -f4)
+          fi
+          # 移除v前缀
+          TAG=${TAG#v}
+          find ./bin/packages -name "luci-app-vnt2*.ipk" -exec cp {} ${{ github.workspace }}/luci-app-vnt2_${TAG}_all.ipk \;
           
       - name: Get Build Time
         id: time
@@ -83,7 +89,7 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          files: luci-app-vnt2*.ipk
+          files: luci-app-vnt2_*.ipk
           body: |
             编译时间: ${{ steps.time.outputs.time }}
           tag_name: ${{ github.event.inputs.version || 'latest' }}
