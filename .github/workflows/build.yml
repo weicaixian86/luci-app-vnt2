@@ -57,9 +57,8 @@ jobs:
           CONFIG_LUCI_LANG_en=y
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-base=y
-          CONFIG_PACKAGE_lua=y
-          CONFIG_PACKAGE_liblua=y
-          CONFIG_PACKAGE_luci-lib-lucihttp=y
+          CONFIG_PACKAGE_luci-lib-ip=y
+          CONFIG_PACKAGE_luci-lib-jsonc=y
           CONFIG_PACKAGE_luci-app-vnt2=y
           EOF
           
@@ -69,13 +68,12 @@ jobs:
           mkdir -p package/feeds/luci
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
           
-          # 先编译并安装Lua到staging目录
-          make package/lua/compile V=s IGNORE_ERRORS=1
-          make package/lua/install V=s IGNORE_ERRORS=1
-          make package/liblua/compile V=s IGNORE_ERRORS=1
-          make package/liblua/install V=s IGNORE_ERRORS=1
+          # 先编译LuCI基础库
+          make package/luci-base/compile V=s IGNORE_ERRORS=1
+          make package/luci-lib-ip/compile V=s IGNORE_ERRORS=1
+          make package/luci-lib-jsonc/compile V=s IGNORE_ERRORS=1
           
-          # 再编译luci-app-vnt2及其依赖
+          # 再编译luci-app-vnt2
           make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
           
           # 查找生成的ipk文件
