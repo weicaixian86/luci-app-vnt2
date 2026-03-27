@@ -65,13 +65,16 @@ jobs:
           
           make defconfig
           
-
-          
           # 复制luci-app-vnt2到package目录
           mkdir -p package/feeds/luci
           cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
-
-          # 编译luci-app-vnt2及其依赖
+          
+          # 先编译Lua和liblua
+          make package/lua/prepare
+          make package/lua/compile V=s IGNORE_ERRORS=1
+          make package/liblua/compile V=s IGNORE_ERRORS=1
+          
+          # 再编译luci-app-vnt2及其依赖
           make package/luci-app-vnt2/compile V=s IGNORE_ERRORS=1
           
           # 查找生成的ipk文件
