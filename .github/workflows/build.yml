@@ -32,22 +32,22 @@ jobs:
           cd openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64
           
           # 添加feeds
-          echo "src-link luci https://github.com/openwrt/luci.git;openwrt-23.05" > feeds.conf
-          echo "src-link packages https://github.com/openwrt/packages.git;openwrt-23.05" >> feeds.conf
+          echo "src-git luci https://github.com/openwrt/luci.git;openwrt-23.05" > feeds.conf
+          echo "src-git packages https://github.com/openwrt/packages.git;openwrt-23.05" >> feeds.conf
           
           # 更新feeds
           ./scripts/feeds update -a
           
-          # 安装feeds到feeds目录
-          ./scripts/feeds install -a -p feeds/luci
+          # 安装feeds
+          ./scripts/feeds install -a
           
-          # 验证feeds/luci目录是否存在
+          # 验证feeds/luci目录
           ls -la feeds/
-          ls -la feeds/luci/ || echo "feeds/luci directory not found"
+          [ -d feeds/luci ] && ls -la feeds/luci/ || echo "feeds/luci directory not found"
           
           # 复制luci-app-vnt2到package目录
           mkdir -p package/feeds/luci
-          cp -r ${{ github.workspace }}/luci-app-vnt2/luci-app-vnt2 package/feeds/luci/
+          cp -r ${{ github.workspace }}/luci-app-vnt2 package/feeds/luci/
           
           # 配置编译环境
           export TERM=xterm
