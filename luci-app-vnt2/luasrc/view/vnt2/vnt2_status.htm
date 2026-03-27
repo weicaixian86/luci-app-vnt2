@@ -14,7 +14,9 @@ XHR.poll(3, '<%=url([[admin]], [[vpn]], [[vnt2]], [[status]])%>', null,
             var vnt2ramContent = data.crunning ? "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;&nbsp;内存占用：" + "<span style='color:#0000CD;'>" + data.vnt2ram + "</span>" : "";
             var vnt2tagContent = data.crunning ? "<br>" + "当前版本：" + "<span style='color:#CD853F;'>" + data.vnt2tag + "</span>" : "";
             var vnt2newtagContent = data.crunning ? "&nbsp;&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;&nbsp;最新版本：" + "<span style='color:#FFA500;'>" + data.vnt2newtag + "</span>" : "";
-            st.innerHTML = "<em><b>vnt2-cli " + clientStatus + vnt2staContent + vnt2cpuContent + vnt2ramContent + vnt2tagContent + vnt2newtagContent + "</b></em>";
+            var serverStatus = data.vnts2running ? "<span style='color:green;'> 运行中</span><img src='https://www.right.com.cn/forum/data/attachment/album/202401/30/081238k459q2d5klacs8rk.gif' width='30px' alt=''>" : "<span style='color:red;'> 未运行</span>";
+            var vnts2staContent = data.vnts2running ? "已运行：" + "<span style='color:#DA70D6;'>" + data.vnts2sta + "</span>" : "";
+            st.innerHTML = "<em><b>vnt2-cli " + clientStatus + vnt2staContent + vnt2cpuContent + vnt2ramContent + vnt2tagContent + vnt2newtagContent + "<br><br>vnts2 " + serverStatus + vnts2staContent + "</b></em>";
         }
     }
 );

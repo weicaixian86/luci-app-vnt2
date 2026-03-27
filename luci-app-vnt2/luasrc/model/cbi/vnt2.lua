@@ -1,13 +1,13 @@
-
 local http = luci.http
 local nixio = require "nixio"
 
 m = Map("vnt2")
-m.description = translate('vnt2是一个简便高效的异地组网、内网穿透工具。<br>官网：<a href="http://rustvnt.com/">rustvnt.com</a>&nbsp;&nbsp;项目地址：<a href="https://github.com/vnt-dev/vnt">github.com/vnt-dev/vnt</a>')
+m.description = translate('VNT2是一个简便高效的异地组网、内网穿透工具。<br>官网：<a href="http://rustvnt.com/">rustvnt.com</a>&nbsp;&nbsp;项目地址：<a href="https://github.com/vnt-dev/vnt">github.com/vnt-dev/vnt</a>')
 
--- vnt2-cli
+-- vnt2-cli 状态显示
 m:section(SimpleSection).template  = "vnt2/vnt2_status"
 
+-- ==================== vnt2-cli 客户端设置 ====================
 s = m:section(TypedSection, "vnt2_cli", translate("vnt2-cli 客户端设置"))
 s.anonymous = true
 
@@ -77,7 +77,7 @@ device_name.default = default_device_name
 
 -- 高级设置选项
 vnt2_cli_bin = s:taboption("advanced", Value, "vnt2_cli_bin", translate("vnt2-cli程序路径"),
-	translate("自定义vnt2-cli的存放路径，确保填写完整的路径及名称"))
+	translate("自定义vnt2-cli的存放路径，确保填写完整的路径及名称，默认会自动下载"))
 vnt2_cli_bin.placeholder = "/usr/bin/vnt2-cli"
 
 tun_name = s:taboption("advanced",Value, "tun_name", translate("虚拟网卡名称"),
@@ -161,7 +161,7 @@ vnt2_info.inputstyle = "apply"
 vnt2_info.write = function()
   local uci = require "luci.model.uci".cursor()
   local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2_cli"
+  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2-cli"
   os.execute(vnt2_cli_bin .. " info --port " .. ctrl_port .. " >/tmp/vnt2-cli_info 2>&1")
 end
 
@@ -179,7 +179,7 @@ vnt2_ips.inputstyle = "apply"
 vnt2_ips.write = function()
   local uci = require "luci.model.uci".cursor()
   local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2_cli"
+  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2-cli"
   os.execute(vnt2_cli_bin .. " ips --port " .. ctrl_port .. " >/tmp/vnt2-cli_ips 2>&1")
 end
 
@@ -197,7 +197,7 @@ vnt2_clients.inputstyle = "apply"
 vnt2_clients.write = function()
   local uci = require "luci.model.uci".cursor()
   local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2_cli"
+  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2-cli"
   os.execute(vnt2_cli_bin .. " clients --port " .. ctrl_port .. " >/tmp/vnt2-cli_clients 2>&1")
 end
 
@@ -215,7 +215,7 @@ vnt2_route.inputstyle = "apply"
 vnt2_route.write = function()
   local uci = require "luci.model.uci".cursor()
   local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2_cli"
+  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2-cli"
   os.execute(vnt2_cli_bin .. " route --port " .. ctrl_port .. " >/tmp/vnt2-cli_route 2>&1")
 end
 
@@ -242,9 +242,7 @@ http.setfilehandler(
     function(meta, chunk, eof)
         if not fd then
             if not meta then return end
-
             if meta and chunk then fd = nixio.open(dir .. meta.file, "w") end
-
             if not fd then
                 um.value = translate("错误：上传失败！")
                 return
@@ -257,18 +255,131 @@ http.setfilehandler(
             fd:close()
             fd = nil
             um.value = translate("文件已上传至") .. ' "/tmp/' .. meta.file .. '"'
-
             if string.sub(meta.file, -7) == ".tar.gz" then
                 local file_path = dir .. meta.file
                 os.execute("tar -xzf " .. file_path .. " -C " .. dir)
-               if nixio.fs.access("/tmp/vnt2_cli") then
+                if nixio.fs.access("/tmp/vnt2_cli") then
                     um.value = um.value .. "\n" .. translate("-程序/tmp/vnt2_cli上传成功，重启一次客户端才生效")
                 end
-               end
-                os.execute("chmod 777 /tmp/vnt2_cli")
+            end
+            os.execute("chmod 777 /tmp/vnt2_cli")
         end
     end
 )
 if luci.http.formvalue("upload") then
     local f = luci.http.formvalue("ulfile")
 end
+
+-- ==================== vnts2 服务端设置 ====================
+s2 = m:section(TypedSection, "vnts2", translate("vnts2 服务端设置"))
+s2.anonymous = true
+
+s2:tab("server_general", translate("基本设置"))
+s2:tab("server_web", translate("Web设置"))
+
+-- 服务端基本设置
+switch2 = s2:taboption("server_general", Flag, "enabled", translate("启用服务端"))
+switch2.rmempty = false
+
+btnsvr = s2:taboption("server_general", Button, "btnsvr", translate("重启服务端"))
+btnsvr.inputtitle = translate("重启")
+btnsvr.description = translate("在没有修改参数的情况下快速重新启动一次")
+btnsvr.inputstyle = "apply"
+btnsvr:depends("enabled", "1")
+btnsvr.write = function()
+  os.execute("/etc/init.d/vnt2 restart ")
+end
+
+server_port = s2:taboption("server_general", Value, "server_port", translate("服务端口"),
+	translate("服务端监听的端口，用于接收客户端连接"))
+server_port.datatype = "port"
+server_port.placeholder = "6660"
+server_port.default = "6660"
+
+vnts2_bin = s2:taboption("server_general", Value, "vnts2_bin", translate("vnts2程序路径"),
+	translate("自定义vnts2的存放路径，确保填写完整的路径及名称，默认会自动下载"))
+vnts2_bin.placeholder = "/usr/bin/vnts2"
+
+white_token = s2:taboption("server_general", Value, "white_token", translate("连接密钥"),
+	translate("客户端连接时需要提供的密钥，留空则不验证"))
+white_token.placeholder = ""
+
+subnet = s2:taboption("server_general", Value, "subnet", translate("虚拟网段"),
+	translate("服务端分配的虚拟网段，例如：10.0.0.1"))
+subnet.placeholder = "10.0.0.1"
+
+servern_netmask = s2:taboption("server_general", Value, "servern_netmask", translate("子网掩码"),
+	translate("子网掩码，例如：255.255.255.0"))
+servern_netmask.placeholder = "255.255.255.0"
+
+logs = s2:taboption("server_general", Flag, "logs", translate("启用日志"),
+	translate("启用后将记录服务端日志到/tmp/vnts2.log"))
+logs.rmempty = false
+
+-- Web界面设置
+web = s2:taboption("server_web", Flag, "web", translate("启用Web管理界面"),
+	translate("启用后可在本设备上通过浏览器管理服务端（mips架构不支持）"))
+web.rmempty = false
+
+web_port = s2:taboption("server_web", Value, "web_port", translate("Web管理端口"),
+	translate("Web管理界面的访问端口"))
+web_port.datatype = "port"
+web_port.placeholder = "29870"
+web_port.default = "29870"
+web_port:depends("web", "1")
+
+webuser = s2:taboption("server_web", Value, "webuser", translate("管理用户名"),
+	translate("Web管理界面的登录用户名"))
+webuser.placeholder = "admin"
+webuser:depends("web", "1")
+
+webpass = s2:taboption("server_web", Value, "webpass", translate("管理密码"),
+	translate("Web管理界面的登录密码"))
+webpass.placeholder = ""
+webpass.password = true
+webpass:depends("web", "1")
+
+web_wan = s2:taboption("server_web", Flag, "web_wan", translate("允许从WAN访问"),
+	translate("允许从广域网访问Web管理界面（建议设置强密码）"))
+web_wan.rmempty = false
+web_wan:depends("web", "1")
+
+-- 服务端上传选项
+local upload2 = s2:taboption("server_general", FileUpload, "upload_vnts2")
+upload2.optional = true
+upload2.default = ""
+upload2.template = "vnt2/other_upload"
+upload2.description = translate("可直接上传二进制程序vnts2或者以.tar.gz结尾的压缩包<br>下载地址：<a href='https://github.com/vnt-dev/vnt/releases' target='_blank'>vnts2</a>")
+local um2 = s2:taboption("server_general",DummyValue, "", nil)
+um2.template = "vnt2/other_dvalue"
+
+http.setfilehandler(
+    function(meta, chunk, eof)
+        if not fd then
+            if not meta then return end
+            if meta and chunk then fd = nixio.open(dir .. meta.file, "w") end
+            if not fd then
+                um2.value = translate("错误：上传失败！")
+                return
+            end
+        end
+        if chunk and fd then
+            fd:write(chunk)
+        end
+        if eof and fd then
+            fd:close()
+            fd = nil
+            um2.value = translate("文件已上传至") .. ' "/tmp/' .. meta.file .. '"'
+            if string.sub(meta.file, -7) == ".tar.gz" then
+                local file_path = dir .. meta.file
+                os.execute("tar -xzf " .. file_path .. " -C " .. dir)
+                if nixio.fs.access("/tmp/vnts2") then
+                    um2.value = um2.value .. "\n" .. translate("-程序/tmp/vnts2上传成功，重启一次服务端才生效")
+                end
+            end
+            os.execute("chmod 777 /tmp/vnts2")
+        end
+    end
+)
+
+return m

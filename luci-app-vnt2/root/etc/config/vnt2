@@ -21,3 +21,15 @@ config vnt2_cli
 	option input ''
 	option output ''
 	option port_mapping ''
+
+config vnts2
+	option enabled '0'
+	option server_port '6660'
+	option subnet '10.0.0.1'
+	option servern_netmask '255.255.255.0'
+	option logs '0'
+	option web '0'
+	option web_port '29870'
+	option webuser 'admin'
+	option webpass ''
+	option web_wan '0'
