@@ -14,43 +14,57 @@ on:
 env:
   TAG: "${{ github.event.inputs.tag }}"
   TZ: Asia/Shanghai
+  SDK_VERSION: "23.05.0"
+  SDK_URL: "https://downloads.openwrt.org/releases/23.05.0/targets/x86/64/openwrt-sdk-23.05.0-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
 permissions:
   contents: write
 jobs:
   build:
-    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
+    name: Build x86-64
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - x86-64
-        sdk:
-          - openwrt-23.05
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Building packages
-        uses: sbwml/openwrt-gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: vnt2
-          PACKAGES: luci-app-vnt2
-          NO_REFRESH_CHECK: true
-          V: s
+      - name: Download and extract OpenWrt SDK
+        run: |
+          wget -q "${{ env.SDK_URL }}" -O openwrt-sdk.tar.xz
+          mkdir -p sdk
+          tar -xJf openwrt-sdk.tar.xz -C sdk --strip-components=1
+          ls -la sdk/
+
+      - name: Prepare feeds and install package
+        run: |
+          cd sdk
+          ./scripts/feeds update -a
+          mkdir -p package/feeds/vnt2
+          ln -sf $GITHUB_WORKSPACE/luci-app-vnt2 package/feeds/vnt2/luci-app-vnt2
+          ./scripts/feeds install luci-app-vnt2
+
+      - name: Configure package
+        run: |
+          cd sdk
+          make defconfig
+          make package/luci-app-vnt2/compile V=s
+
+      - name: Find and copy ipk files
+        run: |
+          mkdir -p output
+          find sdk/bin -name "luci-app-vnt2*.ipk" -exec cp {} output/ \;
+          ls -la output/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: VNT2-${{ matrix.arch }}-${{ matrix.sdk }}
-          path: bin/packages/${{ matrix.arch }}/vnt2/
+          name: VNT2-x86-64-23.05
+          path: output/
 
       - name: Create compress files
+        if: ${{ github.event.inputs.tag != '' }}
         run: |
-          zip -j vnt2-${{ matrix.arch }}-${{ matrix.sdk }}.zip bin/packages/${{ matrix.arch }}/vnt2/*
+          zip -j vnt2-x86-64-23.05.zip output/*
           echo "build_time=$(date '+%Y年%m月%d日%H:%M:%S' | jq -sRr @uri)" >> $GITHUB_ENV
 
       - name: Release
@@ -70,4 +84,4 @@ jobs:
              ${{ github.event.inputs.text }}
 
             tag_name: ${{ env.TAG }}
-            files: vnt2-${{ matrix.arch }}-${{ matrix.sdk }}.zip
+            files: vnt2-x86-64-23.05.zip
