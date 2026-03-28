@@ -1,4 +1,3 @@
-
 module("luci.controller.vnt2", package.seeall)
 
 function index()
@@ -10,7 +9,7 @@ function index()
 	entry({"admin", "vpn", "vnt2", "vnt2"}, cbi("vnt2"),_("VNT2设置"), 46).leaf = true
 	entry({"admin", "vpn", "vnt2", "vnt2_log"}, form("vnt2_log"),_("客户端日志"), 47).leaf = true
 	entry({"admin", "vpn", "vnt2", "get_log"}, call("get_log")).leaf = true
-entry({"admin", "vpn", "vnt2", "clear_log"}, call("clear_log")).leaf = true
+	entry({"admin", "vpn", "vnt2", "clear_log"}, call("clear_log")).leaf = true
 	entry({"admin", "vpn", "vnt2", "vnts2_log"}, form("vnt2/vnts2_log"),_("服务端日志"), 48).leaf = true
 	entry({"admin", "vpn", "vnt2", "get_vnts2_log"}, call("get_vnts2_log")).leaf = true
 	entry({"admin", "vpn", "vnt2", "clear_vnts2_log"}, call("clear_vnts2_log")).leaf = true
@@ -43,11 +42,11 @@ function act_status()
 		end
 	end
 
-	local command2 = io.popen('test ! -z "`pidof vnt2-cli`" && (top -b -n1 | grep -E "$(pidof vnt2-cli)" 2>/dev/null | grep -v grep | awk '{for (i=1;i<=NF;i++) {if ($i ~ /vnt2-cli/) break; else cpu=i}} END {print $cpu}')')
+	local command2 = io.popen('test ! -z "`pidof vnt2-cli`" && (top -b -n1 | grep -E "$(pidof vnt2-cli)" 2>/dev/null | grep -v grep | awk \'{for (i=1;i<=NF;i++) {if ($i ~ /vnt2-cli/) break; else cpu=i}} END {print $cpu}\')')
 	e.vnt2cpu = command2:read("*all")
 	command2:close()
 
-	local command3 = io.popen("test ! -z `pidof vnt2-cli` && (cat /proc/$(pidof vnt2-cli | awk '{print $NF}')/status | grep -w VmRSS | awk '{printf "%.2f MB", $2/1024}')")
+	local command3 = io.popen("test ! -z `pidof vnt2-cli` && (cat /proc/$(pidof vnt2-cli | awk '{print $NF}')/status | grep -w VmRSS | awk '{printf \"%.2f MB\", $2/1024}')")
 	e.vnt2ram = command3:read("*all")
 	command3:close()
 
@@ -55,7 +54,7 @@ function act_status()
 	e.vnt2tag = command4:read("*all")
 	command4:close()
 
-local command5 = io.popen("([ -s /tmp/vnt2new.tag ] && cat /tmp/vnt2new.tag ) || ( curl -L -k -s --connect-timeout 3 --user-agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36' https://api.github.com/repos/vnt-dev/vnt/releases/latest | grep tag_name | sed 's/[^0-9.]*//g' >/tmp/vnt2new.tag && cat /tmp/vnt2new.tag )")
+	local command5 = io.popen("([ -s /tmp/vnt2new.tag ] && cat /tmp/vnt2new.tag ) || ( curl -L -k -s --connect-timeout 3 --user-agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36' https://api.github.com/repos/vnt-dev/vnt/releases/latest | grep tag_name | sed 's/[^0-9.]*//g' >/tmp/vnt2new.tag && cat /tmp/vnt2new.tag )")
 	e.vnt2newtag = command5:read("*all")
 	command5:close()
 
