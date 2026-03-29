@@ -124,7 +124,7 @@ jobs:
         run: |
           cd sdk
           mkdir -p package/custom
-          ln -sfn "$GITHUB_WORKSPACE/luci-app-vnt2/luci-app-vnt2" "package/custom/${PACKAGE_NAME}"
+          ln -sfn "$GITHUB_WORKSPACE/luci-app-vnt2" "package/custom/${PACKAGE_NAME}"
           test -f "package/custom/${PACKAGE_NAME}/Makefile"
 
       - name: Generate defconfig
