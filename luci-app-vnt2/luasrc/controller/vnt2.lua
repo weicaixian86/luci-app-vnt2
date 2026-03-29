@@ -1,148 +1,363 @@
 module("luci.controller.vnt2", package.seeall)
 
+local fs = require "nixio.fs"
+local sys = require "luci.sys"
+local http = require "luci.http"
+local uci = require "luci.model.uci".cursor()
+
 function index()
-	if not nixio.fs.access("/etc/config/vnt2") then
+	if not fs.access("/etc/config/vnt2") then
 		return
 	end
 
-	entry({"admin", "vpn", "vnt2"}, alias("admin", "vpn", "vnt2", "vnt2"),_("VNT2"), 45).dependent = true
-	entry({"admin", "vpn", "vnt2", "vnt2"}, cbi("vnt2"),_("VNT2设置"), 46).leaf = true
-	entry({"admin", "vpn", "vnt2", "vnt2_log"}, form("vnt2_log"),_("客户端日志"), 47).leaf = true
-	entry({"admin", "vpn", "vnt2", "get_log"}, call("get_log")).leaf = true
-	entry({"admin", "vpn", "vnt2", "clear_log"}, call("clear_log")).leaf = true
-	entry({"admin", "vpn", "vnt2", "vnts2_log"}, form("vnt2/vnts2_log"),_("服务端日志"), 48).leaf = true
-	entry({"admin", "vpn", "vnt2", "get_vnts2_log"}, call("get_vnts2_log")).leaf = true
-	entry({"admin", "vpn", "vnt2", "clear_vnts2_log"}, call("clear_vnts2_log")).leaf = true
-	entry({"admin", "vpn", "vnt2", "status"}, call("act_status")).leaf = true
-	entry({"admin", "vpn", "vnt2", "vnt2_info"}, call("vnt2_info")).leaf = true
-	entry({"admin", "vpn", "vnt2", "vnt2_ips"}, call("vnt2_ips")).leaf = true
-	entry({"admin", "vpn", "vnt2", "vnt2_clients"}, call("vnt2_clients")).leaf = true
-	entry({"admin", "vpn", "vnt2", "vnt2_route"}, call("vnt2_route")).leaf = true
+	entry({ "admin", "vpn", "vnt2" }, alias("admin", "vpn", "vnt2", "config"), _("VNT2"), 45).dependent = true
+	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("基本设置"), 46).leaf = true
+	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("客户端日志"), 47).leaf = true
+	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("Web 日志"), 48).leaf = true
+
+	entry({ "admin", "vpn", "vnt2", "status" }, call("act_status")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "get_client_log" }, call("get_client_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "clear_client_log" }, call("clear_client_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "get_web_log" }, call("get_web_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "clear_web_log" }, call("clear_web_log")).leaf = true
+
+	entry({ "admin", "vpn", "vnt2", "vnt2_info" }, call("vnt2_info")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "vnt2_ips" }, call("vnt2_ips")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "vnt2_clients" }, call("vnt2_clients")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "vnt2_route" }, call("vnt2_route")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "vnt2_cmdline" }, call("vnt2_cmdline")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "vnt2_web_cmdline" }, call("vnt2_web_cmdline")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "open_web" }, call("open_web")).leaf = true
+end
+
+local function trim(s)
+	return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function shell_quote(s)
+	s = tostring(s or "")
+	return "'" .. s:gsub("'", [['"'"']]) .. "'"
+end
+
+local function json_write(data)
+	http.prepare_content("application/json")
+	http.write_json(data)
+end
+
+local function plain_write(data)
+	http.prepare_content("text/plain; charset=utf-8")
+	http.write(data or "")
+end
+
+local function uci_first(stype, opt, default)
+	local v = uci:get_first("vnt2", stype, opt)
+	if v == nil or v == "" then
+		return default
+	end
+	return v
+end
+
+local function uci_list(stype, opt)
+	local values = {}
+	uci:foreach("vnt2", stype, function(s)
+		local v = s[opt]
+		if type(v) == "table" then
+			for _, item in ipairs(v) do
+				if trim(item) ~= "" then
+					values[#values + 1] = trim(item)
+				end
+			end
+		elseif type(v) == "string" and trim(v) ~= "" then
+			values[#values + 1] = trim(v)
+		end
+	end)
+	return values
+end
+
+local function get_cli_bin()
+	return uci_first("vnt2_cli", "vnt2_cli_bin", "/usr/bin/vnt2_cli")
+end
+
+local function get_ctrl_bin()
+	return uci_first("vnt2_cli", "vnt2_ctrl_bin", "/usr/bin/vnt2_ctrl")
+end
+
+local function get_web_bin()
+	return uci_first("vnt2_web", "vnt2_web_bin", "/usr/bin/vnt2_web")
+end
+
+local function get_ctrl_port()
+	return tonumber(uci_first("vnt2_cli", "ctrl_port", "11233")) or 11233
+end
+
+local function get_web_port()
+	return tonumber(uci_first("vnt2_web", "web_port", "19099")) or 19099
+end
+
+local function get_web_host()
+	return uci_first("vnt2_web", "web_host", "127.0.0.1")
+end
+
+local function file_exists(path)
+	return path and path ~= "" and fs.access(path)
+end
+
+local function get_pid_by_name(name)
+	local pid = trim(sys.exec("pidof " .. shell_quote(name) .. " 2>/dev/null | awk '{print $1}'"))
+	if pid ~= "" then
+		return pid
+	end
+	return nil
+end
+
+local function get_pid_by_path(path)
+	local base = tostring(path or ""):match("([^/]+)$")
+	if base and base ~= "" then
+		local pid = get_pid_by_name(base)
+		if pid then
+			return pid
+		end
+	end
+
+	local pid = trim(sys.exec("ps -w 2>/dev/null | grep " .. shell_quote(path or "") .. " | grep -v grep | awk 'NR==1{print $1}'"))
+	if pid ~= "" then
+		return pid
+	end
+
+	return nil
+end
+
+local function format_runtime(tag_file)
+	local t = fs.readfile(tag_file)
+	if not t then
+		return ""
+	end
+
+	local start_ts = tonumber(trim(t))
+	if not start_ts then
+		return ""
+	end
+
+	local now_ts = os.time()
+	if not now_ts or now_ts < start_ts then
+		return ""
+	end
+
+	local delta = now_ts - start_ts
+	local day = math.floor(delta / 86400)
+	local hour = math.floor((delta % 86400) / 3600)
+	local min = math.floor((delta % 3600) / 60)
+	local sec = delta % 60
+
+	if day > 0 then
+		return string.format("%d天 %02d小时%02d分%02d秒", day, hour, min, sec)
+	end
+
+	return string.format("%02d小时%02d分%02d秒", hour, min, sec)
+end
+
+local function get_cpu_usage(pid)
+	if not pid then
+		return ""
+	end
+	local cmd = string.format([[top -bn1 2>/dev/null | awk '$1=="%s" {print $9; exit}']], tostring(pid))
+	return trim(sys.exec(cmd))
+end
+
+local function get_mem_usage(pid)
+	if not pid then
+		return ""
+	end
+	local cmd = string.format([[awk '/VmRSS/ {printf "%.2f MB", $2/1024}' /proc/%s/status 2>/dev/null]], tostring(pid))
+	return trim(sys.exec(cmd))
+end
+
+local function get_local_tag(bin_path)
+	if not file_exists(bin_path) then
+		return ""
+	end
+	local cmd = string.format([[ %s -h 2>&1 | sed -n 's/.*version[: ][[:space:]]*\([^ ,;)]*\).*/\1/p' | head -n1 ]], shell_quote(bin_path))
+	return trim(sys.exec(cmd))
+end
+
+local function get_cached_latest_tag()
+	local cache = "/tmp/vnt2_latest.tag"
+	local now = os.time() or 0
+
+	if fs.access(cache) then
+		local mtime = fs.stat(cache, "mtime") or 0
+		if now > 0 and mtime > 0 and (now - mtime) < 21600 then
+			return trim(fs.readfile(cache) or "")
+		end
+	end
+
+	local cmd = [[curl -fsSL --connect-timeout 4 https://api.github.com/repos/vnt-dev/vnt/releases/latest 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1]]
+	local tag = trim(sys.exec(cmd))
+	if tag ~= "" then
+		fs.writefile(cache, tag)
+	end
+	return tag
+end
+
+local function get_log_content(path)
+	return fs.readfile(path) or ""
+end
+
+local function parse_help_for_port_mode(bin_path)
+	if not file_exists(bin_path) then
+		return ""
+	end
+	local help = sys.exec(string.format("%s -h 2>&1", shell_quote(bin_path))) or ""
+	if help:match("%-%-port") then
+		return "--port"
+	end
+	if help:match("%-p, %-%-port") then
+		return "--port"
+	end
+	if help:match("%-%-ctrl%-port") then
+		return "--ctrl-port"
+	end
+	return ""
+end
+
+local function run_ctrl(subcmd)
+	local ctrl_bin = get_ctrl_bin()
+	local cli_bin = get_cli_bin()
+	local ctrl_port = get_ctrl_port()
+	local out = ""
+
+	if file_exists(ctrl_bin) then
+		local port_arg = parse_help_for_port_mode(ctrl_bin)
+		if port_arg ~= "" then
+			out = sys.exec(string.format("%s %s %s %d 2>&1", shell_quote(ctrl_bin), subcmd, port_arg, ctrl_port))
+		else
+			out = sys.exec(string.format("%s %s %d 2>&1", shell_quote(ctrl_bin), subcmd, ctrl_port))
+		end
+	end
+
+	out = trim(out)
+	if out == "" or out:match("not found") or out:match("unrecognized") or out:match("error:") then
+		if file_exists(cli_bin) then
+			out = sys.exec(string.format("%s %s 2>&1", shell_quote(cli_bin), subcmd))
+		end
+	end
+
+	return trim(out or "")
+end
+
+local function get_cmdline(pid)
+	if not pid then
+		return ""
+	end
+	return trim(sys.exec("tr '\\000' ' ' </proc/" .. tostring(pid) .. "/cmdline 2>/dev/null"))
+end
+
+local function build_web_url()
+	local host = get_web_host()
+	local port = get_web_port()
+	return "http://" .. host .. ":" .. tostring(port) .. "/"
+end
+
+local function summarize_cli_config()
+	return {
+		servers = uci_list("vnt2_cli", "server"),
+		network_code = uci_first("vnt2_cli", "network_code", ""),
+		device_name = uci_first("vnt2_cli", "device_name", ""),
+		tun_name = uci_first("vnt2_cli", "tun_name", "vnt-tun"),
+		no_tun = uci_first("vnt2_cli", "no_tun", "0"),
+		ctrl_port = get_ctrl_port()
+	}
 end
 
 function act_status()
 	local e = {}
-	local uci  = require "luci.model.uci".cursor()
-	local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port"))
-	e.ctrl_port = (ctrl_port or 11233)
-	e.crunning = luci.sys.call("pgrep vnt2-cli >/dev/null") == 0
-	e.vnts2running = luci.sys.call("pgrep vnts2 >/dev/null") == 0
+	local cli_pid = get_pid_by_path(get_cli_bin())
+	local web_pid = get_pid_by_path(get_web_bin())
+	local cli_cfg = summarize_cli_config()
 
-	local tagfile = io.open("/tmp/vnt2_time", "r")
-	if tagfile then
-		local tagcontent = tagfile:read("*all")
-		tagfile:close()
-		if tagcontent and tagcontent ~= "" then
-			os.execute("start_time=$(cat /tmp/vnt2_time) && time=$(($(date +%s)-start_time)) && day=$((time/86400)) && [ $day -eq 0 ] && day='' || day=${day}天 && time=$(date -u -d @${time} +'%H小时%M分%S秒') && echo $day $time > /tmp/command_vnt2 2>&1")
-			local command_output_file = io.open("/tmp/command_vnt2", "r")
-			if command_output_file then
-				e.vnt2sta = command_output_file:read("*all")
-				command_output_file:close()
-			end
-		end
-	end
+	e.cli_running = (cli_pid ~= nil)
+	e.web_running = (web_pid ~= nil)
+	e.cli_pid = cli_pid or ""
+	e.web_pid = web_pid or ""
+	e.cli_runtime = format_runtime("/tmp/vnt2_cli_time")
+	e.web_runtime = format_runtime("/tmp/vnt2_web_time")
+	e.cli_cpu = get_cpu_usage(cli_pid)
+	e.cli_ram = get_mem_usage(cli_pid)
+	e.web_cpu = get_cpu_usage(web_pid)
+	e.web_ram = get_mem_usage(web_pid)
+	e.cli_tag = get_local_tag(get_cli_bin())
+	e.web_tag = get_local_tag(get_web_bin())
+	e.latest_tag = get_cached_latest_tag()
+	e.ctrl_port = get_ctrl_port()
+	e.web_host = get_web_host()
+	e.web_port = get_web_port()
+	e.web_url = build_web_url()
+	e.cli_servers = cli_cfg.servers
+	e.cli_network_code = cli_cfg.network_code
+	e.cli_device_name = cli_cfg.device_name
+	e.cli_tun_name = cli_cfg.tun_name
+	e.cli_no_tun = cli_cfg.no_tun
+	e.cli_info_preview = e.cli_running and run_ctrl("info") or ""
 
-	local command2 = io.popen('test ! -z "`pidof vnt2-cli`" && (top -b -n1 | grep -E "$(pidof vnt2-cli)" 2>/dev/null | grep -v grep | awk \'{for (i=1;i<=NF;i++) {if ($i ~ /vnt2-cli/) break; else cpu=i}} END {print $cpu}\')')
-	e.vnt2cpu = command2:read("*all")
-	command2:close()
-
-	local command3 = io.popen("test ! -z `pidof vnt2-cli` && (cat /proc/$(pidof vnt2-cli | awk '{print $NF}')/status | grep -w VmRSS | awk '{printf \"%.2f MB\", $2/1024}')")
-	e.vnt2ram = command3:read("*all")
-	command3:close()
-
-	local command4 = io.popen("([ -s /tmp/vnt2.tag ] && cat /tmp/vnt2.tag ) || ( echo `$(uci -q get vnt2.@vnt2_cli[0].vnt2_cli_bin) -h |grep 'version'| awk -F 'version:' '{print $2}'` > /tmp/vnt2.tag && cat /tmp/vnt2.tag )")
-	e.vnt2tag = command4:read("*all")
-	command4:close()
-
-	local command5 = io.popen("([ -s /tmp/vnt2new.tag ] && cat /tmp/vnt2new.tag ) || ( curl -L -k -s --connect-timeout 3 --user-agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36' https://api.github.com/repos/vnt-dev/vnt/releases/latest | grep tag_name | sed 's/[^0-9.]*//g' >/tmp/vnt2new.tag && cat /tmp/vnt2new.tag )")
-	e.vnt2newtag = command5:read("*all")
-	command5:close()
-
-	-- vnts2状态
-	local tagfile2 = io.open("/tmp/vnts2_time", "r")
-	if tagfile2 then
-		local tagcontent2 = tagfile2:read("*all")
-		tagfile2:close()
-		if tagcontent2 and tagcontent2 ~= "" then
-			os.execute("start_time=$(cat /tmp/vnts2_time) && time=$(($(date +%s)-start_time)) && day=$((time/86400)) && [ $day -eq 0 ] && day='' || day=${day}天 && time=$(date -u -d @${time} +'%H小时%M分%S秒') && echo $day $time > /tmp/command_vnts2 2>&1")
-			local command_output_file2 = io.open("/tmp/command_vnts2", "r")
-			if command_output_file2 then
-				e.vnts2sta = command_output_file2:read("*all")
-				command_output_file2:close()
-			end
-		end
-	end
-
-	luci.http.prepare_content("application/json")
-	luci.http.write_json(e)
+	json_write(e)
 end
 
-function get_log()
-    local log = ""
-    local files = {"/tmp/vnt2-cli.log"}
-    for i, file in ipairs(files) do
-        if luci.sys.call("[ -f '" .. file .. "' ]") == 0 then
-            log = log .. luci.sys.exec("cat " .. file)
-        end
-    end
-    luci.http.write(log)
+function get_client_log()
+	plain_write(get_log_content("/tmp/vnt2-cli.log"))
 end
 
-function clear_log()
-	luci.sys.call("rm -rf /tmp/vnt2-cli*.log")
+function clear_client_log()
+	sys.call("rm -f /tmp/vnt2-cli*.log >/dev/null 2>&1")
+	json_write({ ok = true })
 end
 
-function get_vnts2_log()
-    local log = ""
-    local files = {"/tmp/vnts2.log"}
-    for i, file in ipairs(files) do
-        if luci.sys.call("[ -f '" .. file .. "' ]") == 0 then
-            log = log .. luci.sys.exec("cat " .. file)
-        end
-    end
-    luci.http.write(log)
+function get_web_log()
+	plain_write(get_log_content("/tmp/vnt2-web.log"))
 end
 
-function clear_vnts2_log()
-	luci.sys.call("rm -rf /tmp/vnts2*.log")
+function clear_web_log()
+	sys.call("rm -f /tmp/vnt2-web*.log >/dev/null 2>&1")
+	json_write({ ok = true })
 end
 
 function vnt2_info()
-	local uci  = require "luci.model.uci".cursor()
-	local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-	local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2_cli"
-	local info = luci.sys.exec(vnt2_cli_bin .. " info --port " .. ctrl_port .. " 2>&1")
-
-	luci.http.prepare_content("application/json")
-	luci.http.write_json({ info = info })
+	json_write({ info = run_ctrl("info") })
 end
 
 function vnt2_ips()
-	local uci  = require "luci.model.uci".cursor()
-	local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-	local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2_cli"
-	local ips = luci.sys.exec(vnt2_cli_bin .. " ips --port " .. ctrl_port .. " 2>&1")
-
-	luci.http.prepare_content("application/json")
-	luci.http.write_json({ ips = ips })
+	json_write({ ips = run_ctrl("ips") })
 end
 
 function vnt2_clients()
-	local uci  = require "luci.model.uci".cursor()
-	local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-	local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2_cli"
-	local clients = luci.sys.exec(vnt2_cli_bin .. " clients --port " .. ctrl_port .. " 2>&1")
-
-	luci.http.prepare_content("application/json")
-	luci.http.write_json({ clients = clients })
+	json_write({ clients = run_ctrl("clients") })
 end
 
 function vnt2_route()
-	local uci  = require "luci.model.uci".cursor()
-	local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-	local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2_cli"
-	local route = luci.sys.exec(vnt2_cli_bin .. " route --port " .. ctrl_port .. " 2>&1")
+	json_write({ route = run_ctrl("route") })
+end
 
-	luci.http.prepare_content("application/json")
-	luci.http.write_json({ route = route })
+function vnt2_cmdline()
+	local pid = get_pid_by_path(get_cli_bin())
+	local cmdline = get_cmdline(pid)
+
+	if cmdline == "" then
+		cmdline = "错误：程序未运行！请先启动 vnt2_cli。"
+	end
+
+	json_write({ cmdline = cmdline })
+end
+
+function vnt2_web_cmdline()
+	local pid = get_pid_by_path(get_web_bin())
+	local cmdline = get_cmdline(pid)
+
+	if cmdline == "" then
+		cmdline = "错误：程序未运行！请先启动 vnt2_web。"
+	end
+
+	json_write({ cmdline = cmdline })
+end
+
+function open_web()
+	http.redirect(build_web_url())
 end

@@ -1,385 +1,535 @@
-local http = luci.http
+local http = require "luci.http"
+local fs = require "nixio.fs"
 local nixio = require "nixio"
+local util = require "luci.util"
+local sys = require "luci.sys"
 
-m = Map("vnt2")
-m.description = translate('VNT2是一个简便高效的异地组网、内网穿透工具。<br>官网：<a href="http://rustvnt.com/">rustvnt.com</a>&nbsp;&nbsp;项目地址：<a href="https://github.com/vnt-dev/vnt">github.com/vnt-dev/vnt</a>')
+local m = Map("vnt2", translate("VNT2"))
+m.description = translate('VNT2 是一个简单、高效、可快速组建虚拟局域网的工具。<br>官网：<a href="https://rustvnt.com/" target="_blank">rustvnt.com</a>&nbsp;&nbsp;项目：<a href="https://github.com/vnt-dev/vnt" target="_blank">github.com/vnt-dev/vnt</a>&nbsp;&nbsp;当前 LuCI 适配基于 vnt2_cli / vnt2_ctrl / vnt2_web 实际能力开发，适用于 OpenWrt 24.10。')
 
--- vnt2-cli 状态显示
-m:section(SimpleSection).template  = "vnt2/vnt2_status"
+m:section(SimpleSection).template = "vnt2/vnt2_status"
 
--- ==================== vnt2-cli 客户端设置 ====================
-s = m:section(TypedSection, "vnt2_cli", translate("vnt2-cli 客户端设置"))
+local function trim(v)
+	return util.trim(v or "")
+end
+
+local function default_device_name()
+	local model = trim(fs.readfile("/proc/device-tree/model") or "")
+	local hostname = trim(fs.readfile("/proc/sys/kernel/hostname") or "")
+	local def = (model ~= "" and model) or (hostname ~= "" and hostname) or "OpenWrt"
+	return def:gsub("[%s/]+", "_")
+end
+
+local function process_running(name)
+	return sys.exec("pidof " .. util.shellquote(name) .. " 2>/dev/null"):match("%d+") ~= nil
+end
+
+local function render_pre(path)
+	local content = fs.readfile(path) or ""
+	if content == "" then
+		content = translate("暂无数据")
+	end
+	return "<pre style='white-space:pre-wrap;word-break:break-all;'>" .. util.pcdata(content) .. "</pre>"
+end
+
+local function list_net_devices()
+	local devs, seen = {}, {}
+	local lines = sys.exec("ip -o -4 addr show 2>/dev/null | awk '{print $2\" \"$4}'")
+	for line in string.gmatch(lines or "", "[^\n]+") do
+		local iface, ip = line:match("^(%S+)%s+(%S+)$")
+		if iface and ip and iface ~= "lo" and not seen[iface] then
+			seen[iface] = true
+			devs[#devs + 1] = { iface = iface, ip = ip }
+		end
+	end
+	table.sort(devs, function(a, b)
+		return a.iface < b.iface
+	end)
+	return devs
+end
+
+local function add_file_upload_handler(note_options)
+	local dir = "/tmp/"
+	local fd
+	local uploaded_name
+
+	fs.mkdir(dir)
+
+	http.setfilehandler(function(meta, chunk, eof)
+		if not fd then
+			if not meta then
+				return
+			end
+
+			uploaded_name = meta.file or ""
+			if uploaded_name == "" then
+				return
+			end
+
+			fd = nixio.open(dir .. uploaded_name, "w")
+			if not fd then
+				for _, opt in ipairs(note_options) do
+					opt.value = translate("错误：上传失败")
+				end
+				return
+			end
+		end
+
+		if chunk and fd then
+			fd:write(chunk)
+		end
+
+		if eof and fd then
+			fd:close()
+			fd = nil
+
+			local full = dir .. uploaded_name
+			local msg = translate("文件已上传至") .. " " .. util.pcdata(full)
+
+			if uploaded_name:sub(-7) == ".tar.gz" then
+				sys.call("tar -xzf " .. util.shellquote(full) .. " -C /tmp >/dev/null 2>&1")
+				for _, bin in ipairs({ "vnt2_cli", "vnt2_ctrl", "vnt2_web" }) do
+					if fs.access(dir .. bin) then
+						sys.call("chmod 755 " .. util.shellquote(dir .. bin) .. " >/dev/null 2>&1")
+						msg = msg .. "<br />- " .. util.pcdata(dir .. bin) .. " " .. translate("已就绪，重启服务后生效")
+					end
+				end
+			else
+				sys.call("chmod 755 " .. util.shellquote(full) .. " >/dev/null 2>&1")
+				msg = msg .. "<br />- " .. translate("文件已赋予执行权限")
+			end
+
+			for _, opt in ipairs(note_options) do
+				opt.value = msg
+			end
+		end
+	end)
+end
+
+local function validate_nonempty(self, value)
+	value = trim(value)
+	if value == "" then
+		return nil, translate("该字段不能为空")
+	end
+	return value
+end
+
+local function validate_server(self, value)
+	value = trim(value)
+	if value == "" then
+		return nil, translate("服务器地址不能为空")
+	end
+	if not value:match("^[a-zA-Z]+://") then
+		return nil, translate("服务器地址必须包含协议前缀，例如 quic://、tcp://、wss://")
+	end
+	return value
+end
+
+local function validate_input_rule(self, value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+	if not value:match("^[^,]+,%s*%d+%.%d+%.%d+%.%d+$") then
+		return nil, translate("格式错误，应为 CIDR,目标虚拟IP，例如 192.168.1.0/24,10.26.0.2")
+	end
+	return value
+end
+
+local function validate_port_mapping(self, value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+	if not value:match("^[%w]+://.+%-.+%-.+$") then
+		return nil, translate("格式错误，应为 协议://本地监听地址-目标虚拟IP-目标映射地址")
+	end
+	return value
+end
+
+local function validate_cert_mode(self, value)
+	value = trim(value)
+	if value == "" then
+		return "skip"
+	end
+	if value == "skip" or value == "standard" or value:match("^finger:[0-9a-fA-F]+$") then
+		return value
+	end
+	return nil, translate("证书验证模式仅支持 skip、standard 或 finger:指纹")
+end
+
+local cli_running = process_running("vnt2_cli")
+local web_running = process_running("vnt2_web")
+
+-- ==================== vnt2_cli ====================
+local s = m:section(TypedSection, "vnt2_cli", translate("vnt2_cli 客户端设置"))
 s.anonymous = true
 
 s:tab("general", translate("基本设置"))
-s:tab("advanced", translate("高级设置"))
-s:tab("network", translate("网络设置"))
+s:tab("network", translate("网络与映射"))
 s:tab("security", translate("安全设置"))
+s:tab("stun", translate("STUN 设置"))
+s:tab("advanced", translate("高级设置"))
 s:tab("infos", translate("连接信息"))
 s:tab("upload", translate("上传程序"))
 
--- 基本设置选项
-switch = s:taboption("general",Flag, "enabled", translate("启用"))
-switch.rmempty = false
+local enabled = s:taboption("general", Flag, "enabled", translate("启用客户端"))
+enabled.rmempty = false
 
-btncq = s:taboption("general", Button, "btncq", translate("重启"))
-btncq.inputtitle = translate("重启")
-btncq.description = translate("在没有修改参数的情况下快速重新启动一次")
-btncq.inputstyle = "apply"
-btncq:depends("enabled", "1")
-btncq.write = function()
-  os.execute("/etc/init.d/vnt2 restart ")
+local restart_btn = s:taboption("general", Button, "_restart_cli", translate("重启客户端"))
+restart_btn.inputtitle = translate("重启")
+restart_btn.inputstyle = "apply"
+restart_btn.description = translate("在未修改参数时快速重启 vnt2_cli")
+restart_btn:depends("enabled", "1")
+restart_btn.write = function()
+	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")
 end
 
-server = s:taboption("general", DynamicList, "server", translate("服务器地址"),
-	translate("服务器地址，支持quic/tcp/wss/dynamic协议<br>例如：quic://101.35.230.139:6660"))
-server.optional = false
-server.placeholder = "quic://101.35.230.139:6660"
-
-network_code = s:taboption("general", Value, "network_code", translate("网络编号"),
-	translate("这是必填项！一个虚拟局域网的标识，连接同一服务器时，使用相同网络编号的客户端设备才会组成一个局域网"))
-network_code.optional = false
+local network_code = s:taboption("general", Value, "network_code", translate("网络编号"),
+	translate("同一服务器下，使用相同网络编号的客户端会加入同一虚拟局域网"))
+network_code.rmempty = false
 network_code.placeholder = "123456"
-network_code.datatype = "string"
-network_code.maxlength = 63
-network_code.minlength = 1
-network_code.validate = function(self, value, section)
-    if value and #value >= 1 and #value <= 63 then
-        return value
-    else
-        return nil, translate("网络编号为必填项，可填1至63位字符")
-    end
-end
-switch.write = function(self, section, value)
-    if value == "1" then
-        network_code.rmempty = false
-    else
-        network_code.rmempty = true
-    end
-    return Flag.write(self, section, value)
+network_code.validate = function(self, value)
+	value = trim(value)
+	if value ~= "" and #value >= 1 and #value <= 63 then
+		return value
+	end
+	return nil, translate("网络编号必须为 1~63 个字符")
 end
 
-device_id = s:taboption("general",Value, "device_id", translate("设备ID"),
-	translate("每台设备的唯一标识，注意不要重复，每个vnt2-cli客户端的设备ID不能相同"))
+local server = s:taboption("general", DynamicList, "server", translate("服务器地址"),
+	translate("支持 quic://、tcp://、wss://、dynamic:// 等格式，可填写多个以实现容灾或负载均衡"))
+server.rmempty = false
+server.placeholder = "quic://101.35.230.139:6660"
+server.validate = validate_server
+
+local ip = s:taboption("general", Value, "ip", translate("虚拟 IP"),
+	translate("留空则由服务端自动分配"))
+ip.placeholder = "10.10.0.2"
+ip.datatype = "ip4addr"
+
+local device_id = s:taboption("general", Value, "device_id", translate("设备 ID"),
+	translate("每台设备建议固定且唯一；留空则自动生成"))
 device_id.placeholder = ""
 
-device_name = s:taboption("general", Value, "device_name", translate("设备名称"),
-    translate("本机设备名称，方便区分不同设备"))
-device_name.placeholder = "OpenWrt"
+local device_name = s:taboption("general", Value, "device_name", translate("设备名称"),
+	translate("显示在节点列表中，便于区分设备"))
+device_name.placeholder = default_device_name()
+device_name.default = default_device_name()
 
-local model = nixio.fs.readfile("/proc/device-tree/model") or ""
-local hostname = nixio.fs.readfile("/proc/sys/kernel/hostname") or ""
-model = model:gsub("\n", "")
-hostname = hostname:gsub("\n", "")
-local default_device_name = (model ~= "" and model) or (hostname ~= "" and hostname) or "OpenWrt"
-default_device_name = default_device_name:gsub(" ", "_")
-device_name.default = default_device_name
-
--- 高级设置选项
-vnt2_cli_bin = s:taboption("advanced", Value, "vnt2_cli_bin", translate("vnt2-cli程序路径"),
-	translate("自定义vnt2-cli的存放路径，确保填写完整的路径及名称，默认会自动下载"))
-vnt2_cli_bin.placeholder = "/usr/bin/vnt2-cli"
-
-tun_name = s:taboption("advanced",Value, "tun_name", translate("虚拟网卡名称"),
-	translate("自定义虚拟网卡的名称，在多开时虚拟网卡名称不能相同，默认为 vnt-tun"))
-tun_name.placeholder = "vnt-tun"
-
-mtu = s:taboption("advanced",Value, "mtu", translate("MTU"),
-	translate("设置虚拟网卡的mtu值，大多数情况下（留空）使用默认值效率会更高"))
-mtu.datatype = "range(1,1500)"
-mtu.placeholder = "1400"
-
-ctrl_port = s:taboption("advanced", Value, "ctrl_port", translate("控制端口"),
-	translate("控制服务的tcp端口，设置0时禁用控制服务"))
-ctrl_port.datatype = "port"
-ctrl_port.placeholder = "11233"
-
-tunnel_port = s:taboption("advanced", Value, "tunnel_port", translate("隧道端口"),
-	translate("隧道端口，用于P2P通信，默认为0，自动分配"))
-tunnel_port.datatype = "port"
-tunnel_port.placeholder = "0"
-
-no_punch = s:taboption("advanced",Flag, "no_punch", translate("关闭P2P打洞"),
-	translate("关闭后禁止P2P打洞，只使用服务器中继"))
-no_punch.rmempty = false
-
-rtx = s:taboption("advanced",Flag, "rtx", translate("启用QUIC优化传输"),
-	translate("启用后使用QUIC协议优化传输，提升网络稳定性"))
-rtx.rmempty = false
-
-compress = s:taboption("advanced",Flag, "compress", translate("启用压缩"),
-	translate("启用LZ4压缩，减少带宽使用"))
-compress.rmempty = false
-
-fec = s:taboption("advanced",Flag, "fec", translate("启用FEC前向纠错"),
-	translate("启用FEC前向纠错，损失一定带宽来提升网络稳定性"))
-fec.rmempty = false
-
-no_nat = s:taboption("advanced",Flag, "no_nat", translate("关闭内置子网NAT"),
-	translate("关闭后需要配置网卡转发，否则无法使用点对网。通常关闭内置子网NAT，使用系统的网卡转发，点对网性能会更好"))
-no_nat.rmempty = false
-
-no_tun = s:taboption("advanced",Flag, "no_tun", translate("禁用TUN虚拟网卡"),
-	translate("禁用后只能充当流量出口或者进行端口映射，禁用后无需管理员权限"))
-no_tun.rmempty = false
-
-allow_mapping = s:taboption("advanced",Flag, "allow_mapping", translate("允许作为端口映射出口"),
-	translate("开启后其他设备才可使用本设备的ip为"目标虚拟IP""))
-allow_mapping.rmempty = false
-
--- 网络设置选项
-input = s:taboption("network", DynamicList, "input", translate("入栈监听网段"),
-	translate("入栈监听网段 (逗号分隔的 CIDR 和目标 IP)，用于点对网，将指定网段的流量发送到目标节点<br>例如：192.168.0.0/24,10.26.0.2"))
-input.placeholder = "192.168.0.0/24,10.26.0.2"
-
-output = s:taboption("network", DynamicList, "output", translate("出栈允许网段"),
-	translate("出栈允许网段，用于点对网，允许指定网段的转发<br>例如：0.0.0.0/0"))
-output.placeholder = "0.0.0.0/0"
-
-port_mapping = s:taboption("network", DynamicList, "port_mapping", translate("端口映射"),
-	translate("端口映射，格式为：协议://本地监听地址-目标虚拟IP-目标映射地址<br>例如：tcp://0.0.0.0:81-10.0.0.2-10.0.0.2:80"))
-port_mapping.placeholder = "tcp://0.0.0.0:81-10.0.0.2-10.0.0.2:80"
-
--- 安全设置选项
-password = s:taboption("security", Value, "password", translate("加密密码"),
-	translate("设置加密密码，使用相同密码的客户端才能通信"))
-password.placeholder = ""
+local password = s:taboption("general", Value, "password", translate("通信加密密码"),
+	translate("用于客户端之间加密通信，留空则不启用"))
 password.password = true
 
-cert_mode = s:taboption("security", ListValue, "cert_mode", translate("证书验证模式"),
-	translate("服务端证书验证模式"))
-cert_mode:value("skip", translate("跳过验证"))
-cert_mode:value("standard", translate("使用系统证书验证"))
-cert_mode:value("finger", translate("使用证书指纹验证"))
+local cert_mode = s:taboption("security", Value, "cert_mode", translate("服务端证书验证"),
+	translate("支持 skip、standard、finger:证书指纹"))
+cert_mode.placeholder = "skip"
 cert_mode.default = "skip"
+cert_mode.validate = validate_cert_mode
 
--- 连接信息选项
-vnt2_info = s:taboption("infos", Button, "vnt2_info")
-vnt2_info.inputtitle = translate("本机设备信息")
-vnt2_info.description = translate("点击按钮刷新，查看当前设备信息")
-vnt2_info.inputstyle = "apply"
-vnt2_info.write = function()
-  local uci = require "luci.model.uci".cursor()
-  local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2-cli"
-  os.execute(vnt2_cli_bin .. " info --port " .. ctrl_port .. " >/tmp/vnt2-cli_info 2>&1")
+local compress = s:taboption("security", Flag, "compress", translate("启用压缩（LZ4）"))
+compress.rmempty = false
+
+local fec = s:taboption("security", Flag, "fec", translate("启用 FEC 前向纠错"),
+	translate("在弱网环境下提升稳定性，但会增加带宽开销"))
+fec.rmempty = false
+
+local rtx = s:taboption("security", Flag, "rtx", translate("启用 QUIC 优化传输"),
+	translate("适用于需要提升链路稳定性的场景"))
+rtx.rmempty = false
+
+local no_punch = s:taboption("security", Flag, "no_punch", translate("禁用 P2P 打洞"),
+	translate("开启后将优先通过中继或服务端转发"))
+no_punch.rmempty = false
+
+local input = s:taboption("network", DynamicList, "input", translate("入栈监听规则"),
+	translate("格式：CIDR,目标虚拟IP，例如 192.168.1.0/24,10.26.0.2"))
+input.placeholder = "192.168.1.0/24,10.26.0.2"
+input.validate = validate_input_rule
+
+local output = s:taboption("network", DynamicList, "output", translate("出栈允许网段"),
+	translate("例如 0.0.0.0/0；用于限制可访问的目标网段"))
+output.placeholder = "0.0.0.0/0"
+
+local port_mapping = s:taboption("network", DynamicList, "port_mapping", translate("端口映射"),
+	translate("格式：协议://本地监听地址-目标虚拟IP-目标映射地址，例如 tcp://0.0.0.0:81-10.0.0.2-10.0.0.2:80"))
+port_mapping.placeholder = "tcp://0.0.0.0:81-10.0.0.2-10.0.0.2:80"
+port_mapping.validate = validate_port_mapping
+
+local allow_mapping = s:taboption("network", Flag, "allow_mapping", translate("允许作为端口映射出口"),
+	translate("开启后其他客户端可借助本机执行映射出口"))
+allow_mapping.rmempty = false
+
+local no_nat = s:taboption("network", Flag, "no_nat", translate("关闭内置子网 NAT"),
+	translate("关闭后若需跨网段访问，请自行配置 OpenWrt 转发/NAT"))
+no_nat.rmempty = false
+
+local no_tun = s:taboption("network", Flag, "no_tun", translate("无 TUN 模式"),
+	translate("启用后不创建虚拟网卡，仅适用于端口映射或流量出口类场景"))
+no_tun.rmempty = false
+
+local vnt2_forward = s:taboption("network", MultiValue, "vnt2_forward", translate("访问控制 / 防火墙转发"),
+	translate("按需自动创建 OpenWrt 防火墙区域与转发规则"))
+vnt2_forward:value("vnt2fwlan", translate("允许从 VNT2 到 LAN"))
+vnt2_forward:value("vnt2fwwan", translate("允许从 VNT2 到 WAN"))
+vnt2_forward:value("lanfwvnt2", translate("允许从 LAN 到 VNT2"))
+vnt2_forward:value("wanfwvnt2", translate("允许从 WAN 到 VNT2"))
+vnt2_forward.widget = "checkbox"
+
+local udp_stun = s:taboption("stun", DynamicList, "udp_stun", translate("UDP STUN 列表"),
+	translate("不带端口时通常默认使用 3478"))
+udp_stun.placeholder = "stun.chat.bilibili.com:3478"
+
+local tcp_stun = s:taboption("stun", DynamicList, "tcp_stun", translate("TCP STUN 列表"),
+	translate("适用于 TCP / TLS / WSS 环境探测"))
+tcp_stun.placeholder = "stun.nextcloud.com:443"
+
+local vnt2_cli_bin = s:taboption("advanced", Value, "vnt2_cli_bin", translate("vnt2_cli 程序路径"),
+	translate("默认 /usr/bin/vnt2_cli，也可上传到 /tmp 后在此指定"))
+vnt2_cli_bin.placeholder = "/usr/bin/vnt2_cli"
+vnt2_cli_bin.validate = validate_nonempty
+
+local vnt2_ctrl_bin = s:taboption("advanced", Value, "vnt2_ctrl_bin", translate("vnt2_ctrl 程序路径"),
+	translate("用于读取运行状态、节点信息、路由信息"))
+vnt2_ctrl_bin.placeholder = "/usr/bin/vnt2_ctrl"
+vnt2_ctrl_bin.validate = validate_nonempty
+
+local tun_name = s:taboption("advanced", Value, "tun_name", translate("虚拟网卡名称"),
+	translate("多开时请确保不同实例网卡名不冲突"))
+tun_name.placeholder = "vnt-tun"
+
+local mtu = s:taboption("advanced", Value, "mtu", translate("MTU"))
+mtu.placeholder = "1400"
+mtu.datatype = "range(576,9000)"
+
+local ctrl_port = s:taboption("advanced", Value, "ctrl_port", translate("控制端口"),
+	translate("vnt2_ctrl 将通过该端口读取状态，设置 0 表示关闭"))
+ctrl_port.placeholder = "11233"
+ctrl_port.datatype = "port"
+
+local tunnel_port = s:taboption("advanced", Value, "tunnel_port", translate("隧道端口"),
+	translate("用于 P2P 通信，0 表示自动分配"))
+tunnel_port.placeholder = "0"
+tunnel_port.datatype = "port"
+
+local bind_dev = s:taboption("advanced", ListValue, "bind_dev", translate("绑定出口网卡"),
+	translate("当前 vnt2 原生参数未直接提供对应选项，此项作为扩展保留并由 init 脚本保存"))
+bind_dev:value("", translate("不绑定"))
+for _, dev in ipairs(list_net_devices()) do
+	bind_dev:value(dev.iface, dev.iface .. " (" .. dev.ip .. ")")
 end
 
-vnt2_info_view = s:taboption("infos", DummyValue, "vnt2_info_view")
-vnt2_info_view.rawhtml = true
-vnt2_info_view.cfgvalue = function(self, section)
-    local content = nixio.fs.readfile("/tmp/vnt2-cli_info") or ""
-    return string.format("<pre>%s</pre>", luci.util.pcdata(content))
+local info_mode = s:taboption("infos", ListValue, "info_mode", translate("显示模式"))
+info_mode:value("panel", translate("面板说明"))
+info_mode:value("raw", translate("原始输出"))
+info_mode.default = "panel"
+info_mode.rmempty = false
+
+local panel_tip = s:taboption("infos", DummyValue, "_panel_tip", translate("面板说明"))
+panel_tip.rawhtml = true
+panel_tip:depends("info_mode", "panel")
+panel_tip.cfgvalue = function()
+	return [[
+<div class="cbi-value-description">
+	<div>1. 页面顶部状态面板支持自动轮询显示客户端 / Web 服务运行状态、版本、资源占用与当前配置摘要。</div>
+	<div>2. 当前页面下方可手动读取 vnt2_ctrl 输出，包括本机信息、节点列表、设备详情、路由信息和实际启动参数。</div>
+	<div>3. 日志实时查看请进入“客户端日志 / Web 日志”菜单。</div>
+</div>
+]]
 end
 
-vnt2_ips = s:taboption("infos", Button, "vnt2_ips")
-vnt2_ips.inputtitle = translate("客户端IP列表")
-vnt2_ips.description = translate("点击按钮刷新，查看客户端IP列表")
-vnt2_ips.inputstyle = "apply"
-vnt2_ips.write = function()
-  local uci = require "luci.model.uci".cursor()
-  local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2-cli"
-  os.execute(vnt2_cli_bin .. " ips --port " .. ctrl_port .. " >/tmp/vnt2-cli_ips 2>&1")
+local btn1 = s:taboption("infos", Button, "_info_raw", translate("本机设备信息"))
+btn1.inputtitle = translate("刷新本机设备信息")
+btn1.inputstyle = "apply"
+btn1:depends("info_mode", "raw")
+btn1.write = function()
+	if cli_running then
+		sys.call("(vnt2_ctrl info --port $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_ctrl info $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_cli info) >/tmp/vnt2-cli_info 2>&1")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_info")
+	end
 end
 
-vnt2_ips_view = s:taboption("infos", DummyValue, "vnt2_ips_view")
-vnt2_ips_view.rawhtml = true
-vnt2_ips_view.cfgvalue = function(self, section)
-    local content = nixio.fs.readfile("/tmp/vnt2-cli_ips") or ""
-    return string.format("<pre>%s</pre>", luci.util.pcdata(content))
+local btn1info = s:taboption("infos", DummyValue, "_info_content")
+btn1info.rawhtml = true
+btn1info:depends("info_mode", "raw")
+btn1info.cfgvalue = function()
+	return render_pre("/tmp/vnt2-cli_info")
 end
 
-vnt2_clients = s:taboption("infos", Button, "vnt2_clients")
-vnt2_clients.inputtitle = translate("客户端信息列表")
-vnt2_clients.description = translate("点击按钮刷新，查看客户端信息列表")
-vnt2_clients.inputstyle = "apply"
-vnt2_clients.write = function()
-  local uci = require "luci.model.uci".cursor()
-  local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2-cli"
-  os.execute(vnt2_cli_bin .. " clients --port " .. ctrl_port .. " >/tmp/vnt2-cli_clients 2>&1")
+local btn2 = s:taboption("infos", Button, "_ips_raw", translate("所有节点列表"))
+btn2.inputtitle = translate("刷新所有节点列表")
+btn2.inputstyle = "apply"
+btn2:depends("info_mode", "raw")
+btn2.write = function()
+	if cli_running then
+		sys.call("(vnt2_ctrl ips --port $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_ctrl ips $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_cli ips) >/tmp/vnt2-cli_ips 2>&1")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_ips")
+	end
 end
 
-vnt2_clients_view = s:taboption("infos", DummyValue, "vnt2_clients_view")
-vnt2_clients_view.rawhtml = true
-vnt2_clients_view.cfgvalue = function(self, section)
-    local content = nixio.fs.readfile("/tmp/vnt2-cli_clients") or ""
-    return string.format("<pre>%s</pre>", luci.util.pcdata(content))
+local btn2ips = s:taboption("infos", DummyValue, "_ips_content")
+btn2ips.rawhtml = true
+btn2ips:depends("info_mode", "raw")
+btn2ips.cfgvalue = function()
+	return render_pre("/tmp/vnt2-cli_ips")
 end
 
-vnt2_route = s:taboption("infos", Button, "vnt2_route")
-vnt2_route.inputtitle = translate("路由转发信息")
-vnt2_route.description = translate("点击按钮刷新，查看本机路由转发路径")
-vnt2_route.inputstyle = "apply"
-vnt2_route.write = function()
-  local uci = require "luci.model.uci".cursor()
-  local ctrl_port = tonumber(uci:get_first("vnt2", "vnt2_cli", "ctrl_port")) or 11233
-  local vnt2_cli_bin = uci:get_first("vnt2", "vnt2_cli", "vnt2_cli_bin") or "/usr/bin/vnt2-cli"
-  os.execute(vnt2_cli_bin .. " route --port " .. ctrl_port .. " >/tmp/vnt2-cli_route 2>&1")
+local btn3 = s:taboption("infos", Button, "_clients_raw", translate("所有设备详情"))
+btn3.inputtitle = translate("刷新所有设备详情")
+btn3.inputstyle = "apply"
+btn3:depends("info_mode", "raw")
+btn3.write = function()
+	if cli_running then
+		sys.call("(vnt2_ctrl clients --port $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_ctrl clients $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_cli clients) >/tmp/vnt2-cli_clients 2>&1")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_clients")
+	end
 end
 
-vnt2_route_view = s:taboption("infos", DummyValue, "vnt2_route_view")
-vnt2_route_view.rawhtml = true
-vnt2_route_view.cfgvalue = function(self, section)
-    local content = nixio.fs.readfile("/tmp/vnt2-cli_route") or ""
-    return string.format("<pre>%s</pre>", luci.util.pcdata(content))
+local btn3clients = s:taboption("infos", DummyValue, "_clients_content")
+btn3clients.rawhtml = true
+btn3clients:depends("info_mode", "raw")
+btn3clients.cfgvalue = function()
+	return render_pre("/tmp/vnt2-cli_clients")
 end
 
--- 上传程序选项
+local btn4 = s:taboption("infos", Button, "_route_raw", translate("路由转发信息"))
+btn4.inputtitle = translate("刷新路由转发信息")
+btn4.inputstyle = "apply"
+btn4:depends("info_mode", "raw")
+btn4.write = function()
+	if cli_running then
+		sys.call("(vnt2_ctrl route --port $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_ctrl route $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_cli route) >/tmp/vnt2-cli_route 2>&1")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_route")
+	end
+end
+
+local btn4route = s:taboption("infos", DummyValue, "_route_content")
+btn4route.rawhtml = true
+btn4route:depends("info_mode", "raw")
+btn4route.cfgvalue = function()
+	return render_pre("/tmp/vnt2-cli_route")
+end
+
+local btn5 = s:taboption("infos", Button, "_cmd_raw", translate("本机启动参数"))
+btn5.inputtitle = translate("刷新本机启动参数")
+btn5.inputstyle = "apply"
+btn5:depends("info_mode", "raw")
+btn5.write = function()
+	if cli_running then
+		sys.call("tr '\\000' ' ' </proc/$(pidof vnt2_cli | awk '{print $1}')/cmdline >/tmp/vnt2-cli_cmd 2>/dev/null")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_cmd")
+	end
+end
+
+local btn5cmd = s:taboption("infos", DummyValue, "_cmd_content")
+btn5cmd.rawhtml = true
+btn5cmd:depends("info_mode", "raw")
+btn5cmd.cfgvalue = function()
+	return render_pre("/tmp/vnt2-cli_cmd")
+end
+
 local upload = s:taboption("upload", FileUpload, "upload_file")
 upload.optional = true
 upload.default = ""
 upload.template = "vnt2/other_upload"
-upload.description = translate("可直接上传二进制程序vnt2_cli或者以.tar.gz结尾的压缩包,上传新版本会自动覆盖旧版本，下载地址：<a href='https://github.com/vnt-dev/vnt/releases' target='_blank'>vnt2_cli</a><br>上传的文件将会保存在/tmp文件夹里，如果在高级设置里自定义了程序路径那么启动程序时将会自动移至自定义的路径<br>")
-local um = s:taboption("upload",DummyValue, "", nil)
-um.template = "vnt2/other_dvalue"
+upload.description = translate("支持上传 vnt2_cli / vnt2_ctrl / vnt2_web 二进制文件，或包含这些文件的 .tar.gz 压缩包。文件会存入 /tmp，重启服务后生效。")
 
-local dir, fd, chunk
-dir = "/tmp/"
-nixio.fs.mkdir(dir)
-http.setfilehandler(
-    function(meta, chunk, eof)
-        if not fd then
-            if not meta then return end
-            if meta and chunk then fd = nixio.open(dir .. meta.file, "w") end
-            if not fd then
-                um.value = translate("错误：上传失败！")
-                return
-            end
-        end
-        if chunk and fd then
-            fd:write(chunk)
-        end
-        if eof and fd then
-            fd:close()
-            fd = nil
-            um.value = translate("文件已上传至") .. ' "/tmp/' .. meta.file .. '"'
-            if string.sub(meta.file, -7) == ".tar.gz" then
-                local file_path = dir .. meta.file
-                os.execute("tar -xzf " .. file_path .. " -C " .. dir)
-                if nixio.fs.access("/tmp/vnt2_cli") then
-                    um.value = um.value .. "\n" .. translate("-程序/tmp/vnt2_cli上传成功，重启一次客户端才生效")
-                end
-            end
-            os.execute("chmod 777 /tmp/vnt2_cli")
-        end
-    end
-)
-if luci.http.formvalue("upload") then
-    local f = luci.http.formvalue("ulfile")
+local upload_note = s:taboption("upload", DummyValue, "_upload_note")
+upload_note.rawhtml = true
+upload_note.template = "vnt2/other_dvalue"
+
+-- ==================== vnt2_web ====================
+local w = m:section(TypedSection, "vnt2_web", translate("vnt2_web Web 管理设置"))
+w.anonymous = true
+
+w:tab("general", translate("基本设置"))
+w:tab("advanced", translate("高级设置"))
+w:tab("upload", translate("上传程序"))
+
+local web_enabled = w:taboption("general", Flag, "enabled", translate("启用 Web 服务"))
+web_enabled.rmempty = false
+
+local web_restart = w:taboption("general", Button, "_restart_web", translate("重启 Web 服务"))
+web_restart.inputtitle = translate("重启")
+web_restart.inputstyle = "apply"
+web_restart.description = translate("快速重启 vnt2_web")
+web_restart:depends("enabled", "1")
+web_restart.write = function()
+	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")
 end
 
--- ==================== vnts2 服务端设置 ====================
-s2 = m:section(TypedSection, "vnts2", translate("vnts2 服务端设置"))
-s2.anonymous = true
+local vnt2_web_bin = w:taboption("general", Value, "vnt2_web_bin", translate("vnt2_web 程序路径"))
+vnt2_web_bin.placeholder = "/usr/bin/vnt2_web"
+vnt2_web_bin.validate = validate_nonempty
 
-s2:tab("server_general", translate("基本设置"))
-s2:tab("server_web", translate("Web设置"))
+local web_host = w:taboption("general", Value, "web_host", translate("监听地址"),
+	translate("默认仅监听本地 127.0.0.1；若需外部访问，请改为 0.0.0.0 并按需开启 WAN 放行"))
+web_host.placeholder = "127.0.0.1"
+web_host.datatype = "ipaddr"
 
--- 服务端基本设置
-switch2 = s2:taboption("server_general", Flag, "enabled", translate("启用服务端"))
-switch2.rmempty = false
-
-btnsvr = s2:taboption("server_general", Button, "btnsvr", translate("重启服务端"))
-btnsvr.inputtitle = translate("重启")
-btnsvr.description = translate("在没有修改参数的情况下快速重新启动一次")
-btnsvr.inputstyle = "apply"
-btnsvr:depends("enabled", "1")
-btnsvr.write = function()
-  os.execute("/etc/init.d/vnt2 restart ")
-end
-
-server_port = s2:taboption("server_general", Value, "server_port", translate("服务端口"),
-	translate("服务端监听的端口，用于接收客户端连接"))
-server_port.datatype = "port"
-server_port.placeholder = "6660"
-server_port.default = "6660"
-
-vnts2_bin = s2:taboption("server_general", Value, "vnts2_bin", translate("vnts2程序路径"),
-	translate("自定义vnts2的存放路径，确保填写完整的路径及名称，默认会自动下载"))
-vnts2_bin.placeholder = "/usr/bin/vnts2"
-
-white_token = s2:taboption("server_general", Value, "white_token", translate("连接密钥"),
-	translate("客户端连接时需要提供的密钥，留空则不验证"))
-white_token.placeholder = ""
-
-subnet = s2:taboption("server_general", Value, "subnet", translate("虚拟网段"),
-	translate("服务端分配的虚拟网段，例如：10.0.0.1"))
-subnet.placeholder = "10.0.0.1"
-
-servern_netmask = s2:taboption("server_general", Value, "servern_netmask", translate("子网掩码"),
-	translate("子网掩码，例如：255.255.255.0"))
-servern_netmask.placeholder = "255.255.255.0"
-
-logs = s2:taboption("server_general", Flag, "logs", translate("启用日志"),
-	translate("启用后将记录服务端日志到/tmp/vnts2.log"))
-logs.rmempty = false
-
--- Web界面设置
-web = s2:taboption("server_web", Flag, "web", translate("启用Web管理界面"),
-	translate("启用后可在本设备上通过浏览器管理服务端（mips架构不支持）"))
-web.rmempty = false
-
-web_port = s2:taboption("server_web", Value, "web_port", translate("Web管理端口"),
-	translate("Web管理界面的访问端口"))
+local web_port = w:taboption("general", Value, "web_port", translate("监听端口"))
+web_port.placeholder = "19099"
 web_port.datatype = "port"
-web_port.placeholder = "29870"
-web_port.default = "29870"
-web_port:depends("web", "1")
 
-webuser = s2:taboption("server_web", Value, "webuser", translate("管理用户名"),
-	translate("Web管理界面的登录用户名"))
-webuser.placeholder = "admin"
-webuser:depends("web", "1")
-
-webpass = s2:taboption("server_web", Value, "webpass", translate("管理密码"),
-	translate("Web管理界面的登录密码"))
-webpass.placeholder = ""
-webpass.password = true
-webpass:depends("web", "1")
-
-web_wan = s2:taboption("server_web", Flag, "web_wan", translate("允许从WAN访问"),
-	translate("允许从广域网访问Web管理界面（建议设置强密码）"))
+local web_wan = w:taboption("general", Flag, "web_wan", translate("允许 WAN 访问"),
+	translate("仅当监听地址为 0.0.0.0 或 :: 时才会自动创建 WAN 放行规则"))
 web_wan.rmempty = false
-web_wan:depends("web", "1")
 
--- 服务端上传选项
-local upload2 = s2:taboption("server_general", FileUpload, "upload_vnts2")
-upload2.optional = true
-upload2.default = ""
-upload2.template = "vnt2/other_upload"
-upload2.description = translate("可直接上传二进制程序vnts2或者以.tar.gz结尾的压缩包<br>下载地址：<a href='https://github.com/vnt-dev/vnt/releases' target='_blank'>vnts2</a>")
-local um2 = s2:taboption("server_general",DummyValue, "", nil)
-um2.template = "vnt2/other_dvalue"
+local open_web = w:taboption("general", Button, "_open_web", translate("打开原生 Web 页面"))
+open_web.inputtitle = translate("打开")
+open_web.inputstyle = "apply"
+open_web:depends("enabled", "1")
+open_web.write = function()
+	http.redirect(luci.dispatcher.build_url("admin", "vpn", "vnt2", "open_web"))
+end
 
-http.setfilehandler(
-    function(meta, chunk, eof)
-        if not fd then
-            if not meta then return end
-            if meta and chunk then fd = nixio.open(dir .. meta.file, "w") end
-            if not fd then
-                um2.value = translate("错误：上传失败！")
-                return
-            end
-        end
-        if chunk and fd then
-            fd:write(chunk)
-        end
-        if eof and fd then
-            fd:close()
-            fd = nil
-            um2.value = translate("文件已上传至") .. ' "/tmp/' .. meta.file .. '"'
-            if string.sub(meta.file, -7) == ".tar.gz" then
-                local file_path = dir .. meta.file
-                os.execute("tar -xzf " .. file_path .. " -C " .. dir)
-                if nixio.fs.access("/tmp/vnts2") then
-                    um2.value = um2.value .. "\n" .. translate("-程序/tmp/vnts2上传成功，重启一次服务端才生效")
-                end
-            end
-            os.execute("chmod 777 /tmp/vnts2")
-        end
-    end
-)
+local web_user = w:taboption("advanced", Value, "web_user", translate("页面备注用户名"),
+	translate("当前原生 vnt2_web 未由本 LuCI 页面接管认证，此处仅作为备注保存"))
+web_user.placeholder = "admin"
+
+local web_pass = w:taboption("advanced", Value, "web_pass", translate("页面备注密码"),
+	translate("当前原生 vnt2_web 未由本 LuCI 页面接管认证，此处仅作为备注保存"))
+web_pass.password = true
+
+local log_level = w:taboption("advanced", ListValue, "log_level", translate("日志级别"),
+	translate("通过环境变量 RUST_LOG 注入给 vnt2_web"))
+for _, lv in ipairs({ "error", "warn", "info", "debug", "trace" }) do
+	log_level:value(lv, lv)
+end
+log_level.default = "info"
+
+local web_cmd = w:taboption("advanced", Button, "_web_cmd", translate("读取 Web 启动参数"))
+web_cmd.inputtitle = translate("刷新")
+web_cmd.inputstyle = "apply"
+web_cmd.write = function()
+	if web_running then
+		sys.call("tr '\\000' ' ' </proc/$(pidof vnt2_web | awk '{print $1}')/cmdline >/tmp/vnt2-web_cmd 2>/dev/null")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_web。' >/tmp/vnt2-web_cmd")
+	end
+end
+
+local web_cmd_content = w:taboption("advanced", DummyValue, "_web_cmd_content")
+web_cmd_content.rawhtml = true
+web_cmd_content.cfgvalue = function()
+	return render_pre("/tmp/vnt2-web_cmd")
+end
+
+local web_upload = w:taboption("upload", FileUpload, "upload_web")
+web_upload.optional = true
+web_upload.default = ""
+web_upload.template = "vnt2/other_upload"
+web_upload.description = translate("支持上传 vnt2_web 二进制文件或包含 vnt2_web 的 .tar.gz 压缩包。")
+
+local web_upload_note = w:taboption("upload", DummyValue, "_upload_note_web")
+web_upload_note.rawhtml = true
+web_upload_note.template = "vnt2/other_dvalue"
+
+add_file_upload_handler({ upload_note, web_upload_note })
 
 return m

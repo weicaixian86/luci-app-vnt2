@@ -1,87 +1,167 @@
-name: Build VNT2
+name: Build luci-app-vnt2 for OpenWrt 24.10 x86_64
 
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: '发布Releases的版本号（留空不发布）'
-        required: false
-        default: ''
-      text:
-        description: '发布的说明'
-        required: false
-        default: ''
-env:
-  TAG: "${{ github.event.inputs.tag }}"
-  TZ: Asia/Shanghai
-  SDK_VERSION: "23.05.0"
-  SDK_URL: "https://downloads.openwrt.org/releases/23.05.0/targets/x86/64/openwrt-sdk-23.05.0-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+      release_tag:
+        description: "Release tag"
+        required: true
+        default: "v1.0.0"
+
 permissions:
   contents: write
+
+env:
+  TZ: Asia/Shanghai
+  OPENWRT_VERSION: "24.10.0"
+  OPENWRT_TARGET: "x86/64"
+  SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.2.0_musl.Linux-x86_64.tar.xz"
+  PACKAGE_NAME: "luci-app-vnt2"
+
 jobs:
   build:
-    name: Build x86-64
+    name: Build IPK
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-      - name: Download and extract OpenWrt SDK
+      - name: Set build time
+        shell: bash
         run: |
-          wget -q "${{ env.SDK_URL }}" -O openwrt-sdk.tar.xz
+          echo "BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ack \
+            antlr3 \
+            asciidoc \
+            autoconf \
+            automake \
+            autopoint \
+            binutils \
+            bison \
+            build-essential \
+            bzip2 \
+            ccache \
+            cmake \
+            cpio \
+            curl \
+            device-tree-compiler \
+            flex \
+            gawk \
+            gcc-multilib \
+            g++-multilib \
+            genisoimage \
+            gettext \
+            git \
+            gperf \
+            haveged \
+            help2man \
+            intltool \
+            libc6-dev-i386 \
+            libelf-dev \
+            libfuse-dev \
+            libglib2.0-dev \
+            libgmp3-dev \
+            libltdl-dev \
+            libmpc-dev \
+            libmpfr-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libpython3-dev \
+            libreadline-dev \
+            libssl-dev \
+            libtool \
+            lrzsz \
+            mkisofs \
+            msmtp \
+            nano \
+            ninja-build \
+            p7zip-full \
+            patch \
+            pkgconf \
+            python3 \
+            python3-pip \
+            python3-ply \
+            python3-docutils \
+            qemu-utils \
+            rsync \
+            scons \
+            squashfs-tools \
+            subversion \
+            swig \
+            texinfo \
+            uglifyjs \
+            unzip \
+            vim \
+            wget \
+            xmlto \
+            xxd \
+            zlib1g-dev
+
+      - name: Download OpenWrt SDK
+        shell: bash
+        run: |
+          wget -q -O openwrt-sdk.tar.xz "$SDK_URL"
           mkdir -p sdk
           tar -xJf openwrt-sdk.tar.xz -C sdk --strip-components=1
-          ls -la sdk/
+          echo "SDK extracted"
 
-      - name: Prepare feeds and install package
+      - name: Prepare feeds
+        shell: bash
         run: |
           cd sdk
           ./scripts/feeds update -a
-          mkdir -p package/feeds/vnt2
-          ln -sf $GITHUB_WORKSPACE/luci-app-vnt2 package/feeds/vnt2/luci-app-vnt2
-          ./scripts/feeds install luci-app-vnt2
+          ./scripts/feeds install -a
 
-      - name: Configure package
+      - name: Link package into SDK
+        shell: bash
+        run: |
+          cd sdk
+          mkdir -p package/custom
+          ln -sfn "$GITHUB_WORKSPACE/luci-app-vnt2/luci-app-vnt2" "package/custom/${PACKAGE_NAME}"
+          test -f "package/custom/${PACKAGE_NAME}/Makefile"
+
+      - name: Generate defconfig
+        shell: bash
         run: |
           cd sdk
           make defconfig
-          make package/luci-app-vnt2/compile V=s
 
-      - name: Find and copy ipk files
+      - name: Build package
+        shell: bash
+        run: |
+          cd sdk
+          make package/${PACKAGE_NAME}/compile V=s -j"$(nproc)"
+
+      - name: Collect IPK files
+        shell: bash
         run: |
           mkdir -p output
-          find sdk/bin -name "luci-app-vnt2*.ipk" -exec cp {} output/ \;
-          ls -la output/
+          find sdk/bin/packages -type f \( -name "${PACKAGE_NAME}_*.ipk" -o -name "luci-i18n-${PACKAGE_NAME}-*.ipk" \) -exec cp -f {} output/ \;
+          ls -lah output
+          test -n "$(find output -maxdepth 1 -type f -name '*.ipk')"
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VNT2-x86-64-23.05
-          path: output/
+          name: openwrt-24.10-x86_64-ipk
+          path: output/*.ipk
+          if-no-files-found: error
 
-      - name: Create compress files
-        if: ${{ github.event.inputs.tag != '' }}
-        run: |
-          zip -j vnt2-x86-64-23.05.zip output/*
-          echo "build_time=$(date '+%Y年%m月%d日%H:%M:%S' | jq -sRr @uri)" >> $GITHUB_ENV
-
-      - name: Release
-        if: ${{ github.event.inputs.tag != '' }}
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-            token: ${{ secrets.GITHUB_TOKEN }}
-            body: |
-             > ### ![](https://img.shields.io/badge/%E7%BC%96%E8%AF%91%E6%97%B6%E9%97%B4-${{ env.build_time }}-8267?logo=github&labelColor=%E9%A1%BB)![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.TAG }}/total?label=%E4%B8%8B%E8%BD%BD%E6%AC%A1%E6%95%B0&logo=github) 
-
-             - 其中 **`openwrt-23.05`** 里面是ipk安装包
-
-             - 需要先去系统自带的软件包里已经安装 **_luci_** 和 **_luci-base_** 和 **_luci-compat_** 和 **_kmod-tun_** 再安装这个ipk才能显示界面
-
-             - 安装完成后找不到界面入口的，请注销登录关闭当前浏览器窗口重新打开或重启路由器
-
-             ${{ github.event.inputs.text }}
-
-            tag_name: ${{ env.TAG }}
-            files: vnt2-x86-64-23.05.zip
+          tag_name: ${{ github.event.inputs.release_tag }}
+          name: ${{ github.event.inputs.release_tag }}
+          body: |
+            编译时间: ${{ env.BUILD_TIME }}
+          files: output/*.ipk
+          generate_release_notes: false
+          append_body: false
+          make_latest: true

@@ -1,29 +1,122 @@
-
 <%
-	local uci = require 'luci.model.uci'.cursor()
-	protocol="http://"
+	local protocol = "http://"
 %>
-<script type="text/javascript">//<![CDATA[
-XHR.poll(3, '<%=url([[admin]], [[vpn]], [[vnt2]], [[status]])%>', null,
-    function(x, data) {
-        var st = document.getElementById('vnt2_status');
-        if (data && st) {
-            var clientStatus = data.crunning ? "<span style='color:green;'> 运行中</span><img src='https://www.right.com.cn/forum/data/attachment/album/202401/30/081238k459q2d5klacs8rk.gif' width='30px' alt=''>" : "<span style='color:red;'> 未运行</span>";
-            var vnt2staContent = data.crunning ? "已运行：" + "<span style='color:#DA70D6;'>" + data.vnt2sta + "</span>" : "";
-            var vnt2cpuContent = data.crunning ? "<br>" + "CPU占用：" + "<span style='color:#6A5ACD;'>" + data.vnt2cpu + "</span>" : "";
-            var vnt2ramContent = data.crunning ? "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;&nbsp;内存占用：" + "<span style='color:#0000CD;'>" + data.vnt2ram + "</span>" : "";
-            var vnt2tagContent = data.crunning ? "<br>" + "当前版本：" + "<span style='color:#CD853F;'>" + data.vnt2tag + "</span>" : "";
-            var vnt2newtagContent = data.crunning ? "&nbsp;&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;&nbsp;最新版本：" + "<span style='color:#FFA500;'>" + data.vnt2newtag + "</span>" : "";
-            var serverStatus = data.vnts2running ? "<span style='color:green;'> 运行中</span><img src='https://www.right.com.cn/forum/data/attachment/album/202401/30/081238k459q2d5klacs8rk.gif' width='30px' alt=''>" : "<span style='color:red;'> 未运行</span>";
-            var vnts2staContent = data.vnts2running ? "已运行：" + "<span style='color:#DA70D6;'>" + data.vnts2sta + "</span>" : "";
-            st.innerHTML = "<em><b>vnt2-cli " + clientStatus + vnt2staContent + vnt2cpuContent + vnt2ramContent + vnt2tagContent + vnt2newtagContent + "<br><br>vnts2 " + serverStatus + vnts2staContent + "</b></em>";
-        }
-    }
-);
+<script type="text/javascript">
+//<![CDATA[
+(function() {
+	function badge(ok, onText, offText) {
+		if (ok) {
+			return "<span style='display:inline-block;padding:2px 8px;border-radius:10px;background:#e8f5e9;color:#2e7d32;font-weight:bold;'>" + (onText || "运行中") + "</span>";
+		}
+		return "<span style='display:inline-block;padding:2px 8px;border-radius:10px;background:#ffebee;color:#c62828;font-weight:bold;'>" + (offText || "未运行") + "</span>";
+	}
+
+	function line(label, value, color) {
+		if (value === undefined || value === null || value === "") return "";
+		return "<div style='margin:3px 0;'><span style='color:#333;font-weight:bold;'>" + label + "：</span><span style='color:" + (color || "#444") + ";'>" + value + "</span></div>";
+	}
+
+	function esc(val) {
+		return String(val || "")
+			.replace(/&/g, String.fromCharCode(38, 97, 109, 112, 59))
+			.replace(/</g, String.fromCharCode(38, 108, 116, 59))
+			.replace(/>/g, String.fromCharCode(38, 103, 116, 59))
+			.replace(/"/g, String.fromCharCode(38, 113, 117, 111, 116, 59))
+			.replace(/'/g, String.fromCharCode(38, 35, 51, 57, 59));
+	}
+
+	function block(title, running, rows, extraHtml) {
+		return ""
+			+ "<div style='padding:12px 14px;margin:8px 0;border:1px solid #ddd;border-radius:8px;background:#fff;'>"
+			+ "<div style='margin-bottom:8px;font-size:14px;'><span style='font-weight:bold;color:#111;'>" + title + "</span> "
+			+ badge(running, "运行中", "未运行") + "</div>"
+			+ rows.join("")
+			+ (extraHtml || "")
+			+ "</div>";
+	}
+
+	XHR.poll(3, '<%=url([[admin]], [[vpn]], [[vnt2]], [[status]])%>', null, function(x, data) {
+		var st = document.getElementById("vnt2_status");
+		if (!st) return;
+
+		if (!data) {
+			st.innerHTML = "<em><%:Collecting data...%></em>";
+			return;
+		}
+
+		var cliRows = [];
+		cliRows.push(line("控制端口", data.ctrl_port || "-", "#1565c0"));
+		cliRows.push(line("服务器", (data.cli_servers || []).join("<br>"), "#455a64"));
+		cliRows.push(line("网络编号", data.cli_network_code || "-", "#00897b"));
+		cliRows.push(line("设备名称", data.cli_device_name || "-", "#5e35b1"));
+		cliRows.push(line("虚拟网卡", data.cli_tun_name || "-", "#6d4c41"));
+		cliRows.push(line("工作模式", data.cli_no_tun === "1" ? "无 TUN 模式" : "TUN 模式", "#546e7a"));
+		if (data.cli_running) {
+			cliRows.push(line("运行时长", data.cli_runtime || "-", "#8e24aa"));
+			cliRows.push(line("进程 PID", data.cli_pid || "-", "#6d4c41"));
+			cliRows.push(line("CPU 占用", data.cli_cpu || "-", "#3949ab"));
+			cliRows.push(line("内存占用", data.cli_ram || "-", "#1e88e5"));
+			cliRows.push(line("当前版本", data.cli_tag || "-", "#ef6c00"));
+			cliRows.push(line("最新版本", data.latest_tag || "-", "#fb8c00"));
+		} else {
+			cliRows.push(line("状态说明", "vnt2_cli 未启动", "#c62828"));
+		}
+
+		var webRows = [];
+		webRows.push(line("监听地址", (data.web_host || "127.0.0.1") + ":" + (data.web_port || "19099"), "#1565c0"));
+		if (data.web_running) {
+			webRows.push(line("运行时长", data.web_runtime || "-", "#8e24aa"));
+			webRows.push(line("进程 PID", data.web_pid || "-", "#6d4c41"));
+			webRows.push(line("CPU 占用", data.web_cpu || "-", "#3949ab"));
+			webRows.push(line("内存占用", data.web_ram || "-", "#1e88e5"));
+			webRows.push(line("当前版本", data.web_tag || "-", "#ef6c00"));
+		} else {
+			webRows.push(line("状态说明", "vnt2_web 未启动", "#c62828"));
+		}
+
+		var cliExtra = "";
+		if (data.cli_info_preview) {
+			cliExtra =
+				"<details style='margin-top:8px;'>" +
+				"<summary style='cursor:pointer;'>本机信息预览</summary>" +
+				"<pre style='white-space:pre-wrap;word-break:break-all;background:#f7f7f7;padding:8px;border:1px solid #eee;'>" +
+				esc(data.cli_info_preview) +
+				"</pre></details>";
+		}
+
+		var webBtn = "";
+		if (data.web_running && data.web_port) {
+			var webHost = data.web_host || window.location.hostname;
+			if (webHost === "0.0.0.0" || webHost === "::") {
+				webHost = window.location.hostname;
+			}
+			var webProto = window.location.protocol || "http:";
+			webBtn =
+				"<div style='margin-top:10px;'>" +
+				"<input class='cbi-button cbi-button-apply' type='button' value='打开 VNT2 Web 界面' " +
+				"onclick=\"window.open('" + webProto + "//" + webHost + ":" + data.web_port + "/')\" />" +
+				"</div>";
+		}
+
+		var tips =
+			"<div style='padding:10px 14px;margin-top:8px;border:1px dashed #cfd8dc;border-radius:8px;background:#fafafa;color:#455a64;'>" +
+			"<div style='font-weight:bold;margin-bottom:6px;'>说明</div>" +
+			"<div>1. 客户端连接信息可在“连接信息”标签页或“客户端日志”页面查看。</div>" +
+			"<div>2. Web 组件启动后，可直接点击上方按钮进入原生 vnt2_web 页面。</div>" +
+			"<div>3. 最新版本信息来自 GitHub Releases，若网络不可达则可能为空。</div>" +
+			"</div>";
+
+		st.innerHTML =
+			block("vnt2_cli 客户端状态", !!data.cli_running, cliRows, cliExtra) +
+			block("vnt2_web 服务状态", !!data.web_running, webRows, webBtn) +
+			tips;
+	});
+})();
 //]]>
 </script>
+
 <fieldset class="cbi-section">
-    <p id="vnt2_status">
-        <em><%:Collecting data...%></em>
-    </p>
+	<div id="vnt2_status">
+		<em><%:Collecting data...%></em>
+	</div>
 </fieldset>

@@ -1,329 +1,196 @@
-
 #!/bin/sh /etc/rc.common
-# Copyright (C) 2024-2025 VNT Project
-# Enhanced version with auto-download, vnts2 support
 
 START=99
 USE_PROCD=1
 
-# 磁盘空间检查
-size="$(df -k | awk '/\/overlay$/ {sub(/K$/, "", $4); print $4}')"
-[ -z "$size" ] && size="$(df -k /usr/bin | awk 'NR==2 {print $(NF-2) }')"
+CONF="vnt2"
+CLI_LOG="/tmp/vnt2-cli.log"
+WEB_LOG="/tmp/vnt2-web.log"
+CLI_TIME="/tmp/vnt2_cli_time"
+WEB_TIME="/tmp/vnt2_web_time"
+CLI_CONF_DIR="/etc/vnt2"
+CLI_CONF_FILE="${CLI_CONF_DIR}/vnt2-cli.toml"
+RUNTIME_FILE="/tmp/.vnt2_runtime"
 
-# 用户代理
-curltest=`which curl`
-user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+. /lib/functions.sh
+. /lib/functions/procd.sh
 
-# GitHub代理列表
-proxys="https://github.moeyy.xyz/
-https://gh.llkk.cc/
-https://mirror.ghproxy.com/
-https://ghproxy.net/
-"
-
-get_tz() {
-	SET_TZ=""
-	[ -e "/etc/localtime" ] && return
-	for tzfile in /etc/TZ /var/etc/TZ
-	do
-		[ -e "$tzfile" ] || continue
-		tz="$(cat $tzfile 2>/dev/null)"
-	done
-	[ -z "$tz" ] && return
-	SET_TZ=$tz
+log_cli() {
+	echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : $*" >>"${CLI_LOG}"
 }
 
-# CPU架构检测
-detect_cpu() {
-	cputype=$(uname -ms | tr ' ' '_' | tr '[A-Z]' '[a-z]')
-	[ -n "$(echo $cputype | grep -E "linux.*armv.*")" ] && cpucore="arm"
-	[ -n "$(echo $cputype | grep -E "linux.*armv7.*")" ] && [ -n "$(cat /proc/cpuinfo | grep vfp)" ] && cpucore="armv7"
-	[ -n "$(echo $cputype | grep -E "linux.*aarch64.*|linux.*armv8.*")" ] && cpucore="aarch64"
-	[ -n "$(echo $cputype | grep -E "linux.*86.*")" ] && cpucore="i386"
-	[ -n "$(echo $cputype | grep -E "linux.*86_64.*")" ] && cpucore="x86_64"
-	if [ -n "$(echo $cputype | grep -E "linux.*mips.*")" ] ; then
-		mipstype=$(echo -n I | hexdump -o 2>/dev/null | awk '{ print substr($2,6,1); exit}') 
-		[ "$mipstype" = "0" ] && cpucore="mips" || cpucore="mipsle"
-	fi
+log_web() {
+	echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-web : $*" >>"${WEB_LOG}"
 }
 
-# 下载vnt2-cli程序
-download_vnt2_cli() {
-	local vnt2_cli_bin="$1"
-	local path=$(dirname "$vnt2_cli_bin")
-	
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 程序不存在，开始在线下载..." >>/tmp/vnt2-cli.log
-	mkdir -p "$path"
-	
-	# 获取最新版本号
-	if [ -z "$curltest" ] || [ ! -s "`which curl`" ] ; then
-		tag="$( wget -T 5 -t 3 --user-agent "$user_agent" --max-redirect=0 --output-document=-  https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-		[ -z "$tag" ] && tag="$( wget --no-check-certificate -T 5 -t 3 --user-agent "$user_agent" --quiet --output-document=-  https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-		[ -z "$tag" ] && tag="$( wget --no-check-certificate -T 5 -t 3 --user-agent "$user_agent" --quiet --output-document=-  https://dl.cnqq.cloudns.ch/https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-	else
-		tag="$( curl --connect-timeout 3 --user-agent "$user_agent"  https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-		[ -z "$tag" ] && tag="$( curl -k --connect-timeout 3 --user-agent "$user_agent" -s  https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-		[ -z "$tag" ] && tag="$( curl -Lk --connect-timeout 5 --user-agent "$user_agent" -s  https://dl.cnqq.cloudns.ch/https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-	fi
-	[ -z "$tag" ] && tag="v2.0.0"
-	
-	# 根据CPU架构确定下载URL
-	case "${cpucore}" in 
-		"mipsle") url="mipsel-unknown-linux-musl"
-		;;
-		"mips") url="mips-unknown-linux-musl"
-		;;
-		"x86_64") url="x86_64-unknown-linux-musl"
-		;;
-		"i386") url="i686-unknown-linux-musl"
-		;;
-		"aarch64") url="aarch64-unknown-linux-musl"
-		;;
-		"armv7") url="armv7-unknown-linux-musleabi"
-		;;
-		"arm") url="arm-unknown-linux-musleabi"
-		;;
-	esac
-	
-	# 下载程序
-	for proxy in $proxys ; do
-		curl -Lko /tmp/vnt2-cli.tar.gz "${proxy}https://github.com/vnt-dev/vnt/releases/download/${tag}/vnt-${url}-${tag}.tar.gz" || wget --no-check-certificate -O /tmp/vnt2-cli.tar.gz "${proxy}https://github.com/vnt-dev/vnt/releases/download/${tag}/vnt-${url}-${tag}.tar.gz"
-		if [ "$?" = 0 ] ; then
-			tar -zxf /tmp/vnt2-cli.tar.gz -C $path
-			rm -f /tmp/vnt2-cli.tar.gz ${path}/vn-link-cli ${path}/README.md >/dev/null 2>&1
-			chmod +x "$vnt2_cli_bin"
-			if [ "$($vnt2_cli_bin -h 2>&1 | wc -l)" -gt 3 ] ; then
-				echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : ${vnt2_cli_bin} 下载成功" >>/tmp/vnt2-cli.log
-				return 0
-			else
-				uci -q set vnt2.@vnt2_cli[0].enabled=0
-				uci commit vnt2
-				echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : $vnt2_cli_bin 下载失败，请手动下载上传程序" >>/tmp/vnt2-cli.log
-				return 1
-			fi
-		fi
+trim_list() {
+	local list="$1"
+	echo "$list" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
+}
+
+toml_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+append_toml_array() {
+	local key="$1"
+	shift
+	local first=1
+	[ "$#" -gt 0 ] || return 0
+
+	printf '%s = [' "$key" >>"${CLI_CONF_FILE}"
+	while [ "$#" -gt 0 ]; do
+		local item="$1"
+		shift
+		[ -n "$item" ] || continue
+		[ "$first" = "1" ] || printf ', ' >>"${CLI_CONF_FILE}"
+		first=0
+		printf '"%s"' "$(toml_escape "$item")" >>"${CLI_CONF_FILE}"
 	done
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : $vnt2_cli_bin 下载失败" >>/tmp/vnt2-cli.log
+	printf ']\n' >>"${CLI_CONF_FILE}"
+}
+
+append_toml_bool() {
+	local key="$1"
+	local val="$2"
+	[ "$val" = "1" ] && echo "${key} = true" >>"${CLI_CONF_FILE}"
+}
+
+append_toml_string() {
+	local key="$1"
+	local val="$2"
+	[ -n "$val" ] && printf '%s = "%s"\n' "$key" "$(toml_escape "$val")" >>"${CLI_CONF_FILE}"
+}
+
+append_toml_int() {
+	local key="$1"
+	local val="$2"
+	[ -n "$val" ] && echo "${key} = ${val}" >>"${CLI_CONF_FILE}"
+}
+
+append_runtime_item() {
+	local key="$1"
+	local val="$2"
+	[ -n "$val" ] && echo "${key}=${val}" >>"${RUNTIME_FILE}"
+}
+
+ensure_exec() {
+	local bin="$1"
+	[ -n "$bin" ] || return 1
+	[ -f "$bin" ] || return 1
+	chmod 755 "$bin" >/dev/null 2>&1
+	return 0
+}
+
+find_uploaded_bin() {
+	local name="$1"
+	for file in "/tmp/${name}" "/tmp/${name//_/-}" "/tmp/${name}.bin"; do
+		[ -f "$file" ] && {
+			echo "$file"
+			return 0
+		}
+	done
 	return 1
 }
 
-start_vnt2_cli() {
+prepare_binary() {
 	local cfg="$1"
-	local enabled
-	config_get_bool enabled "$cfg" 'enabled' '0'
-	[ "$enabled" = "1" ] || return 1
+	local option="$2"
+	local default_path="$3"
+	local upload_name="$4"
+	local log_func="$5"
 
-	config_get vnt2_cli_bin "$cfg" 'vnt2_cli_bin'
-	[ -z "$vnt2_cli_bin" ] && vnt2_cli_bin="/usr/bin/vnt2_cli"
-	
-	path=$(dirname "$vnt2_cli_bin")
-	
-	# 检查并处理上传的程序
-	if [ -f /tmp/vnt2-cli ] && [ "${path:0:4}" != "/tmp" ]; then
-		mkdir -p $path
-		chmod +x /tmp/vnt2-cli
-		echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 找到上传的程序/tmp/vnt2-cli，替换为$vnt2_cli_bin" >>/tmp/vnt2-cli.log
-		upsize="$(du -k /tmp/vnt2-cli | cut -f1)"
-		result=$(expr $size - $upsize)
-		if [ "$(($(/tmp/vnt2-cli -h 2>&1 | wc -l)))" -gt 3 ] && [ "$result" -gt 500 ] ; then
-			mv -f /tmp/vnt2-cli "$vnt2_cli_bin"
-		else
-			[ -z "$size" ] && [ "$(($(/tmp/vnt2-cli -h 2>&1 | wc -l)))" -gt 3 ] && mv -f /tmp/vnt2-cli "$vnt2_cli_bin"
-			echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 无法替换，上传的程序不完整或自定义路径的可用空间不足" >>/tmp/vnt2-cli.log
+	local bin
+	config_get bin "$cfg" "$option" "$default_path"
+
+	if ! ensure_exec "$bin"; then
+		local uploaded
+		uploaded="$(find_uploaded_bin "$upload_name")"
+		if [ -n "$uploaded" ]; then
+			$log_func "检测到上传程序 ${uploaded}，将使用该路径启动"
+			bin="$uploaded"
+			uci -q set ${CONF}.${cfg}.${option}="$bin"
+			uci commit ${CONF}
 		fi
 	fi
-	
-	# 如果程序不存在且空间不足，自动切换到/tmp
-	if [ ! -f "$vnt2_cli_bin" ] && [ "$size" -lt 4000 ] && [ ! -z "$size" ] ; then
-		echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 自定义程序路径的可用空间不足，自动切换为/tmp/vnt2-cli" >>/tmp/vnt2-cli.log
-		sed -i "/vnt2_cli_bin/c option vnt2_cli_bin '/tmp/vnt2-cli'" /etc/config/vnt2
-		vnt2_cli_bin=/tmp/vnt2-cli
-	fi
-	
-	# 检查程序是否存在，不存在则下载
-	if [ "$($vnt2_cli_bin -h 2>&1 | wc -l)" -lt 3 ] || [ ! -f "$vnt2_cli_bin" ] ; then
-		download_vnt2_cli "$vnt2_cli_bin" || return 1
-	fi
-	
-	chmod +x "$vnt2_cli_bin"
-	
-	# 获取版本信息
-	ver="$($vnt2_cli_bin -h 2>&1 | grep version | awk '{print $2}')"
-	[ ! -z "$ver" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : ${vnt2_cli_bin} 当前版本号-${ver}" >>/tmp/vnt2-cli.log
-	
-	# 清理旧进程
-	ps | grep 'vnt2-cli' | grep -v grep | awk '{print $1}' | xargs kill >/dev/null 2>&1
-	ps | grep 'vnt2-cli' | grep -v grep | awk '{print $1}' | xargs kill -9 >/dev/null 2>&1
 
-	# 获取配置参数
-	local server network_code device_id device_name mtu tun_name
-	local no_punch rtx compress fec no_nat no_tun
-	local allow_mapping cert_mode ctrl_port tunnel_port password
-	local input output port_mapping vnt2_forward
-
-	config_get server "$cfg" 'server'
-	config_get network_code "$cfg" 'network_code'
-	config_get device_id "$cfg" 'device_id'
-	config_get device_name "$cfg" 'device_name'
-	config_get mtu "$cfg" 'mtu'
-	config_get tun_name "$cfg" 'tun_name'
-	config_get_bool no_punch "$cfg" 'no_punch' '0'
-	config_get_bool rtx "$cfg" 'rtx' '0'
-	config_get_bool compress "$cfg" 'compress' '0'
-	config_get_bool fec "$cfg" 'fec' '0'
-	config_get_bool no_nat "$cfg" 'no_nat' '0'
-	config_get_bool no_tun "$cfg" 'no_tun' '0'
-	config_get_bool allow_mapping "$cfg" 'allow_mapping' '0'
-	config_get cert_mode "$cfg" 'cert_mode'
-	config_get ctrl_port "$cfg" 'ctrl_port'
-	config_get tunnel_port "$cfg" 'tunnel_port'
-	config_get password "$cfg" 'password'
-	config_get input "$cfg" 'input'
-	config_get output "$cfg" 'output'
-	config_get port_mapping "$cfg" 'port_mapping'
-	config_get vnt2_forward "$cfg" 'vnt2_forward'
-
-	# 检查必填参数
-	[ -z "$server" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 服务器地址不能为空" >>/tmp/vnt2-cli.log && return 1
-	[ -z "$network_code" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 网络编号不能为空" >>/tmp/vnt2-cli.log && return 1
-
-	# 创建配置文件目录
-	mkdir -p /etc/vnt2
-	local conf_file="/etc/vnt2/vnt2-cli.toml"
-
-	# 写入配置文件
-	echo "# VNT2 配置文件" > $conf_file
-	echo "server = [\"$server\"]" >> $conf_file
-	echo "network_code = \"$network_code\"" >> $conf_file
-
-	[ -n "$device_id" ] && echo "device_id = \"$device_id\"" >> $conf_file
-	[ -n "$device_name" ] && echo "device_name = \"$device_name\"" >> $conf_file
-	[ -n "$mtu" ] && echo "mtu = $mtu" >> $conf_file
-	[ -n "$tun_name" ] && echo "tun_name = \"$tun_name\"" >> $conf_file
-	[ "$no_punch" = "1" ] && echo "no_punch = true" >> $conf_file
-	[ "$rtx" = "1" ] && echo "rtx = true" >> $conf_file
-	[ "$compress" = "1" ] && echo "compress = true" >> $conf_file
-	[ "$fec" = "1" ] && echo "fec = true" >> $conf_file
-	[ "$no_nat" = "1" ] && echo "no_nat = true" >> $conf_file
-	[ "$no_tun" = "1" ] && echo "no_tun = true" >> $conf_file
-	[ "$allow_mapping" = "1" ] && echo "allow_mapping = true" >> $conf_file
-	[ -n "$cert_mode" ] && echo "cert_mode = \"$cert_mode\"" >> $conf_file
-	[ -n "$ctrl_port" ] && echo "ctrl_port = $ctrl_port" >> $conf_file
-	[ -n "$tunnel_port" ] && echo "tunnel_port = $tunnel_port" >> $conf_file
-	[ -n "$password" ] && echo "password = \"$password\"" >> $conf_file
-
-	# 处理input和output列表
-	if [ -n "$input" ]; then
-		echo "input = [" >> $conf_file
-		for item in $input; do
-			echo "  \"$item\"," >> $conf_file
-		done
-		echo "]" >> $conf_file
-	fi
-
-	if [ -n "$output" ]; then
-		echo "output = [" >> $conf_file
-		for item in $output; do
-			echo "  \"$item\"," >> $conf_file
-		done
-		echo "]" >> $conf_file
-	fi
-
-	# 处理端口映射
-	if [ -n "$port_mapping" ]; then
-		echo "port_mapping = [" >> $conf_file
-		for item in $port_mapping; do
-			echo "  \"$item\"," >> $conf_file
-		done
-		echo "]" >> $conf_file
-	fi
-
-	# 启动程序
-	procd_open_instance "vnt2-cli"
-	get_tz
-	[ -z "$SET_TZ" ] || procd_set_param env TZ="$SET_TZ"
-	procd_set_param command "$vnt2_cli_bin"
-	procd_append_param command --conf "$conf_file"
-	procd_set_param limits core="unlimited"
-	procd_set_param limits nofile="1000000 1000000"
-	procd_set_param stdout 1
-	procd_set_param stderr 1
-	procd_set_param respawn
-	procd_close_instance
-
-	# 配置网络接口和防火墙
-	if [ "$no_tun" != "1" ]; then
-		[ -z "$tun_name" ] && tun_name="vnt-tun"
-
-		if [ -z "$(uci -q get network.VNT2)" ]; then
-			uci set network.VNT2='interface'
-			uci set network.VNT2.proto='none'
-			uci set network.VNT2.device=$tun_name
-			uci set network.VNT2.ifname=$tun_name
-			echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 添加网络接口 VNT2，绑定虚拟网卡$tun_name" >>/tmp/vnt2-cli.log
-		fi
-
-		if [ -z "$(uci -q get firewall.vnt2zone)" ]; then
-			echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 添加防火墙规则，开启IP动态伪装 MSS钳制" >>/tmp/vnt2-cli.log
-			uci set firewall.vnt2zone='zone'
-			uci set firewall.vnt2zone.input='ACCEPT'
-			uci set firewall.vnt2zone.output='ACCEPT'
-			uci set firewall.vnt2zone.forward='ACCEPT'
-			uci set firewall.vnt2zone.masq='1'
-			uci set firewall.vnt2zone.mtu_fix='1'
-			uci set firewall.vnt2zone.name='VNT2'
-			uci set firewall.vnt2zone.network='VNT2'
-		fi
-		
-		# 防火墙转发规则
-		if [ "${vnt2_forward//vnt2fwlan/}" != "$vnt2_forward" ]; then
-			echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 允许从VNT2到局域网lan的流量" >>/tmp/vnt2-cli.log
-			uci set firewall.vnt2fwlan=forwarding
-			uci set firewall.vnt2fwlan.dest='lan'
-			uci set firewall.vnt2fwlan.src='VNT2'
-		else
-			uci -q delete firewall.vnt2fwlan
-		fi
-		
-		if [ "${vnt2_forward//vnt2fwwan/}" != "$vnt2_forward" ]; then
-			echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 允许从VNT2到广域网wan的流量" >>/tmp/vnt2-cli.log
-			uci set firewall.vnt2fwwan=forwarding
-			uci set firewall.vnt2fwwan.dest='wan'
-			uci set firewall.vnt2fwwan.src='VNT2'
-		else
-			uci -q delete firewall.vnt2fwwan
-		fi
-		
-		if [ "${vnt2_forward//lanfwvnt2/}" != "$vnt2_forward" ]; then
-			echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 允许从局域网lan到VNT2的流量" >>/tmp/vnt2-cli.log
-			uci set firewall.lanfwvnt2=forwarding
-			uci set firewall.lanfwvnt2.dest='VNT2'
-			uci set firewall.lanfwvnt2.src='lan'
-		else
-			uci -q delete firewall.lanfwvnt2
-		fi
-		
-		if [ "${vnt2_forward//wanfwvnt2/}" != "$vnt2_forward" ]; then
-			echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 允许从广域网wan到VNT2的流量" >>/tmp/vnt2-cli.log
-			uci set firewall.wanfwvnt2=forwarding
-			uci set firewall.wanfwvnt2.dest='VNT2'
-			uci set firewall.wanfwvnt2.src='wan'
-		else
-			uci -q delete firewall.wanfwvnt2
-		fi
-
-		[ -n "$(uci changes network)" ] && uci commit network && /etc/init.d/network reload >/dev/null 2>&1
-		[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
-		sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-	fi
-
-	echo `date +%s` > /tmp/vnt2_time
+	ensure_exec "$bin" || return 1
+	echo "$bin"
+	return 0
 }
 
-stop_vnt2_cli() {
-	local cfg="$1"
-	ps | grep 'vnt2-cli' | grep -v grep | awk '{print $1}' | xargs kill >/dev/null 2>&1
-	ps | grep 'vnt2-cli' | grep -v grep | awk '{print $1}' | xargs kill -9 >/dev/null 2>&1
+configure_network() {
+	local tun_name="$1"
+	local forward_list="$2"
+
+	[ -n "$tun_name" ] || tun_name="vnt-tun"
+
+	uci -q delete network.VNT2
+	uci set network.VNT2='interface'
+	uci set network.VNT2.proto='none'
+	uci set network.VNT2.device="$tun_name"
+	uci set network.VNT2.ifname="$tun_name"
+
+	uci -q delete firewall.vnt2zone
+	uci set firewall.vnt2zone='zone'
+	uci set firewall.vnt2zone.name='VNT2'
+	uci set firewall.vnt2zone.input='ACCEPT'
+	uci set firewall.vnt2zone.output='ACCEPT'
+	uci set firewall.vnt2zone.forward='ACCEPT'
+	uci set firewall.vnt2zone.masq='1'
+	uci set firewall.vnt2zone.mtu_fix='1'
+	uci set firewall.vnt2zone.network='VNT2'
+
+	case " $forward_list " in
+		*" vnt2fwlan "*)
+			uci set firewall.vnt2fwlan='forwarding'
+			uci set firewall.vnt2fwlan.src='VNT2'
+			uci set firewall.vnt2fwlan.dest='lan'
+		;;
+		*)
+			uci -q delete firewall.vnt2fwlan
+		;;
+	esac
+
+	case " $forward_list " in
+		*" vnt2fwwan "*)
+			uci set firewall.vnt2fwwan='forwarding'
+			uci set firewall.vnt2fwwan.src='VNT2'
+			uci set firewall.vnt2fwwan.dest='wan'
+		;;
+		*)
+			uci -q delete firewall.vnt2fwwan
+		;;
+	esac
+
+	case " $forward_list " in
+		*" lanfwvnt2 "*)
+			uci set firewall.lanfwvnt2='forwarding'
+			uci set firewall.lanfwvnt2.src='lan'
+			uci set firewall.lanfwvnt2.dest='VNT2'
+		;;
+		*)
+			uci -q delete firewall.lanfwvnt2
+		;;
+	esac
+
+	case " $forward_list " in
+		*" wanfwvnt2 "*)
+			uci set firewall.wanfwvnt2='forwarding'
+			uci set firewall.wanfwvnt2.src='wan'
+			uci set firewall.wanfwvnt2.dest='VNT2'
+		;;
+		*)
+			uci -q delete firewall.wanfwvnt2
+		;;
+	esac
+
+	[ -n "$(uci changes network)" ] && uci commit network && /etc/init.d/network reload >/dev/null 2>&1
+	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
+	sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+}
+
+cleanup_network() {
 	uci -q delete network.VNT2
 	uci -q delete firewall.vnt2zone
 	uci -q delete firewall.vnt2fwlan
@@ -332,232 +199,236 @@ stop_vnt2_cli() {
 	uci -q delete firewall.wanfwvnt2
 	[ -n "$(uci changes network)" ] && uci commit network && /etc/init.d/network reload >/dev/null 2>&1
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
-	rm -rf /tmp/vnt2-cli_info /tmp/vnt2-cli_ips /tmp/vnt2-cli_clients /tmp/vnt2-cli_route
-	rm -rf /tmp/vnt2-cli.log /tmp/vnt2-cli*.log
-	rm -rf /tmp/vnt2.tag /tmp/vnt2new.tag
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-cli : 停止运行" >>/tmp/vnt2-cli.log
 }
 
-# 下载vnts2程序
-download_vnts2() {
-	local vnts2_bin="$1"
-	local path=$(dirname "$vnts2_bin")
-	
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 程序不存在，开始在线下载..." >>/tmp/vnts2.log
-	mkdir -p "$path"
-	
-	# 获取最新版本号
-	if [ -z "$curltest" ] || [ ! -s "`which curl`" ] ; then
-		tag="$( wget -T 5 -t 3 --user-agent "$user_agent" --max-redirect=0 --output-document=-  https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-		[ -z "$tag" ] && tag="$( wget --no-check-certificate -T 5 -t 3 --user-agent "$user_agent" --quiet --output-document=-  https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-		[ -z "$tag" ] && tag="$( wget --no-check-certificate -T 5 -t 3 --user-agent "$user_agent" --quiet --output-document=-  https://dl.cnqq.cloudns.ch/https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-	else
-		tag="$( curl --connect-timeout 3 --user-agent "$user_agent"  https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-		[ -z "$tag" ] && tag="$( curl -k --connect-timeout 3 --user-agent "$user_agent" -s  https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
-		[ -z "$tag" ] && tag="$( curl -Lk --connect-timeout 5 --user-agent "$user_agent" -s  https://dl.cnqq.cloudns.ch/https://api.github.com/repos/vnt-dev/vnt/releases/latest  2>&1 | grep 'tag_name' | cut -d\" -f4 )"
+configure_web_firewall() {
+	local host="$1"
+	local port="$2"
+	local wan="$3"
+
+	uci -q delete firewall.vnt2web
+	if [ "$wan" = "1" ] && [ -n "$port" ] && [ "$host" = "0.0.0.0" -o "$host" = "::" ]; then
+		uci set firewall.vnt2web='rule'
+		uci set firewall.vnt2web.name='vnt2_web'
+		uci set firewall.vnt2web.src='wan'
+		uci set firewall.vnt2web.target='ACCEPT'
+		uci set firewall.vnt2web.proto='tcp'
+		uci set firewall.vnt2web.dest_port="$port"
 	fi
-	[ -z "$tag" ] && tag="v2.0.0"
-	
-	# 根据CPU架构确定下载URL
-	case "${cpucore}" in 
-		"mipsle") vnturl="https://github.com/vnt-dev/vnt/releases/download/${tag}/vnt-mipsel-unknown-linux-musl-${tag}.tar.gz"
-		;;
-		"mips") vnturl="https://github.com/vnt-dev/vnt/releases/download/${tag}/vnt-mips-unknown-linux-musl-${tag}.tar.gz"
-		;;
-		"x86_64") vnturl="https://github.com/vnt-dev/vnt/releases/download/${tag}/vnt-x86_64-unknown-linux-musl-${tag}.tar.gz"
-		;;
-		"i386") echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 不支持的架构" >>/tmp/vnts2.log; return 1
-		;;
-		"arm") vnturl="https://github.com/vnt-dev/vnt/releases/download/${tag}/vnt-arm-unknown-linux-musleabi-${tag}.tar.gz"
-		;;
-		"armv7") vnturl="https://github.com/vnt-dev/vnt/releases/download/${tag}/vnt-armv7-unknown-linux-musleabi-${tag}.tar.gz"
-		;;
-		"aarch64") vnturl="https://github.com/vnt-dev/vnt/releases/download/${tag}/vnt-aarch64-unknown-linux-musl-${tag}.tar.gz"
-		;;
-	esac
-	
-	# 下载程序
-	for proxy in $proxys ; do
-		curl -Lko /tmp/vnts2.tar.gz "${proxy}${vnturl}" || wget --no-check-certificate -O /tmp/vnts2.tar.gz "${proxy}${vnturl}"
-		if [ "$?" = 0 ] ; then
-			tar -zxf /tmp/vnts2.tar.gz -C $path
-			rm -f /tmp/vnts2.tar.gz ${path}/vnt-link-cli ${path}/README.md >/dev/null 2>&1
-			chmod +x "$vnts2_bin"
-			if [ "$($vnts2_bin -h 2>&1 | wc -l)" -gt 3 ] ; then
-				echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : ${vnts2_bin} 下载成功" >>/tmp/vnts2.log
-				return 0
-			else
-				uci -q set vnt2.@vnts2[0].enabled=0
-				uci commit vnt2
-				echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : $vnts2_bin 下载失败" >>/tmp/vnts2.log
-				return 1
-			fi
-		fi
-	done
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : $vnts2_bin 下载失败" >>/tmp/vnts2.log
-	return 1
+	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
-start_vnts2() {
+cleanup_web_firewall() {
+	uci -q delete firewall.vnt2web
+	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+collect_list_values() {
 	local cfg="$1"
-	local enabled
-	config_get_bool enabled "$cfg" 'enabled' '0'
-	[ "$enabled" = "1" ] || return 1
-	
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : vnts2_${cpucore}开始启动" >>/tmp/vnts2.log
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 若启动失败，请查看系统日志找到vnt相关错误" >>/tmp/vnts2.log
+	local opt="$2"
+	> "${RUNTIME_FILE}.${opt}"
+	config_list_foreach "$cfg" "$opt" append_runtime_item "$opt"
+	sed -n "s/^${opt}=//p" "${RUNTIME_FILE}" 2>/dev/null >"${RUNTIME_FILE}.${opt}"
+}
 
-	config_get vnts2_bin "$cfg" 'vnts2_bin'
-	[ -z "$vnts2_bin" ] && vnts2_bin="/usr/bin/vnts2"
-	
-	path=$(dirname "$vnts2_bin")
-	
-	# 检查并处理上传的程序
-	if [ -f /tmp/vnts2 ] && [ "${path:0:4}" != "/tmp" ]; then
-		chmod +x /tmp/vnts2
-		echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 找到上传的程序/tmp/vnts2，替换为$vnts2_bin" >>/tmp/vnts2.log
-		upsize="$(du -k /tmp/vnts2 | cut -f1)"
-		result=$(expr $size - $upsize)
-		if [ "$(($(/tmp/vnts2 -h 2>&1 | wc -l)))" -gt 3 ] && [ "$result" -gt 500 ] ; then
-			mv -f /tmp/vnts2 "$vnts2_bin"
-		else
-			[ -z "$size" ] && [ "$(($(/tmp/vnts2 -h 2>&1 | wc -l)))" -gt 3 ] && mv -f /tmp/vnts2 "$vnts2_bin"
-			echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 无法替换，上传的程序不完整或空间不足" >>/tmp/vnts2.log
-		fi
+build_cli_config() {
+	local cfg="$1"
+	local network_code ip device_id device_name mtu tun_name
+	local no_punch rtx compress fec no_nat no_tun allow_mapping
+	local cert_mode ctrl_port tunnel_port password vnt2_forward
+	local bind_dev
+
+	local server_list input_list output_list mapping_list udp_stun_list tcp_stun_list
+	local server_args="" input_args="" output_args="" mapping_args="" udp_stun_args="" tcp_stun_args=""
+
+	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
+
+	config_get network_code "$cfg" "network_code"
+	[ -n "$network_code" ] || {
+		log_cli "网络编号不能为空"
+		return 1
+	}
+
+	config_list_foreach "$cfg" server append_runtime_item server
+	config_list_foreach "$cfg" input append_runtime_item input
+	config_list_foreach "$cfg" output append_runtime_item output
+	config_list_foreach "$cfg" port_mapping append_runtime_item port_mapping
+	config_list_foreach "$cfg" udp_stun append_runtime_item udp_stun
+	config_list_foreach "$cfg" tcp_stun append_runtime_item tcp_stun
+
+	server_list="$(sed -n 's/^server=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+	input_list="$(sed -n 's/^input=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+	output_list="$(sed -n 's/^output=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+	mapping_list="$(sed -n 's/^port_mapping=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+	udp_stun_list="$(sed -n 's/^udp_stun=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+	tcp_stun_list="$(sed -n 's/^tcp_stun=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+
+	server_list="$(trim_list "$server_list")"
+	[ -n "$server_list" ] || {
+		log_cli "服务器地址不能为空"
+		rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
+		return 1
+	}
+
+	config_get ip "$cfg" "ip"
+	config_get device_id "$cfg" "device_id"
+	config_get device_name "$cfg" "device_name"
+	config_get mtu "$cfg" "mtu"
+	config_get tun_name "$cfg" "tun_name"
+	config_get_bool no_punch "$cfg" "no_punch" "0"
+	config_get_bool rtx "$cfg" "rtx" "0"
+	config_get_bool compress "$cfg" "compress" "0"
+	config_get_bool fec "$cfg" "fec" "0"
+	config_get_bool no_nat "$cfg" "no_nat" "0"
+	config_get_bool no_tun "$cfg" "no_tun" "0"
+	config_get_bool allow_mapping "$cfg" "allow_mapping" "0"
+	config_get cert_mode "$cfg" "cert_mode"
+	config_get ctrl_port "$cfg" "ctrl_port"
+	config_get tunnel_port "$cfg" "tunnel_port"
+	config_get password "$cfg" "password"
+	config_get vnt2_forward "$cfg" "vnt2_forward"
+	config_get bind_dev "$cfg" "bind_dev"
+
+	mkdir -p "${CLI_CONF_DIR}"
+	: >"${CLI_CONF_FILE}"
+	printf 'network_code = "%s"\n' "$(toml_escape "$network_code")" >>"${CLI_CONF_FILE}"
+
+	for item in $server_list; do
+		server_args="${server_args}__ITEM__${item}"
+	done
+	for item in $(trim_list "$input_list"); do
+		input_args="${input_args}__ITEM__${item}"
+	done
+	for item in $(trim_list "$output_list"); do
+		output_args="${output_args}__ITEM__${item}"
+	done
+	for item in $(trim_list "$mapping_list"); do
+		mapping_args="${mapping_args}__ITEM__${item}"
+	done
+	for item in $(trim_list "$udp_stun_list"); do
+		udp_stun_args="${udp_stun_args}__ITEM__${item}"
+	done
+	for item in $(trim_list "$tcp_stun_list"); do
+		tcp_stun_args="${tcp_stun_args}__ITEM__${item}"
+	done
+
+	[ -n "$server_args" ] && append_toml_array "server" $(printf '%s\n' "$server_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$ip" ] && append_toml_string "ip" "$ip"
+	[ -n "$device_id" ] && append_toml_string "device_id" "$device_id"
+	[ -n "$device_name" ] && append_toml_string "device_name" "$device_name"
+	[ -n "$tun_name" ] && append_toml_string "tun_name" "$tun_name"
+	[ -n "$password" ] && append_toml_string "password" "$password"
+	[ -n "$cert_mode" ] && append_toml_string "cert_mode" "$cert_mode"
+	[ -n "$mtu" ] && append_toml_int "mtu" "$mtu"
+	[ -n "$ctrl_port" ] && append_toml_int "ctrl_port" "$ctrl_port"
+	[ -n "$tunnel_port" ] && append_toml_int "tunnel_port" "$tunnel_port"
+	append_toml_bool "no_punch" "$no_punch"
+	append_toml_bool "rtx" "$rtx"
+	append_toml_bool "compress" "$compress"
+	append_toml_bool "fec" "$fec"
+	append_toml_bool "no_nat" "$no_nat"
+	append_toml_bool "no_tun" "$no_tun"
+	append_toml_bool "allow_mapping" "$allow_mapping"
+	[ -n "$input_args" ] && append_toml_array "input" $(printf '%s\n' "$input_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$output_args" ] && append_toml_array "output" $(printf '%s\n' "$output_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$mapping_args" ] && append_toml_array "port_mapping" $(printf '%s\n' "$mapping_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$udp_stun_args" ] && append_toml_array "udp_stun" $(printf '%s\n' "$udp_stun_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$tcp_stun_args" ] && append_toml_array "tcp_stun" $(printf '%s\n' "$tcp_stun_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+
+	echo "$vnt2_forward" > /tmp/vnt2_forward.list
+	echo "$bind_dev" > /tmp/vnt2_bind_dev
+	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
+	return 0
+}
+
+start_cli_instance() {
+	local cfg="$1"
+	local enabled cli_bin tun_name no_tun forward_list bind_dev
+
+	config_get_bool enabled "$cfg" "enabled" "0"
+	[ "$enabled" = "1" ] || return 0
+
+	cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" log_cli)" || {
+		log_cli "未找到可执行文件，请上传或安装 vnt2_cli"
+		return 1
+	}
+
+	if ! build_cli_config "$cfg"; then
+		return 1
 	fi
-	
-	# 如果程序不存在且空间不足，自动切换到/tmp
-	if [ ! -f "$vnts2_bin" ] && [ "$size" -lt 10240 ] && [ ! -z "$size" ] ; then
-		echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 自定义程序路径空间不足，自动切换为/tmp/vnts2" >>/tmp/vnts2.log
-		sed -i "/vnts2_bin/c option vnts2_bin '/tmp/vnts2'" /etc/config/vnt2
-		vnts2_bin=/tmp/vnts2
-	fi
-	
-	# 检查程序是否存在，不存在则下载
-	if [ "$($vnts2_bin -h 2>&1 | wc -l)" -lt 3 ] || [ ! -f "$vnts2_bin" ] ; then
-		download_vnts2 "$vnts2_bin" || return 1
-	fi
-	
-	chmod +x "$vnts2_bin"
-	
-	# 清理旧进程
-	ps | grep 'vnts2' | grep -v grep | awk '{print $1}' | xargs kill >/dev/null 2>&1
-	ps | grep 'vnts2' | grep -v grep | awk '{print $1}' | xargs kill -9 >/dev/null 2>&1
 
-	# 获取配置参数
-	local server_port white_token subnet servern_netmask web_port webuser webpass
-	local web web_wan logs
+	config_get tun_name "$cfg" "tun_name" "vnt-tun"
+	config_get_bool no_tun "$cfg" "no_tun" "0"
+	forward_list="$(cat /tmp/vnt2_forward.list 2>/dev/null)"
+	bind_dev="$(cat /tmp/vnt2_bind_dev 2>/dev/null)"
+	rm -f /tmp/vnt2_forward.list /tmp/vnt2_bind_dev
 
-	config_get server_port "$cfg" 'server_port'
-	config_get white_token "$cfg" 'white_token'
-	config_get subnet "$cfg" 'subnet'
-	config_get servern_netmask "$cfg" 'servern_netmask'
-	config_get web_port "$cfg" 'web_port'
-	config_get webuser "$cfg" 'webuser'
-	config_get webpass "$cfg" 'webpass'
-	config_get_bool web "$cfg" 'web' '0'
-	config_get_bool web_wan "$cfg" 'web_wan' '0'
-	config_get_bool logs "$cfg" 'logs' '0'
-
-	# 启动程序
-	procd_open_instance "vnts2"
-	get_tz
-	[ -z "$SET_TZ" ] || procd_set_param env TZ="$SET_TZ"
-	procd_set_param command "$vnts2_bin"
-	procd_append_param command --port "$server_port"
-
-	if [ -n "$white_token" ]; then
-		if [[ "$(grep "list white_token" /etc/config/vnt2 | awk '{print $3}' | wc -l ) " -eq 1 ]]; then
-			procd_append_param command --white-token "$white_token"
-		else
-			for token in $(cat /etc/config/vnt2 | grep 'list white_token' | awk -F 'list white_token' '{print $2}' | sed "s/'/\n/g" | tr -d " ' "); do
-				procd_append_param command --white-token "$token"
-			done
-		fi
-	fi
-	
-	[ -n "$subnet" ] && procd_append_param command --gateway "$subnet"
-	[ -n "$servern_netmask" ] && procd_append_param command --netmask "$servern_netmask"
-	
-	# Web界面配置
-	if [ "$web" = "1" ] && [ "$cpucore" != "mips" ] ; then
-		[ -n "$web_port" ] || web_port=29870
-		procd_append_param command --web-port "$web_port"
-		[ -n "$webuser" ] && procd_append_param command --username "$webuser"
-		[ -n "$webpass" ] && procd_append_param command --password "$webpass"
+	if [ "$no_tun" != "1" ]; then
+		configure_network "$tun_name" "$forward_list"
 	else
-		[ "$cpucore" = "mips" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : mips架构不支持web界面" >>/tmp/vnts2.log
-		[ "$web" = "0" ] && procd_append_param command --web-port 0
+		cleanup_network
 	fi
-	
-	# 日志配置
-	[ "$logs" = "0" ] && procd_append_param command --log /dev/null
 
-	procd_set_param limits core="unlimited"
-	procd_set_param limits nofile="1000000 1000000"
+	log_cli "使用 ${cli_bin} 启动，配置文件 ${CLI_CONF_FILE}"
+	procd_open_instance "vnt2_cli"
+	[ -n "$bind_dev" ] && procd_set_param env VNT_BIND_DEV="$bind_dev"
+	procd_set_param command "$cli_bin" --conf "${CLI_CONF_FILE}"
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_set_param respawn
+	procd_set_param file "${CLI_CONF_FILE}"
+	procd_set_param limits core="unlimited"
+	procd_set_param limits nofile="1048576 1048576"
+	procd_set_param term_timeout 10
 	procd_close_instance
-
-	# 防火墙规则
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 防火墙放行服务器端口$server_port" >>/tmp/vnts2.log
-	uci -q delete firewall.vnts2
-	uci set firewall.vnts2=rule
-	uci set firewall.vnts2.name="vnts2"
-	uci set firewall.vnts2.target="ACCEPT"
-	uci set firewall.vnts2.src="wan"
-	uci set firewall.vnts2.proto="tcp udp icmp igmp"
-	uci set firewall.vnts2.dest_port="$server_port"
-	uci set firewall.vnts2.enabled="1"
-	
-	if [ "$web" = "1" ] && [ "$web_wan" = "1" ] ; then
-		echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 防火墙放行WEB端口$web_port" >>/tmp/vnts2.log
-		uci -q delete firewall.vnts2web
-		uci set firewall.vnts2web=rule
-		uci set firewall.vnts2web.name="vnts2_web"
-		uci set firewall.vnts2web.target="ACCEPT"
-		uci set firewall.vnts2web.src="wan"
-		uci set firewall.vnts2web.proto="tcp"
-		uci set firewall.vnts2web.dest_port="$web_port"
-		uci set firewall.vnts2web.enabled="1"
-	fi
-	
-	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
-	
-	# 日志文件链接
-	if [ "$logs" = "1" ];then
-		[ ! -L /tmp/vnts2.0.log ] && ln -sf /tmp/vnts2.log /tmp/vnts2.0.log
-		[ ! -L /tmp/vnts2.1.log ] && ln -sf /tmp/vnts2.log /tmp/vnts2.1.log
-		[ ! -L /tmp/vnts2.2.log ] && ln -sf /tmp/vnts2.log /tmp/vnts2.2.log
-	fi
-	
-	echo `date +%s` > /tmp/vnts2_time
+	date +%s >"${CLI_TIME}"
 }
 
-stop_vnts2() {
+start_web_instance() {
 	local cfg="$1"
-	ps | grep 'vnts2' | grep -v grep | awk '{print $1}' | xargs kill >/dev/null 2>&1
-	ps | grep 'vnts2' | grep -v grep | awk '{print $1}' | xargs kill -9 >/dev/null 2>&1
-	uci -q delete firewall.vnts2
-	uci -q delete firewall.vnts2web
-	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
-	rm -rf /tmp/vnts2.log /tmp/vnts2*.log
-	rm -rf /tmp/vnts2.tag /tmp/vnts2new.tag
-	echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : 停止运行" >>/tmp/vnts2.log
+	local enabled web_bin web_host web_port web_wan log_level
+
+	config_get_bool enabled "$cfg" "enabled" "0"
+	[ "$enabled" = "1" ] || return 0
+
+	web_bin="$(prepare_binary "$cfg" "vnt2_web_bin" "/usr/bin/vnt2_web" "vnt2_web" log_web)" || {
+		log_web "未找到可执行文件，请上传或安装 vnt2_web"
+		return 1
+	}
+
+	config_get web_host "$cfg" "web_host" "127.0.0.1"
+	config_get web_port "$cfg" "web_port" "19099"
+	config_get_bool web_wan "$cfg" "web_wan" "0"
+	config_get log_level "$cfg" "log_level" "info"
+
+	configure_web_firewall "$web_host" "$web_port" "$web_wan"
+
+	log_web "使用 ${web_bin} 监听 ${web_host}:${web_port}"
+	procd_open_instance "vnt2_web"
+	procd_set_param env RUST_LOG="$log_level"
+	procd_set_param command "$web_bin" --addr "${web_host}:${web_port}"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param respawn
+	procd_set_param limits core="unlimited"
+	procd_set_param limits nofile="1048576 1048576"
+	procd_set_param term_timeout 10
+	procd_close_instance
+	date +%s >"${WEB_TIME}"
 }
 
 start_service() {
-	detect_cpu
-	config_load 'vnt2'
-	config_foreach start_vnt2_cli 'vnt2_cli'
-	config_foreach start_vnts2 'vnts2'
+	: >"${CLI_LOG}"
+	: >"${WEB_LOG}"
+	config_load "${CONF}"
+	start_cli_instance "vnt2_cli"
+	start_web_instance "vnt2_web"
 }
 
 stop_service() {
-	config_load 'vnt2'
-	[ "$(uci -q get vnt2.@vnts2[0].enabled)" = "0" ] && stop_vnts2 'vnts2'
-	[ "$(uci -q get vnt2.@vnt2_cli[0].enabled)" = "0" ] && stop_vnt2_cli 'vnt2_cli'
+	rm -f "${CLI_TIME}" "${WEB_TIME}" "${RUNTIME_FILE}" "${RUNTIME_FILE}".* /tmp/vnt2_forward.list /tmp/vnt2_bind_dev
+	cleanup_network
+	cleanup_web_firewall
 }
 
 reload_service() {
@@ -566,6 +437,5 @@ reload_service() {
 }
 
 service_triggers() {
-	procd_add_reload_trigger "vnt2"
-	procd_add_interface_trigger "interface.*.up" wan /etc/init.d/vnt2 reload
+	procd_add_reload_trigger "${CONF}"
 }
