@@ -160,7 +160,7 @@ local function get_cpu_usage(pid)
 	if not pid then
 		return ""
 	end
-	local cmd = string.format([[top -bn1 2>/dev/null | awk '$1=="%s" {print $9; exit}']], tostring(pid))
+	local cmd = string.format([=[top -bn1 2>/dev/null | awk '$1=="%s" {print $9; exit}']=], tostring(pid))
 	return trim(sys.exec(cmd))
 end
 
@@ -168,7 +168,7 @@ local function get_mem_usage(pid)
 	if not pid then
 		return ""
 	end
-	local cmd = string.format([[awk '/VmRSS/ {printf "%.2f MB", $2/1024}' /proc/%s/status 2>/dev/null]], tostring(pid))
+	local cmd = string.format([=[awk '/VmRSS/ {printf "%.2f MB", $2/1024}' /proc/%s/status 2>/dev/null]=], tostring(pid))
 	return trim(sys.exec(cmd))
 end
 
@@ -176,7 +176,7 @@ local function get_local_tag(bin_path)
 	if not file_exists(bin_path) then
 		return ""
 	end
-	local cmd = string.format([[ %s -h 2>&1 | sed -n 's/.*version[: ][[:space:]]*\([^ ,;)]*\).*/\1/p' | head -n1 ]], shell_quote(bin_path))
+	local cmd = string.format([=[ %s -h 2>&1 | sed -n 's/.*version[: ][[:space:]]*\([^ ,;)]*\).*/\1/p' | head -n1 ]=], shell_quote(bin_path))
 	return trim(sys.exec(cmd))
 end
 
@@ -191,7 +191,7 @@ local function get_cached_latest_tag()
 		end
 	end
 
-	local cmd = [[curl -fsSL --connect-timeout 4 https://api.github.com/repos/vnt-dev/vnt/releases/latest 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1]]
+	local cmd = [=[curl -fsSL --connect-timeout 4 https://api.github.com/repos/vnt-dev/vnt/releases/latest 2>/dev/null | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1]=]
 	local tag = trim(sys.exec(cmd))
 	if tag ~= "" then
 		fs.writefile(cache, tag)

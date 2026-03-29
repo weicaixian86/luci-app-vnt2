@@ -127,6 +127,16 @@ jobs:
           ln -sfn "$GITHUB_WORKSPACE/luci-app-vnt2" "package/custom/${PACKAGE_NAME}"
           test -f "package/custom/${PACKAGE_NAME}/Makefile"
 
+      - name: Apply package version from release tag
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.release_tag }}"
+          VERSION="${VERSION#v}"
+          VERSION="${VERSION#V}"
+          test -n "$VERSION"
+          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile"
+          grep -E "^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile"
+
       - name: Generate defconfig
         shell: bash
         run: |
