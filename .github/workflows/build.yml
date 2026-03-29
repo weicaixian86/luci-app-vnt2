@@ -15,7 +15,7 @@ env:
   TZ: Asia/Shanghai
   OPENWRT_VERSION: "24.10.0"
   OPENWRT_TARGET: "x86/64"
-  SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.2.0_musl.Linux-x86_64.tar.xz"
+  SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
   PACKAGE_NAME: "luci-app-vnt2"
 
 jobs:
@@ -107,9 +107,9 @@ jobs:
       - name: Download OpenWrt SDK
         shell: bash
         run: |
-          wget -q -O openwrt-sdk.tar.xz "$SDK_URL"
+          wget -q -O openwrt-sdk.tar.zst "$SDK_URL"
           mkdir -p sdk
-          tar -xJf openwrt-sdk.tar.xz -C sdk --strip-components=1
+          tar --zstd -xf openwrt-sdk.tar.zst -C sdk --strip-components=1
           echo "SDK extracted"
 
       - name: Prepare feeds
