@@ -12,7 +12,7 @@ PKG_RELEASE:=1
 
 LUCI_TITLE:=LuCI support for VNT2
 LUCI_DESCRIPTION:=OpenWrt LuCI application for managing VNT2 CLI/CTRL/Web services
-LUCI_DEPENDS:=+luci-compat
+LUCI_DEPENDS:=+luci-compat +curl +ca-bundle +unzip
 LUCI_PKGARCH:=all
 
 define Package/$(PKG_NAME)/prerm

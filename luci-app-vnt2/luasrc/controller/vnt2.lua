@@ -20,6 +20,8 @@ function index()
 	entry({ "admin", "vpn", "vnt2", "clear_client_log" }, call("clear_client_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_web_log" }, call("get_web_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "clear_web_log" }, call("clear_web_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "get_download_log" }, call("get_download_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "clear_download_log" }, call("clear_download_log")).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "vnt2_info" }, call("vnt2_info")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "vnt2_ips" }, call("vnt2_ips")).leaf = true
@@ -203,6 +205,32 @@ local function get_log_content(path)
 	return fs.readfile(path) or ""
 end
 
+local function parse_state_file(path)
+	local out = {
+		state = "",
+		message = "",
+		asset = "",
+		tag = "",
+		arch = "",
+		path = "",
+		time = ""
+	}
+
+	local content = fs.readfile(path)
+	if not content or content == "" then
+		return out
+	end
+
+	for line in content:gmatch("[^\r\n]+") do
+		local k, v = line:match("^([%w_]+)=(.*)$")
+		if k and out[k] ~= nil then
+			out[k] = trim(v)
+		end
+	end
+
+	return out
+end
+
 local function parse_help_for_port_mode(bin_path)
 	if not file_exists(bin_path) then
 		return ""
@@ -274,6 +302,8 @@ function act_status()
 	local cli_pid = get_pid_by_path(get_cli_bin())
 	local web_pid = get_pid_by_path(get_web_bin())
 	local cli_cfg = summarize_cli_config()
+	local cli_dl = parse_state_file("/tmp/vnt2-download-cli.state")
+	local web_dl = parse_state_file("/tmp/vnt2-download-web.state")
 
 	e.cli_running = (cli_pid ~= nil)
 	e.web_running = (web_pid ~= nil)
@@ -298,6 +328,9 @@ function act_status()
 	e.cli_tun_name = cli_cfg.tun_name
 	e.cli_no_tun = cli_cfg.no_tun
 	e.cli_info_preview = e.cli_running and run_ctrl("info") or ""
+	e.download_log_size = #(get_log_content("/tmp/vnt2-download.log") or "")
+	e.cli_download = cli_dl
+	e.web_download = web_dl
 
 	json_write(e)
 end
@@ -317,6 +350,15 @@ end
 
 function clear_web_log()
 	sys.call("rm -f /tmp/vnt2-web*.log >/dev/null 2>&1")
+	json_write({ ok = true })
+end
+
+function get_download_log()
+	plain_write(get_log_content("/tmp/vnt2-download.log"))
+end
+
+function clear_download_log()
+	sys.call("rm -f /tmp/vnt2-download.log /tmp/vnt2-download-*.log >/dev/null 2>&1")
 	json_write({ ok = true })
 end
 

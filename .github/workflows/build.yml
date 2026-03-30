@@ -6,11 +6,7 @@ on:
       release_tag:
         description: "Release tag"
         required: true
-        default: "v1.0.0"
-      release_description:
-        description: "Release description"
-        required: false
-        default: ""
+        default: "v2.0.0"
 
 permissions:
   contents: write
@@ -21,10 +17,11 @@ env:
   OPENWRT_TARGET: "x86/64"
   SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
   PACKAGE_NAME: "luci-app-vnt2"
+  PACKAGE_DIR: "luci-app-vnt2/luci-app-vnt2"
 
 jobs:
   build:
-    name: Build IPK
+    name: Build and Release IPK
     runs-on: ubuntu-latest
 
     steps:
@@ -41,72 +38,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            ack \
-            antlr3 \
-            asciidoc \
-            autoconf \
-            automake \
-            autopoint \
-            binutils \
-            bison \
-            build-essential \
-            bzip2 \
-            ccache \
-            cmake \
-            cpio \
-            curl \
-            device-tree-compiler \
-            flex \
-            gawk \
-            gcc-multilib \
-            g++-multilib \
-            genisoimage \
-            gettext \
-            git \
-            gperf \
-            haveged \
-            help2man \
-            intltool \
-            libc6-dev-i386 \
-            libelf-dev \
-            libfuse-dev \
-            libglib2.0-dev \
-            libgmp3-dev \
-            libltdl-dev \
-            libmpc-dev \
-            libmpfr-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libpython3-dev \
-            libreadline-dev \
-            libssl-dev \
-            libtool \
-            lrzsz \
-            mkisofs \
-            msmtp \
-            nano \
-            ninja-build \
-            p7zip-full \
-            patch \
-            pkgconf \
-            python3 \
-            python3-pip \
-            python3-ply \
-            python3-docutils \
-            qemu-utils \
-            rsync \
-            scons \
-            squashfs-tools \
-            subversion \
-            swig \
-            texinfo \
-            uglifyjs \
-            unzip \
-            vim \
-            wget \
-            xmlto \
-            xxd \
-            zlib1g-dev
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib \
+            genisoimage gettext git gperf haveged help2man intltool libc6-dev-i386 libelf-dev \
+            libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+            libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool \
+            lrzsz mkisofs msmtp nano ninja-build p7zip-full patch pkgconf python3 python3-pip \
+            python3-ply python3-docutils qemu-utils rsync scons squashfs-tools subversion swig \
+            texinfo uglifyjs unzip vim wget xmlto xxd zlib1g-dev zstd
 
       - name: Download OpenWrt SDK
         shell: bash
@@ -114,7 +53,6 @@ jobs:
           wget -q -O openwrt-sdk.tar.zst "$SDK_URL"
           mkdir -p sdk
           tar --zstd -xf openwrt-sdk.tar.zst -C sdk --strip-components=1
-          echo "SDK extracted"
 
       - name: Prepare feeds
         shell: bash
@@ -128,7 +66,7 @@ jobs:
         run: |
           cd sdk
           mkdir -p package/custom
-          ln -sfn "$GITHUB_WORKSPACE/luci-app-vnt2" "package/custom/${PACKAGE_NAME}"
+          ln -sfn "$GITHUB_WORKSPACE/${PACKAGE_DIR}" "package/custom/${PACKAGE_NAME}"
           test -f "package/custom/${PACKAGE_NAME}/Makefile"
 
       - name: Apply package version from release tag
@@ -138,8 +76,8 @@ jobs:
           VERSION="${VERSION#v}"
           VERSION="${VERSION#V}"
           test -n "$VERSION"
-          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile"
-          grep -E "^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile"
+          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/${PACKAGE_DIR}/Makefile"
+          grep -E "^PKG_NAME:=|^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/${PACKAGE_DIR}/Makefile"
 
       - name: Generate defconfig
         shell: bash
@@ -157,9 +95,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p output
-          find sdk/bin/packages -type f \( -name "${PACKAGE_NAME}_*.ipk" -o -name "luci-i18n-${PACKAGE_NAME}-*.ipk" \) -exec cp -f {} output/ \;
-          ls -lah output
+          find sdk/bin/packages -type f -name "${PACKAGE_NAME}_*.ipk" -exec cp -f {} output/ \;
           test -n "$(find output -maxdepth 1 -type f -name '*.ipk')"
+          ls -lah output
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -168,13 +106,21 @@ jobs:
           path: output/*.ipk
           if-no-files-found: error
 
+      - name: Remove existing release
+        uses: dev-drprasad/delete-tag-and-release@v1.1
+        with:
+          delete_release: true
+          tag_name: ${{ github.event.inputs.release_tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release_tag }}
           name: ${{ github.event.inputs.release_tag }}
           body: |
-            ${{ github.event.inputs.release_description }}
             编译时间: ${{ env.BUILD_TIME }}
           files: output/*.ipk
           generate_release_notes: false

@@ -1,5 +1,8 @@
 config vnt2_cli
 	option enabled '0'
+	option auto_download '1'
+	option download_tag 'latest'
+	option download_repo 'vnt-dev/vnt'
 	option vnt2_cli_bin '/usr/bin/vnt2_cli'
 	option vnt2_ctrl_bin '/usr/bin/vnt2_ctrl'
 	list server 'quic://101.35.230.139:6660'
@@ -32,6 +35,9 @@ config vnt2_cli
 
 config vnt2_web
 	option enabled '0'
+	option auto_download '1'
+	option download_tag 'latest'
+	option download_repo 'vnt-dev/vnt'
 	option vnt2_web_bin '/usr/bin/vnt2_web'
 	option web_host '127.0.0.1'
 	option web_port '19099'

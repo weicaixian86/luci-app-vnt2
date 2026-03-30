@@ -6,11 +6,15 @@ USE_PROCD=1
 CONF="vnt2"
 CLI_LOG="/tmp/vnt2-cli.log"
 WEB_LOG="/tmp/vnt2-web.log"
+DOWNLOAD_LOG="/tmp/vnt2-download.log"
 CLI_TIME="/tmp/vnt2_cli_time"
 WEB_TIME="/tmp/vnt2_web_time"
 CLI_CONF_DIR="/etc/vnt2"
 CLI_CONF_FILE="${CLI_CONF_DIR}/vnt2-cli.toml"
 RUNTIME_FILE="/tmp/.vnt2_runtime"
+DOWNLOAD_CACHE_BASE="/tmp/vnt2-download-cache"
+DOWNLOAD_CLI_STATE="/tmp/vnt2-download-cli.state"
+DOWNLOAD_WEB_STATE="/tmp/vnt2-download-web.state"
 
 . /lib/functions.sh
 . /lib/functions/procd.sh
@@ -23,6 +27,10 @@ log_web() {
 	echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-web : $*" >>"${WEB_LOG}"
 }
 
+log_download() {
+	echo "$(date '+%Y-%m-%d %H:%M:%S') download : $*" >>"${DOWNLOAD_LOG}"
+}
+
 trim_list() {
 	local list="$1"
 	echo "$list" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
@@ -30,6 +38,10 @@ trim_list() {
 
 toml_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+sanitize_name() {
+	printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/_/g'
 }
 
 append_toml_array() {
@@ -74,6 +86,26 @@ append_runtime_item() {
 	[ -n "$val" ] && echo "${key}=${val}" >>"${RUNTIME_FILE}"
 }
 
+write_download_state() {
+	local state_file="$1"
+	local state="$2"
+	local message="$3"
+	local asset="$4"
+	local tag="$5"
+	local arch="$6"
+	local path="$7"
+
+	cat >"${state_file}" <<EOF
+state=${state}
+message=${message}
+asset=${asset}
+tag=${tag}
+arch=${arch}
+path=${path}
+time=$(date '+%Y-%m-%d %H:%M:%S')
+EOF
+}
+
 ensure_exec() {
 	local bin="$1"
 	[ -n "$bin" ] || return 1
@@ -93,25 +125,415 @@ find_uploaded_bin() {
 	return 1
 }
 
+detect_arch_name() {
+	local mach arch
+	mach="$(uname -m 2>/dev/null)"
+	arch="$(opkg print-architecture 2>/dev/null | awk 'NR==1 {print $2}')"
+
+	case "$mach" in
+		x86_64|amd64)
+			echo "x86_64"
+			return 0
+		;;
+		aarch64|arm64)
+			echo "aarch64"
+			return 0
+		;;
+		armv7*|armv6*|arm*)
+			echo "arm"
+			return 0
+		;;
+		mips64el*)
+			echo "mips64el"
+			return 0
+		;;
+		mipsel*)
+			echo "mipsel"
+			return 0
+		;;
+		mips*)
+			echo "mips"
+			return 0
+		;;
+		i386|i486|i586|i686)
+			echo "x86"
+			return 0
+		;;
+	esac
+
+	case "$arch" in
+		*x86_64*|*amd64*)
+			echo "x86_64"
+		;;
+		*aarch64*|*arm64*)
+			echo "aarch64"
+		;;
+		*arm*)
+			echo "arm"
+		;;
+		*mips64el*)
+			echo "mips64el"
+		;;
+		*mipsel*)
+			echo "mipsel"
+		;;
+		*mips*)
+			echo "mips"
+		;;
+		*x86*|*i386*|*i686*)
+			echo "x86"
+		;;
+		*)
+			echo "${mach:-unknown}"
+		;;
+	esac
+}
+
+detect_arch_patterns() {
+	case "$1" in
+		x86_64)
+			echo "x86_64 amd64 x86-64"
+		;;
+		aarch64)
+			echo "aarch64 arm64 armv8"
+		;;
+		arm)
+			echo "armv7 armhf armv6 arm"
+		;;
+		mips64el)
+			echo "mips64el mips64"
+		;;
+		mipsel)
+			echo "mipsel mipsel_24kc mipsel24kc"
+		;;
+		mips)
+			echo "mips mips_24kc mips24kc"
+		;;
+		x86)
+			echo "x86 i386 i686"
+		;;
+		*)
+			echo "$1"
+		;;
+	esac
+}
+
+get_downloader() {
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		echo "uclient-fetch"
+		return 0
+	fi
+	if command -v curl >/dev/null 2>&1; then
+		echo "curl"
+		return 0
+	fi
+	if command -v wget >/dev/null 2>&1; then
+		echo "wget"
+		return 0
+	fi
+	return 1
+}
+
+download_file() {
+	local url="$1"
+	local out="$2"
+	local downloader
+
+	downloader="$(get_downloader)" || return 1
+
+	case "$downloader" in
+		uclient-fetch)
+			uclient-fetch -q -T 20 -O "$out" "$url" >/dev/null 2>&1
+		;;
+		curl)
+			curl -fsSL --connect-timeout 20 --retry 2 -o "$out" "$url" >/dev/null 2>&1
+		;;
+		wget)
+			wget -q --timeout=20 -O "$out" "$url" >/dev/null 2>&1
+		;;
+		*)
+			return 1
+		;;
+	esac
+}
+
+get_release_api_url() {
+	local repo="$1"
+	local tag="$2"
+
+	if [ -z "$repo" ]; then
+		repo="vnt-dev/vnt"
+	fi
+
+	if [ -z "$tag" ] || [ "$tag" = "latest" ]; then
+		echo "https://api.github.com/repos/${repo}/releases/latest"
+	else
+		echo "https://api.github.com/repos/${repo}/releases/tags/${tag}"
+	fi
+}
+
+select_release_asset() {
+	local json_file="$1"
+	local arch_patterns="$2"
+	local urls asset pattern
+
+	urls="$(sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" 2>/dev/null | sed 's#\\/#/#g')"
+	[ -n "$urls" ] || return 1
+
+	for pattern in $arch_patterns; do
+		asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(linux|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+		[ -n "$asset" ] && {
+			echo "$asset"
+			return 0
+		}
+	done
+
+	for pattern in $arch_patterns; do
+		asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+		[ -n "$asset" ] && {
+			echo "$asset"
+			return 0
+		}
+	done
+
+	for pattern in $arch_patterns; do
+		asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE 'vnt|vnt2|cli|web' | head -n1)"
+		[ -n "$asset" ] && {
+			echo "$asset"
+			return 0
+		}
+	done
+
+	asset="$(printf '%s\n' "$urls" | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+	[ -n "$asset" ] && {
+		echo "$asset"
+		return 0
+	}
+
+	return 1
+}
+
+extract_release_asset() {
+	local asset_file="$1"
+	local dest_dir="$2"
+	local base
+
+	rm -rf "$dest_dir"
+	mkdir -p "$dest_dir"
+
+	case "$asset_file" in
+		*.tar.gz|*.tgz)
+			tar -xzf "$asset_file" -C "$dest_dir" >/dev/null 2>&1
+		;;
+		*.tar.xz)
+			tar -xJf "$asset_file" -C "$dest_dir" >/dev/null 2>&1
+		;;
+		*.zip)
+			if command -v unzip >/dev/null 2>&1; then
+				unzip -qo "$asset_file" -d "$dest_dir" >/dev/null 2>&1
+			else
+				return 1
+			fi
+		;;
+		*)
+			base="$(basename "$asset_file")"
+			cp -f "$asset_file" "${dest_dir}/${base}" >/dev/null 2>&1
+		;;
+	esac
+}
+
+locate_extracted_bin() {
+	local root="$1"
+	local name="$2"
+
+	find "$root" -type f \( -name "$name" -o -name "${name}.bin" -o -name "${name//_/-}" \) 2>/dev/null | head -n1
+}
+
+cache_bundle_ready() {
+	local extracted_dir="$1"
+	local scope="$2"
+
+	case "$scope" in
+		cli)
+			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_cli")" && ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
+		;;
+		web)
+			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+		;;
+		*)
+			return 1
+		;;
+	esac
+}
+
+apply_downloaded_bins_to_uci() {
+	local cfg="$1"
+	local extracted_dir="$2"
+
+	local cli_bin ctrl_bin web_bin
+	cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
+	ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
+	web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+
+	if ensure_exec "$cli_bin"; then
+		uci -q set ${CONF}.${cfg}.vnt2_cli_bin="$cli_bin"
+	fi
+	if ensure_exec "$ctrl_bin"; then
+		uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="$ctrl_bin"
+	fi
+	if ensure_exec "$web_bin"; then
+		uci -q set ${CONF}.${cfg}.vnt2_web_bin="$web_bin"
+	fi
+	uci commit ${CONF} >/dev/null 2>&1
+}
+
+auto_download_bundle() {
+	local cfg="$1"
+	local scope="$2"
+	local state_file="$3"
+	local log_func="$4"
+
+	local auto_download download_tag download_repo api_url arch_name arch_patterns
+	local cache_key cache_dir json_file release_tag asset_url asset_name asset_file extracted_dir
+	local cli_bin ctrl_bin web_bin
+
+	config_get_bool auto_download "$cfg" "auto_download" "1"
+	[ "$auto_download" = "1" ] || {
+		write_download_state "$state_file" "disabled" "已关闭自动下载" "" "" "" ""
+		return 1
+	}
+
+	config_get download_tag "$cfg" "download_tag" "latest"
+	config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
+	[ -n "$download_tag" ] || download_tag="latest"
+	[ -n "$download_repo" ] || download_repo="vnt-dev/vnt"
+
+	arch_name="$(detect_arch_name)"
+	arch_patterns="$(detect_arch_patterns "$arch_name")"
+	cache_key="$(sanitize_name "${download_repo}_${download_tag}_${arch_name}_${scope}")"
+	cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
+	json_file="${cache_dir}/release.json"
+	extracted_dir="${cache_dir}/extracted"
+
+	mkdir -p "$cache_dir"
+
+	if cache_bundle_ready "$extracted_dir" "$scope"; then
+		log_download "检测到 ${scope} 已有缓存包，直接复用 ${extracted_dir}"
+		write_download_state "$state_file" "cached" "已复用本地缓存程序" "$(basename "$cache_dir")" "$download_tag" "$arch_name" "$extracted_dir"
+		apply_downloaded_bins_to_uci "$cfg" "$extracted_dir"
+		return 0
+	fi
+
+	api_url="$(get_release_api_url "$download_repo" "$download_tag")"
+	write_download_state "$state_file" "querying" "正在查询 GitHub Releases" "" "$download_tag" "$arch_name" ""
+	log_download "开始查询 ${scope} 对应发行版：repo=${download_repo} tag=${download_tag} arch=${arch_name}"
+
+	if ! download_file "$api_url" "$json_file"; then
+		log_download "查询 GitHub Releases 失败：${api_url}"
+		write_download_state "$state_file" "failed" "查询 GitHub Releases 失败" "" "$download_tag" "$arch_name" ""
+		return 1
+	fi
+
+	release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
+	[ -n "$release_tag" ] || release_tag="$download_tag"
+	asset_url="$(select_release_asset "$json_file" "$arch_patterns")" || {
+		log_download "未找到匹配 ${arch_name} 的发行资源"
+		write_download_state "$state_file" "failed" "未找到匹配当前架构的发行资源" "" "$release_tag" "$arch_name" ""
+		return 1
+	}
+
+	asset_name="$(basename "$asset_url")"
+	asset_file="${cache_dir}/${asset_name}"
+	write_download_state "$state_file" "downloading" "正在下载发行资源" "$asset_name" "$release_tag" "$arch_name" ""
+	log_download "选中资源 ${asset_name}"
+
+	if [ ! -s "$asset_file" ]; then
+		if ! download_file "$asset_url" "$asset_file"; then
+			log_download "下载发行资源失败：${asset_url}"
+			write_download_state "$state_file" "failed" "下载发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
+			return 1
+		fi
+	else
+		log_download "复用已下载资源 ${asset_file}"
+	fi
+
+	write_download_state "$state_file" "extracting" "正在解压或整理程序文件" "$asset_name" "$release_tag" "$arch_name" ""
+	if ! extract_release_asset "$asset_file" "$extracted_dir"; then
+		log_download "解压失败：${asset_file}"
+		write_download_state "$state_file" "failed" "解压发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
+		return 1
+	fi
+
+	cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
+	ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
+	web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+
+	case "$scope" in
+		cli)
+			if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin"; then
+				log_download "下载包中未找到完整的 vnt2_cli / vnt2_ctrl"
+				write_download_state "$state_file" "failed" "下载包中未找到完整的 vnt2_cli / vnt2_ctrl" "$asset_name" "$release_tag" "$arch_name" ""
+				return 1
+			fi
+			uci -q set ${CONF}.${cfg}.vnt2_cli_bin="$cli_bin"
+			uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="$ctrl_bin"
+			uci commit ${CONF} >/dev/null 2>&1
+			log_download "CLI 程序已准备完成：cli=${cli_bin} ctrl=${ctrl_bin}"
+			write_download_state "$state_file" "success" "已自动下载并准备 vnt2_cli / vnt2_ctrl" "$asset_name" "$release_tag" "$arch_name" "$cli_bin"
+			return 0
+		;;
+		web)
+			if ! ensure_exec "$web_bin"; then
+				log_download "下载包中未找到 vnt2_web"
+				write_download_state "$state_file" "failed" "下载包中未找到 vnt2_web" "$asset_name" "$release_tag" "$arch_name" ""
+				return 1
+			fi
+			uci -q set ${CONF}.${cfg}.vnt2_web_bin="$web_bin"
+			uci commit ${CONF} >/dev/null 2>&1
+			log_download "Web 程序已准备完成：web=${web_bin}"
+			write_download_state "$state_file" "success" "已自动下载并准备 vnt2_web" "$asset_name" "$release_tag" "$arch_name" "$web_bin"
+			return 0
+		;;
+	esac
+
+	write_download_state "$state_file" "failed" "未知下载范围" "$asset_name" "$release_tag" "$arch_name" ""
+	return 1
+}
+
 prepare_binary() {
 	local cfg="$1"
 	local option="$2"
 	local default_path="$3"
 	local upload_name="$4"
 	local log_func="$5"
+	local state_file="$6"
+	local scope="$7"
 
 	local bin
 	config_get bin "$cfg" "$option" "$default_path"
 
-	if ! ensure_exec "$bin"; then
-		local uploaded
-		uploaded="$(find_uploaded_bin "$upload_name")"
-		if [ -n "$uploaded" ]; then
-			$log_func "检测到上传程序 ${uploaded}，将使用该路径启动"
-			bin="$uploaded"
-			uci -q set ${CONF}.${cfg}.${option}="$bin"
-			uci commit ${CONF}
+	if ensure_exec "$bin"; then
+		echo "$bin"
+		return 0
+	fi
+
+	if auto_download_bundle "$cfg" "$scope" "$state_file" "$log_func"; then
+		config_get bin "$cfg" "$option" "$default_path"
+		if ensure_exec "$bin"; then
+			echo "$bin"
+			return 0
 		fi
+	fi
+
+	local uploaded
+	uploaded="$(find_uploaded_bin "$upload_name")"
+	if [ -n "$uploaded" ]; then
+		$log_func "自动下载不可用，检测到上传程序 ${uploaded}，将回退使用该路径启动"
+		log_download "${scope} 自动下载失败，回退到本地上传程序 ${uploaded}"
+		bin="$uploaded"
+		uci -q set ${CONF}.${cfg}.${option}="$bin"
+		uci commit ${CONF}
+		write_download_state "$state_file" "fallback" "自动下载失败，已回退到本地上传程序" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$uploaded"
 	fi
 
 	ensure_exec "$bin" || return 1
@@ -348,7 +770,7 @@ start_cli_instance() {
 	config_get_bool enabled "$cfg" "enabled" "0"
 	[ "$enabled" = "1" ] || return 0
 
-	cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" log_cli)" || {
+	cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" log_cli "$DOWNLOAD_CLI_STATE" "cli")" || {
 		log_cli "未找到可执行文件，请上传或安装 vnt2_cli"
 		return 1
 	}
@@ -391,7 +813,7 @@ start_web_instance() {
 	config_get_bool enabled "$cfg" "enabled" "0"
 	[ "$enabled" = "1" ] || return 0
 
-	web_bin="$(prepare_binary "$cfg" "vnt2_web_bin" "/usr/bin/vnt2_web" "vnt2_web" log_web)" || {
+	web_bin="$(prepare_binary "$cfg" "vnt2_web_bin" "/usr/bin/vnt2_web" "vnt2_web" log_web "$DOWNLOAD_WEB_STATE" "web")" || {
 		log_web "未找到可执行文件，请上传或安装 vnt2_web"
 		return 1
 	}
@@ -420,6 +842,7 @@ start_web_instance() {
 start_service() {
 	: >"${CLI_LOG}"
 	: >"${WEB_LOG}"
+	: >"${DOWNLOAD_LOG}"
 	config_load "${CONF}"
 	start_cli_instance "vnt2_cli"
 	start_web_instance "vnt2_web"

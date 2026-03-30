@@ -11,6 +11,21 @@
 		return "<span style='display:inline-block;padding:2px 8px;border-radius:10px;background:#ffebee;color:#c62828;font-weight:bold;'>" + (offText || "未运行") + "</span>";
 	}
 
+	function stateBadge(state) {
+		var map = {
+			success: ["#e8f5e9", "#2e7d32", "下载成功"],
+			cached: ["#e3f2fd", "#1565c0", "使用缓存"],
+			fallback: ["#fff8e1", "#ef6c00", "回退上传程序"],
+			downloading: ["#e3f2fd", "#1565c0", "下载中"],
+			querying: ["#f3e5f5", "#7b1fa2", "查询中"],
+			extracting: ["#ede7f6", "#5e35b1", "解压中"],
+			disabled: ["#eceff1", "#546e7a", "已禁用"],
+			failed: ["#ffebee", "#c62828", "失败"]
+		};
+		var item = map[state || ""] || ["#eceff1", "#546e7a", state || "未知"];
+		return "<span style='display:inline-block;padding:2px 8px;border-radius:10px;background:" + item[0] + ";color:" + item[1] + ";font-weight:bold;'>" + item[2] + "</span>";
+	}
+
 	function line(label, value, color) {
 		if (value === undefined || value === null || value === "") return "";
 		return "<div style='margin:3px 0;'><span style='color:#333;font-weight:bold;'>" + label + "：</span><span style='color:" + (color || "#444") + ";'>" + value + "</span></div>";
@@ -32,6 +47,23 @@
 			+ badge(running, "运行中", "未运行") + "</div>"
 			+ rows.join("")
 			+ (extraHtml || "")
+			+ "</div>";
+	}
+
+	function downloadBlock(title, data) {
+		data = data || {};
+		var rows = [];
+		rows.push(line("下载状态", stateBadge(data.state || "")));
+		rows.push(line("状态说明", data.message || "-", "#455a64"));
+		rows.push(line("发行版本", data.tag || "-", "#00897b"));
+		rows.push(line("系统架构", data.arch || "-", "#5e35b1"));
+		rows.push(line("资源文件", data.asset || "-", "#6d4c41"));
+		rows.push(line("程序路径", data.path || "-", "#1565c0"));
+		rows.push(line("更新时间", data.time || "-", "#546e7a"));
+		return ""
+			+ "<div style='padding:12px 14px;margin:8px 0;border:1px solid #ddd;border-radius:8px;background:#fff;'>"
+			+ "<div style='margin-bottom:8px;font-size:14px;'><span style='font-weight:bold;color:#111;'>" + title + "</span> " + stateBadge(data.state || "") + "</div>"
+			+ rows.join("")
 			+ "</div>";
 	}
 
@@ -98,17 +130,33 @@
 				"</div>";
 		}
 
+		var downloadLogBlock =
+			"<div style='padding:12px 14px;margin:8px 0;border:1px solid #ddd;border-radius:8px;background:#fff;'>" +
+			"<div style='margin-bottom:8px;font-size:14px;font-weight:bold;color:#111;'>自动下载日志</div>" +
+			line("日志大小", (data.download_log_size || 0) + " 字节", "#1565c0") +
+			"<div style='margin-top:10px;'>" +
+			"<a class='cbi-button cbi-button-action' href='<%=url([[admin]], [[vpn]], [[vnt2]], [[get_download_log]])%>' target='_blank'>查看下载日志</a> " +
+			"<a class='cbi-button' href='<%=url([[admin]], [[vpn]], [[vnt2]], [[client_log]])%>'>客户端日志页</a> " +
+			"<a class='cbi-button' href='<%=url([[admin]], [[vpn]], [[vnt2]], [[web_log]])%>'>Web 日志页</a>" +
+			"</div>" +
+			"</div>";
+
 		var tips =
 			"<div style='padding:10px 14px;margin-top:8px;border:1px dashed #cfd8dc;border-radius:8px;background:#fafafa;color:#455a64;'>" +
 			"<div style='font-weight:bold;margin-bottom:6px;'>说明</div>" +
-			"<div>1. 客户端连接信息可在“连接信息”标签页或“客户端日志”页面查看。</div>" +
-			"<div>2. Web 组件启动后，可直接点击上方按钮进入原生 vnt2_web 页面。</div>" +
-			"<div>3. 最新版本信息来自 GitHub Releases，若网络不可达则可能为空。</div>" +
+			"<div>1. 若本地不存在 vnt2 程序，服务启动时会根据配置自动尝试从 GitHub Releases 下载匹配当前架构的程序。</div>" +
+			"<div>2. 自动下载失败时，会自动回退使用上传到 /tmp 的本地程序文件。</div>" +
+			"<div>3. 客户端连接信息可在“连接信息”标签页或“客户端日志”页面查看。</div>" +
+			"<div>4. Web 组件启动后，可直接点击上方按钮进入原生 vnt2_web 页面。</div>" +
+			"<div>5. 最新版本信息来自 GitHub Releases，若网络不可达则可能为空。</div>" +
 			"</div>";
 
 		st.innerHTML =
 			block("vnt2_cli 客户端状态", !!data.cli_running, cliRows, cliExtra) +
+			downloadBlock("vnt2_cli / vnt2_ctrl 自动下载状态", data.cli_download) +
 			block("vnt2_web 服务状态", !!data.web_running, webRows, webBtn) +
+			downloadBlock("vnt2_web 自动下载状态", data.web_download) +
+			downloadLogBlock +
 			tips;
 	});
 })();

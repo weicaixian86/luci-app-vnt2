@@ -297,13 +297,28 @@ local tcp_stun = s:taboption("stun", DynamicList, "tcp_stun", translate("TCP STU
 	translate("适用于 TCP / TLS / WSS 环境探测"))
 tcp_stun.placeholder = "stun.nextcloud.com:443"
 
+local auto_download_cli = s:taboption("advanced", Flag, "auto_download", translate("自动下载客户端程序"),
+	translate("启用后，当本地找不到 vnt2_cli / vnt2_ctrl 时，将自动识别当前 OpenWrt 架构并尝试从 GitHub Releases 下载；下载失败会自动回退到 /tmp 中已上传的程序"))
+auto_download_cli.rmempty = false
+auto_download_cli.default = auto_download_cli.enabled
+
+local download_tag_cli = s:taboption("advanced", Value, "download_tag", translate("客户端下载版本"),
+	translate("默认 latest，也可指定固定 tag，例如 v2.1.0"))
+download_tag_cli.placeholder = "latest"
+
+local download_repo_cli = s:taboption("advanced", Value, "download_repo", translate("客户端下载仓库"),
+	translate("默认 vnt-dev/vnt，通常无需修改"))
+download_repo_cli.placeholder = "vnt-dev/vnt"
+download_repo_cli.default = "vnt-dev/vnt"
+download_repo_cli.validate = validate_nonempty
+
 local vnt2_cli_bin = s:taboption("advanced", Value, "vnt2_cli_bin", translate("vnt2_cli 程序路径"),
-	translate("默认 /usr/bin/vnt2_cli，也可上传到 /tmp 后在此指定"))
+	translate("默认 /usr/bin/vnt2_cli；若不存在，将优先尝试自动下载，失败后回退到 /tmp 上传程序"))
 vnt2_cli_bin.placeholder = "/usr/bin/vnt2_cli"
 vnt2_cli_bin.validate = validate_nonempty
 
 local vnt2_ctrl_bin = s:taboption("advanced", Value, "vnt2_ctrl_bin", translate("vnt2_ctrl 程序路径"),
-	translate("用于读取运行状态、节点信息、路由信息"))
+	translate("用于读取运行状态、节点信息、路由信息；自动下载成功后会自动写入实际路径"))
 vnt2_ctrl_bin.placeholder = "/usr/bin/vnt2_ctrl"
 vnt2_ctrl_bin.validate = validate_nonempty
 
@@ -450,7 +465,7 @@ local upload = s:taboption("upload", FileUpload, "upload_file")
 upload.optional = true
 upload.default = ""
 upload.template = "vnt2/other_upload"
-upload.description = translate("支持上传 vnt2_cli / vnt2_ctrl / vnt2_web 二进制文件，或包含这些文件的 .tar.gz 压缩包。文件会存入 /tmp，重启服务后生效。")
+upload.description = translate("支持上传 vnt2_cli / vnt2_ctrl / vnt2_web 二进制文件，或包含这些文件的 .tar.gz 压缩包。文件会存入 /tmp，重启服务后生效；当自动下载失败时，系统会自动回退使用这里上传的程序。")
 
 local upload_note = s:taboption("upload", DummyValue, "_upload_note")
 upload_note.rawhtml = true
@@ -476,7 +491,23 @@ web_restart.write = function()
 	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")
 end
 
-local vnt2_web_bin = w:taboption("general", Value, "vnt2_web_bin", translate("vnt2_web 程序路径"))
+local auto_download_web = w:taboption("general", Flag, "auto_download", translate("自动下载 Web 程序"),
+	translate("启用后，当本地找不到 vnt2_web 时，将自动识别当前 OpenWrt 架构并尝试从 GitHub Releases 下载；下载失败会自动回退到 /tmp 中已上传的程序"))
+auto_download_web.rmempty = false
+auto_download_web.default = auto_download_web.enabled
+
+local download_tag_web = w:taboption("general", Value, "download_tag", translate("Web 下载版本"),
+	translate("默认 latest，也可指定固定 tag，例如 v2.1.0"))
+download_tag_web.placeholder = "latest"
+
+local download_repo_web = w:taboption("general", Value, "download_repo", translate("Web 下载仓库"),
+	translate("默认 vnt-dev/vnt，通常无需修改"))
+download_repo_web.placeholder = "vnt-dev/vnt"
+download_repo_web.default = "vnt-dev/vnt"
+download_repo_web.validate = validate_nonempty
+
+local vnt2_web_bin = w:taboption("general", Value, "vnt2_web_bin", translate("vnt2_web 程序路径"),
+	translate("默认 /usr/bin/vnt2_web；若不存在，将优先尝试自动下载，失败后回退到 /tmp 上传程序"))
 vnt2_web_bin.placeholder = "/usr/bin/vnt2_web"
 vnt2_web_bin.validate = validate_nonempty
 
@@ -537,7 +568,7 @@ local web_upload = w:taboption("upload", FileUpload, "upload_web")
 web_upload.optional = true
 web_upload.default = ""
 web_upload.template = "vnt2/other_upload"
-web_upload.description = translate("支持上传 vnt2_web 二进制文件或包含 vnt2_web 的 .tar.gz 压缩包。")
+web_upload.description = translate("支持上传 vnt2_web 二进制文件或包含 vnt2_web 的 .tar.gz 压缩包；当自动下载失败时，系统会自动回退使用这里上传的程序。")
 
 local web_upload_note = w:taboption("upload", DummyValue, "_upload_note_web")
 web_upload_note.rawhtml = true
