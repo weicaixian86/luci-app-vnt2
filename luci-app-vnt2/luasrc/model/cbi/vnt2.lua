@@ -10,7 +10,20 @@ m.description = translate('VNT2 是一个简单、高效、可快速组建虚拟
 m:section(SimpleSection).template = "vnt2/vnt2_status"
 
 local function trim(v)
-	return util.trim(v or "")
+	if v == nil then
+		return ""
+	end
+
+	local t = type(v)
+	if t == "string" then
+		return util.trim(v)
+	end
+
+	if t == "number" or t == "boolean" then
+		return util.trim(tostring(v))
+	end
+
+	return ""
 end
 
 local function default_device_name()
