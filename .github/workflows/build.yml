@@ -7,6 +7,10 @@ on:
         description: "Release tag"
         required: true
         default: "v2.0.0"
+      release_description:
+        description: "Manual description (kept only for workflow form, not used in Release body)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
