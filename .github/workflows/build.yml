@@ -7,6 +7,10 @@ on:
         description: "Release tag"
         required: true
         default: "v1.0.0"
+      release_description:
+        description: "Release description"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -170,6 +174,7 @@ jobs:
           tag_name: ${{ github.event.inputs.release_tag }}
           name: ${{ github.event.inputs.release_tag }}
           body: |
+            ${{ github.event.inputs.release_description }}
             编译时间: ${{ env.BUILD_TIME }}
           files: output/*.ipk
           generate_release_notes: false
