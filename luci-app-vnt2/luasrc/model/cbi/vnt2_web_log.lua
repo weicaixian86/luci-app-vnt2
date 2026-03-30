@@ -1,6 +1,6 @@
 local fs = require "nixio.fs"
 
-local log = SimpleForm("log", translate("Web 日志"))
+local log = SimpleForm("web_log", translate("Web 日志"))
 log.submit = false
 log.reset = false
 

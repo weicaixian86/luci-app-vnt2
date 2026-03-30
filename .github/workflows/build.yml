@@ -7,10 +7,6 @@ on:
         description: "Release tag"
         required: true
         default: "v2.0.0"
-      release_description:
-        description: "Release description"
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -21,7 +17,7 @@ env:
   OPENWRT_TARGET: "x86/64"
   SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
   PACKAGE_NAME: "luci-app-vnt2"
-  PACKAGE_DIR: "luci-app-vnt2"
+  APP_SOURCE_DIR: "luci-app-vnt2"
 
 jobs:
   build:
@@ -68,11 +64,11 @@ jobs:
       - name: Link package into SDK
         shell: bash
         run: |
-          test -d "$GITHUB_WORKSPACE/${PACKAGE_DIR}"
-          test -f "$GITHUB_WORKSPACE/${PACKAGE_DIR}/Makefile"
+          test -d "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}"
+          test -f "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
           cd sdk
           mkdir -p package/custom
-          ln -sfn "$GITHUB_WORKSPACE/${PACKAGE_DIR}" "package/custom/${PACKAGE_NAME}"
+          ln -sfn "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}" "package/custom/${PACKAGE_NAME}"
           test -f "package/custom/${PACKAGE_NAME}/Makefile"
 
       - name: Apply package version from release tag
@@ -82,8 +78,8 @@ jobs:
           VERSION="${VERSION#v}"
           VERSION="${VERSION#V}"
           test -n "$VERSION"
-          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/${PACKAGE_DIR}/Makefile"
-          grep -E "^PKG_NAME:=|^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/${PACKAGE_DIR}/Makefile"
+          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
+          grep -E "^PKG_NAME:=|^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
 
       - name: Generate defconfig
         shell: bash
@@ -94,8 +90,18 @@ jobs:
       - name: Build package
         shell: bash
         run: |
+          set -o pipefail
           cd sdk
-          make package/${PACKAGE_NAME}/compile V=s -j"$(nproc)"
+          make package/${PACKAGE_NAME}/compile V=sc -j1 2>&1 | tee build-${PACKAGE_NAME}.log
+
+      - name: Dump package build logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "===== build-${PACKAGE_NAME}.log ====="
+          test -f "sdk/build-${PACKAGE_NAME}.log" && tail -n 500 "sdk/build-${PACKAGE_NAME}.log" || true
+          echo "===== possible package logs ====="
+          find sdk/build_dir -type f \( -name "*.log" -o -name "config.err" -o -name "CMakeError.log" -o -name "CMakeOutput.log" \) | sort || true
 
       - name: Collect IPK files
         shell: bash
@@ -127,8 +133,6 @@ jobs:
           tag_name: ${{ github.event.inputs.release_tag }}
           name: ${{ github.event.inputs.release_tag }}
           body: |
-            ${{ github.event.inputs.release_description }}
-
             编译时间: ${{ env.BUILD_TIME }}
           files: output/*.ipk
           generate_release_notes: false
