@@ -21,7 +21,7 @@ env:
   OPENWRT_TARGET: "x86/64"
   SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
   PACKAGE_NAME: "luci-app-vnt2"
-  PACKAGE_DIR: "luci-app-vnt2/luci-app-vnt2"
+  PACKAGE_DIR: "luci-app-vnt2"
 
 jobs:
   build:
@@ -68,6 +68,8 @@ jobs:
       - name: Link package into SDK
         shell: bash
         run: |
+          test -d "$GITHUB_WORKSPACE/${PACKAGE_DIR}"
+          test -f "$GITHUB_WORKSPACE/${PACKAGE_DIR}/Makefile"
           cd sdk
           mkdir -p package/custom
           ln -sfn "$GITHUB_WORKSPACE/${PACKAGE_DIR}" "package/custom/${PACKAGE_NAME}"
