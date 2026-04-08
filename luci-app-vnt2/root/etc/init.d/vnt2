@@ -281,7 +281,7 @@ select_release_asset() {
 	[ -n "$urls" ] || return 1
 
 	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(linux|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+		asset="$(printf '%s\n' "$urls" | grep -i '/vnt2-' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '\.zip$' | head -n1)"
 		[ -n "$asset" ] && {
 			echo "$asset"
 			return 0
@@ -289,7 +289,7 @@ select_release_asset() {
 	done
 
 	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+		asset="$(printf '%s\n' "$urls" | grep -i '/vnt2-' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
 		[ -n "$asset" ] && {
 			echo "$asset"
 			return 0
@@ -297,12 +297,18 @@ select_release_asset() {
 	done
 
 	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE 'vnt|vnt2|cli|web' | head -n1)"
+		asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
 		[ -n "$asset" ] && {
 			echo "$asset"
 			return 0
 		}
 	done
+
+	asset="$(printf '%s\n' "$urls" | grep -i '/vnt2-' | grep -iE '\.zip$' | head -n1)"
+	[ -n "$asset" ] && {
+		echo "$asset"
+		return 0
+	}
 
 	asset="$(printf '%s\n' "$urls" | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
 	[ -n "$asset" ] && {
@@ -410,7 +416,7 @@ auto_download_bundle() {
 
 	arch_name="$(detect_arch_name)"
 	arch_patterns="$(detect_arch_patterns "$arch_name")"
-	cache_key="$(sanitize_name "${download_repo}_${download_tag}_${arch_name}_${scope}")"
+	cache_key="$(sanitize_name "${download_repo}_${download_tag}_${arch_name}")"
 	cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
 	json_file="${cache_dir}/release.json"
 	extracted_dir="${cache_dir}/extracted"
@@ -518,7 +524,7 @@ prepare_binary() {
 	fi
 
 	if auto_download_bundle "$cfg" "$scope" "$state_file" "$log_func"; then
-		config_get bin "$cfg" "$option" "$default_path"
+		bin="$(uci -q get ${CONF}.${cfg}.${option})"
 		if ensure_exec "$bin"; then
 			echo "$bin"
 			return 0
