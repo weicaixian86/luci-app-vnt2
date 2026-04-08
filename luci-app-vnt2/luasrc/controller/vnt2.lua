@@ -14,15 +14,12 @@ function index()
 	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("基本设置"), 46).leaf = true
 	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("cli客户端日志"), 47).leaf = true
 	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("web客户端日志"), 48).leaf = true
-	entry({ "admin", "vpn", "vnt2", "download_log" }, cbi("vnt2_download_log"), _("下载日志"), 49).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "status" }, call("act_status")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_client_log" }, call("get_client_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "clear_client_log" }, call("clear_client_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_web_log" }, call("get_web_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "clear_web_log" }, call("clear_web_log")).leaf = true
-	entry({ "admin", "vpn", "vnt2", "get_download_log" }, call("get_download_log")).leaf = true
-	entry({ "admin", "vpn", "vnt2", "clear_download_log" }, call("clear_download_log")).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "vnt2_info" }, call("vnt2_info")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "vnt2_ips" }, call("vnt2_ips")).leaf = true
@@ -336,30 +333,32 @@ function act_status()
 	json_write(e)
 end
 
+local function merge_logs(...)
+	local parts = {}
+	for _, path in ipairs({ ... }) do
+		local content = get_log_content(path)
+		if content ~= "" then
+			parts[#parts + 1] = content
+		end
+	end
+	return table.concat(parts, "\n")
+end
+
 function get_client_log()
-	plain_write(get_log_content("/tmp/vnt2-cli.log"))
+	plain_write(merge_logs("/tmp/vnt2-cli.log", "/tmp/vnt2-download.log"))
 end
 
 function clear_client_log()
-	sys.call("rm -f /tmp/vnt2-cli*.log >/dev/null 2>&1")
+	sys.call("rm -f /tmp/vnt2-cli*.log /tmp/vnt2-download.log /tmp/vnt2-download-*.log /tmp/vnt2-download-cli.state >/dev/null 2>&1")
 	json_write({ ok = true })
 end
 
 function get_web_log()
-	plain_write(get_log_content("/tmp/vnt2-web.log"))
+	plain_write(merge_logs("/tmp/vnt2-web.log", "/tmp/vnt2-download.log"))
 end
 
 function clear_web_log()
-	sys.call("rm -f /tmp/vnt2-web*.log >/dev/null 2>&1")
-	json_write({ ok = true })
-end
-
-function get_download_log()
-	plain_write(get_log_content("/tmp/vnt2-download.log"))
-end
-
-function clear_download_log()
-	sys.call("rm -f /tmp/vnt2-download.log /tmp/vnt2-download-*.log >/dev/null 2>&1")
+	sys.call("rm -f /tmp/vnt2-web*.log /tmp/vnt2-download.log /tmp/vnt2-download-*.log /tmp/vnt2-download-web.state >/dev/null 2>&1")
 	json_write({ ok = true })
 end
 

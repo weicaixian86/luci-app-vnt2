@@ -2,10 +2,21 @@
 <%
 local fs = require "nixio.fs"
 local log_file = "/tmp/vnt2-cli.log"
+local download_log_file = "/tmp/vnt2-download.log"
 local log_content = ""
 
 if fs.access(log_file) then
-    log_content = io.open(log_file, "r"):read("*all")
+    log_content = (io.open(log_file, "r"):read("*all") or "")
+end
+
+if fs.access(download_log_file) then
+    local download_content = io.open(download_log_file, "r"):read("*all") or ""
+    if download_content ~= "" then
+        if log_content ~= "" then
+            log_content = log_content .. "\n"
+        end
+        log_content = log_content .. download_content
+    end
 end
 %>
 
@@ -41,6 +52,13 @@ setInterval(refresh_log, 5000);
 </fieldset>
 
 <fieldset class="cbi-section">
-    <legend><%:日志内容%></legend>
+    <legend><%:日志说明%></legend>
+    <div class="cbi-value-description">
+        当前页面已合并显示 CLI 运行日志与自动下载日志，便于排查“启用后自动下载/启动”全过程。
+    </div>
+</fieldset>
+
+<fieldset class="cbi-section">
+    <legend><%:日志内容（CLI运行日志 + 下载日志）%></legend>
     <pre id="log_content" style="background-color: #f5f5f5; padding: 10px; border: 1px solid #ddd; max-height: 500px; overflow-y: auto;"><%=log_content%></pre>
 </fieldset>

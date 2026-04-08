@@ -243,13 +243,22 @@ download_file() {
 
 	case "$downloader" in
 		uclient-fetch)
-			uclient-fetch -q -T 20 -O "$out" "$url" >/dev/null 2>&1
+			uclient-fetch -q -T 20 \
+				--header "User-Agent: luci-app-vnt2" \
+				--header "Accept: application/vnd.github+json, application/octet-stream, */*" \
+				-O "$out" "$url" >/dev/null 2>&1
 		;;
 		curl)
-			curl -fsSL --connect-timeout 20 --retry 2 -o "$out" "$url" >/dev/null 2>&1
+			curl -fsSL --connect-timeout 20 --retry 2 \
+				-A "luci-app-vnt2" \
+				-H "Accept: application/vnd.github+json, application/octet-stream, */*" \
+				-o "$out" "$url" >/dev/null 2>&1
 		;;
 		wget)
-			wget -q --timeout=20 -O "$out" "$url" >/dev/null 2>&1
+			wget -q --timeout=20 \
+				--header="User-Agent: luci-app-vnt2" \
+				--header="Accept: application/vnd.github+json, application/octet-stream, */*" \
+				-O "$out" "$url" >/dev/null 2>&1
 		;;
 		*)
 			return 1
@@ -281,7 +290,7 @@ select_release_asset() {
 	[ -n "$urls" ] || return 1
 
 	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?-' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
+		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
 		[ -n "$asset" ] && {
 			echo "$asset"
 			return 0
@@ -289,7 +298,7 @@ select_release_asset() {
 	done
 
 	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?-' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
+		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
 		[ -n "$asset" ] && {
 			echo "$asset"
 			return 0
@@ -305,14 +314,14 @@ select_release_asset() {
 	done
 
 	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?-' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.zip$' | head -n1)"
+		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.zip$' | head -n1)"
 		[ -n "$asset" ] && {
 			echo "$asset"
 			return 0
 		}
 	done
 
-	asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?-' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
+	asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
 	[ -n "$asset" ] && {
 		echo "$asset"
 		return 0
