@@ -132,10 +132,38 @@ local function validate_server(self, value)
 	if value == "" then
 		return value
 	end
-	if not value:match("^[a-zA-Z]+://") then
-		return nil, translate("服务器地址必须包含协议前缀，例如 quic://、tcp://、wss://")
+
+	if value:match("^[a-zA-Z][a-zA-Z0-9+.-]*://.+$") then
+		return value
 	end
-	return value
+
+	if value:match("^%d+%.%d+%.%d+%.%d+:%d+$") then
+		return value
+	end
+
+	if value:match("^%[[0-9a-fA-F:]+%]:%d+$") then
+		return value
+	end
+
+	if value:match("^[%w._-]+:%d+$") then
+		return value
+	end
+
+	return nil, translate("服务器地址格式错误，支持 host:port、IPv4:port、[IPv6]:port 或 quic://host:port 等格式")
+end
+
+local function validate_port_or_zero(self, value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+
+	local n = tonumber(value)
+	if n and n >= 0 and n <= 65535 and tostring(math.floor(n)) == tostring(n) then
+		return tostring(math.floor(n))
+	end
+
+	return nil, translate("端口范围必须为 0~65535")
 end
 
 local function validate_input_rule(self, value)
@@ -177,6 +205,7 @@ local web_running = process_running("vnt2_web")
 -- ==================== vnt2_cli ====================
 local s = m:section(TypedSection, "vnt2_cli", translate("vnt2_cli 客户端设置"))
 s.anonymous = true
+s.addremove = false
 
 s:tab("general", translate("基本设置"))
 s:tab("network", translate("网络与映射"))
@@ -186,7 +215,7 @@ s:tab("advanced", translate("高级设置"))
 s:tab("infos", translate("连接信息"))
 s:tab("upload", translate("上传程序"))
 
-local enabled = s:taboption("general", Flag, "enabled", translate("启用客户端"))
+local enabled = s:taboption("general", Flag, "enabled", translate("启用cli 客户端"))
 enabled.rmempty = false
 
 local restart_btn = s:taboption("general", Button, "_restart_cli", translate("重启客户端"))
@@ -324,12 +353,12 @@ mtu.datatype = "range(576,9000)"
 local ctrl_port = s:taboption("advanced", Value, "ctrl_port", translate("控制端口"),
 	translate("vnt2_ctrl 将通过该端口读取状态，设置 0 表示关闭"))
 ctrl_port.placeholder = "11233"
-ctrl_port.datatype = "port"
+ctrl_port.validate = validate_port_or_zero
 
 local tunnel_port = s:taboption("advanced", Value, "tunnel_port", translate("隧道端口"),
 	translate("用于 P2P 通信，0 表示自动分配"))
 tunnel_port.placeholder = "0"
-tunnel_port.datatype = "port"
+tunnel_port.validate = validate_port_or_zero
 
 local bind_dev = s:taboption("advanced", ListValue, "bind_dev", translate("绑定出口网卡"),
 	translate("当前 vnt2 原生参数未直接提供对应选项，此项作为扩展保留并由 init 脚本保存"))
@@ -465,12 +494,13 @@ upload_note.template = "vnt2/other_dvalue"
 -- ==================== vnt2_web ====================
 local w = m:section(TypedSection, "vnt2_web", translate("vnt2_web 客户端设置"))
 w.anonymous = true
+w.addremove = false
 
 w:tab("general", translate("基本设置"))
 w:tab("advanced", translate("高级设置"))
 w:tab("upload", translate("上传程序"))
 
-local web_enabled = w:taboption("general", Flag, "enabled", translate("启用 Web 服务"))
+local web_enabled = w:taboption("general", Flag, "enabled", translate("启用web 客户端"))
 web_enabled.rmempty = false
 
 local web_restart = w:taboption("general", Button, "_restart_web", translate("重启 Web 服务"))
