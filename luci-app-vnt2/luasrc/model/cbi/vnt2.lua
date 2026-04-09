@@ -287,8 +287,8 @@ local function bind_dynamiclist(option)
 	option.write = function(self, section, value)
 		local values = normalized_list_values(value)
 		self.map.uci:delete(self.map.config, section, self.option)
-		for _, item in ipairs(values) do
-			self.map.uci:add_list(self.map.config, section, self.option, item)
+		if #values > 0 then
+			self.map.uci:set_list(self.map.config, section, self.option, values)
 		end
 	end
 
