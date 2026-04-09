@@ -32,6 +32,12 @@ log_download() {
 	echo "$(date '+%Y-%m-%d %H:%M:%S') download : $*" >>"${DOWNLOAD_LOG}"
 }
 
+ensure_log_files() {
+	[ -f "${CLI_LOG}" ] || : >"${CLI_LOG}"
+	[ -f "${WEB_LOG}" ] || : >"${WEB_LOG}"
+	[ -f "${DOWNLOAD_LOG}" ] || : >"${DOWNLOAD_LOG}"
+}
+
 trim_list() {
 	local list="$1"
 	echo "$list" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
@@ -798,10 +804,14 @@ start_cli_instance() {
 	local enabled cli_bin tun_name no_tun forward_list bind_dev cli_conf_file
 
 	config_get_bool enabled "$cfg" "enabled" "0"
-	[ "$enabled" = "1" ] || return 0
+	if [ "$enabled" != "1" ]; then
+		log_cli "未启用，跳过启动"
+		return 0
+	fi
 
+	log_cli "开始启动"
 	cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" log_cli "$DOWNLOAD_CLI_STATE" "cli")" || {
-		log_cli "未找到可执行文件，请上传或安装 vnt2_cli"
+		log_cli "启动失败：未找到可执行文件，请上传或安装 vnt2_cli"
 		return 1
 	}
 
@@ -810,6 +820,7 @@ start_cli_instance() {
 	CLI_CONF_FILE="$cli_conf_file"
 
 	if ! build_cli_config "$cfg"; then
+		log_cli "启动失败：生成配置文件失败"
 		return 1
 	fi
 
@@ -838,6 +849,7 @@ start_cli_instance() {
 	procd_set_param term_timeout 10
 	procd_close_instance
 	date +%s >"${CLI_TIME}"
+	log_cli "启动命令已提交"
 }
 
 start_web_instance() {
@@ -845,10 +857,14 @@ start_web_instance() {
 	local enabled web_bin web_host web_port web_wan log_level
 
 	config_get_bool enabled "$cfg" "enabled" "0"
-	[ "$enabled" = "1" ] || return 0
+	if [ "$enabled" != "1" ]; then
+		log_web "未启用，跳过启动"
+		return 0
+	fi
 
+	log_web "开始启动"
 	web_bin="$(prepare_binary "$cfg" "vnt2_web_bin" "/usr/bin/vnt2_web" "vnt2_web" log_web "$DOWNLOAD_WEB_STATE" "web")" || {
-		log_web "未找到可执行文件，请上传或安装 vnt2_web"
+		log_web "启动失败：未找到可执行文件，请上传或安装 vnt2_web"
 		return 1
 	}
 
@@ -871,21 +887,31 @@ start_web_instance() {
 	procd_set_param term_timeout 10
 	procd_close_instance
 	date +%s >"${WEB_TIME}"
+	log_web "启动命令已提交"
 }
 
 start_service() {
-	: >"${CLI_LOG}"
-	: >"${WEB_LOG}"
-	: >"${DOWNLOAD_LOG}"
+	ensure_log_files
+	log_cli "服务启动流程开始"
+	log_web "服务启动流程开始"
+	log_download "服务启动流程开始"
 	config_load "${CONF}"
 	start_cli_instance "vnt2_cli"
 	start_web_instance "vnt2_web"
+	log_download "服务启动流程结束"
 }
 
 stop_service() {
+	ensure_log_files
+	log_cli "服务停止流程开始"
+	log_web "服务停止流程开始"
+	log_download "服务停止流程开始"
 	rm -f "${CLI_TIME}" "${WEB_TIME}" "${RUNTIME_FILE}" "${RUNTIME_FILE}".* /tmp/vnt2_forward.list /tmp/vnt2_bind_dev
 	cleanup_network
 	cleanup_web_firewall
+	log_cli "服务已停止"
+	log_web "服务已停止"
+	log_download "服务停止流程结束"
 }
 
 reload_service() {

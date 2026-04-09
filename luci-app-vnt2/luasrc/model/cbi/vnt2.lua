@@ -37,6 +37,69 @@ local function process_running(name)
 	return sys.exec("pidof " .. util.shellquote(name) .. " 2>/dev/null"):match("%d+") ~= nil
 end
 
+local function set_sections_option_by_type(config, stype, option, value)
+	m.uci:foreach(config, stype, function(section)
+		m.uci:set(config, section[".name"], option, value)
+	end)
+end
+
+local function render_mutual_exclusion_script()
+	return [[
+<script type="text/javascript">
+(function() {
+	function textOf(node) {
+		return (node && (node.textContent || node.innerText) || "").replace(/\s+/g, " ").trim();
+	}
+
+	function findCheckboxByLabel(labelText) {
+		var labels = document.querySelectorAll("label");
+		for (var i = 0; i < labels.length; i++) {
+			if (textOf(labels[i]) === labelText) {
+				var forId = labels[i].getAttribute("for");
+				if (forId) {
+					var input = document.getElementById(forId);
+					if (input && input.type === "checkbox") {
+						return input;
+					}
+				}
+				var nested = labels[i].querySelector('input[type="checkbox"]');
+				if (nested) {
+					return nested;
+				}
+			}
+		}
+		return null;
+	}
+
+	function bindExclusive(a, b) {
+		if (!a || !b || a._vnt2ExclusiveBound) {
+			return;
+		}
+		a._vnt2ExclusiveBound = true;
+		a.addEventListener("change", function() {
+			if (a.checked) {
+				b.checked = false;
+			}
+		});
+	}
+
+	function initExclusive() {
+		var cli = findCheckboxByLabel("启用cli 客户端");
+		var web = findCheckboxByLabel("启用web 客户端");
+		bindExclusive(cli, web);
+		bindExclusive(web, cli);
+	}
+
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", initExclusive);
+	} else {
+		initExclusive();
+	}
+})();
+</script>
+]]
+end
+
 local function render_pre(path)
 	local content = fs.readfile(path) or ""
 	if content == "" then
@@ -313,12 +376,20 @@ s:tab("advanced", translate("高级设置"))
 s:tab("infos", translate("连接信息"))
 s:tab("upload", translate("上传程序"))
 
+local mutual_exclusion_tip = s:taboption("general", DummyValue, "_mutual_exclusion_tip")
+mutual_exclusion_tip.rawhtml = true
+mutual_exclusion_tip.cfgvalue = function()
+	return [[
+<div class="cbi-value-description">CLI 客户端与 Web 客户端互斥，启用其中一个时会自动取消另一个。</div>
+]] .. render_mutual_exclusion_script()
+end
+
 local enabled = s:taboption("general", Flag, "enabled", translate("启用cli 客户端"))
 enabled.rmempty = false
 enabled.write = function(self, section, value)
 	self.map.uci:set(self.map.config, section, self.option, value)
 	if value == "1" then
-		self.map.uci:set(self.map.config, "vnt2_web", "enabled", "0")
+		set_sections_option_by_type(self.map.config, "vnt2_web", "enabled", "0")
 	end
 end
 
@@ -629,7 +700,7 @@ web_enabled.rmempty = false
 web_enabled.write = function(self, section, value)
 	self.map.uci:set(self.map.config, section, self.option, value)
 	if value == "1" then
-		self.map.uci:set(self.map.config, "vnt2_cli", "enabled", "0")
+		set_sections_option_by_type(self.map.config, "vnt2_cli", "enabled", "0")
 	end
 end
 
