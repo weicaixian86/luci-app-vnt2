@@ -10,7 +10,8 @@ DOWNLOAD_LOG="/tmp/vnt2-download.log"
 CLI_TIME="/tmp/vnt2_cli_time"
 WEB_TIME="/tmp/vnt2_web_time"
 CLI_CONF_DIR="/etc/vnt2"
-CLI_CONF_FILE="${CLI_CONF_DIR}/vnt2-cli.toml"
+CLI_CONF_DEFAULT="${CLI_CONF_DIR}/vnt2-cli.toml"
+CLI_CONF_FILE=""
 RUNTIME_FILE="/tmp/.vnt2_runtime"
 DOWNLOAD_CACHE_BASE="/tmp/vnt2-download-cache"
 DOWNLOAD_CLI_STATE="/tmp/vnt2-download-cli.state"
@@ -271,7 +272,7 @@ get_release_api_url() {
 	local tag="$2"
 
 	if [ -z "$repo" ]; then
-		repo="vnt-dev/vnt"
+		repo="vnt-dev/vnts"
 	fi
 
 	if [ -z "$tag" ] || [ "$tag" = "latest" ]; then
@@ -427,9 +428,9 @@ auto_download_bundle() {
 	}
 
 	config_get download_tag "$cfg" "download_tag" "latest"
-	config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
+	config_get download_repo "$cfg" "download_repo" "vnt-dev/vnts"
 	[ -n "$download_tag" ] || download_tag="latest"
-	[ -n "$download_repo" ] || download_repo="vnt-dev/vnt"
+	[ -n "$download_repo" ] || download_repo="vnt-dev/vnts"
 
 	arch_name="$(detect_arch_name)"
 	arch_patterns="$(detect_arch_patterns "$arch_name")"
@@ -681,7 +682,7 @@ build_cli_config() {
 	local network_code ip device_id device_name mtu tun_name
 	local no_punch rtx compress fec no_nat no_tun allow_mapping
 	local cert_mode ctrl_port tunnel_port password vnt2_forward
-	local bind_dev
+	local bind_dev cli_conf_file cli_conf_dir
 
 	local server_list input_list output_list mapping_list udp_stun_list tcp_stun_list
 	local server_args="" input_args="" output_args="" mapping_args="" udp_stun_args="" tcp_stun_args=""
@@ -733,8 +734,14 @@ build_cli_config() {
 	config_get password "$cfg" "password"
 	config_get vnt2_forward "$cfg" "vnt2_forward"
 	config_get bind_dev "$cfg" "bind_dev"
+	config_get cli_conf_file "$cfg" "cli_conf_file" "${CLI_CONF_DEFAULT}"
 
-	mkdir -p "${CLI_CONF_DIR}"
+	[ -n "$cli_conf_file" ] || cli_conf_file="${CLI_CONF_DEFAULT}"
+	CLI_CONF_FILE="$cli_conf_file"
+	cli_conf_dir="$(dirname "${CLI_CONF_FILE}")"
+	[ -n "$cli_conf_dir" ] || cli_conf_dir="${CLI_CONF_DIR}"
+
+	mkdir -p "${cli_conf_dir}"
 	: >"${CLI_CONF_FILE}"
 	printf 'network_code = "%s"\n' "$(toml_escape "$network_code")" >>"${CLI_CONF_FILE}"
 
@@ -788,7 +795,7 @@ build_cli_config() {
 
 start_cli_instance() {
 	local cfg="$1"
-	local enabled cli_bin tun_name no_tun forward_list bind_dev
+	local enabled cli_bin tun_name no_tun forward_list bind_dev cli_conf_file
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	[ "$enabled" = "1" ] || return 0
@@ -797,6 +804,10 @@ start_cli_instance() {
 		log_cli "未找到可执行文件，请上传或安装 vnt2_cli"
 		return 1
 	}
+
+	config_get cli_conf_file "$cfg" "cli_conf_file" "${CLI_CONF_DEFAULT}"
+	[ -n "$cli_conf_file" ] || cli_conf_file="${CLI_CONF_DEFAULT}"
+	CLI_CONF_FILE="$cli_conf_file"
 
 	if ! build_cli_config "$cfg"; then
 		return 1
@@ -817,9 +828,9 @@ start_cli_instance() {
 	log_cli "使用 ${cli_bin} 启动，配置文件 ${CLI_CONF_FILE}"
 	procd_open_instance "vnt2_cli"
 	[ -n "$bind_dev" ] && procd_set_param env VNT_BIND_DEV="$bind_dev"
-	procd_set_param command "$cli_bin" --conf "${CLI_CONF_FILE}"
-	procd_set_param stdout 1
-	procd_set_param stderr 1
+	procd_set_param command /bin/sh -c "exec \"${cli_bin}\" --conf \"${CLI_CONF_FILE}\" >>\"${CLI_LOG}\" 2>&1"
+	procd_set_param stdout 0
+	procd_set_param stderr 0
 	procd_set_param respawn
 	procd_set_param file "${CLI_CONF_FILE}"
 	procd_set_param limits core="unlimited"
@@ -851,9 +862,9 @@ start_web_instance() {
 	log_web "使用 ${web_bin} 监听 ${web_host}:${web_port}"
 	procd_open_instance "vnt2_web"
 	procd_set_param env RUST_LOG="$log_level"
-	procd_set_param command "$web_bin" --addr "${web_host}:${web_port}"
-	procd_set_param stdout 1
-	procd_set_param stderr 1
+	procd_set_param command /bin/sh -c "exec \"${web_bin}\" --addr \"${web_host}:${web_port}\" >>\"${WEB_LOG}\" 2>&1"
+	procd_set_param stdout 0
+	procd_set_param stderr 0
 	procd_set_param respawn
 	procd_set_param limits core="unlimited"
 	procd_set_param limits nofile="1048576 1048576"

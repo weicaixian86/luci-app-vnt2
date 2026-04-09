@@ -127,7 +127,28 @@ local function validate_nonempty(self, value)
 	return value
 end
 
-local function validate_server(self, value)
+local function normalized_list_values(value)
+	local result = {}
+
+	if type(value) == "string" then
+		value = { value }
+	end
+
+	if type(value) ~= "table" then
+		return result
+	end
+
+	for _, item in ipairs(value) do
+		item = trim(item)
+		if item ~= "" then
+			result[#result + 1] = item
+		end
+	end
+
+	return result
+end
+
+local function validate_server_item(value)
 	value = trim(value)
 	if value == "" then
 		return value
@@ -152,6 +173,24 @@ local function validate_server(self, value)
 	return nil, translate("服务器地址格式错误，支持 host:port、IPv4:port、[IPv6]:port 或 quic://host:port 等格式")
 end
 
+local function validate_server(self, value)
+	if type(value) == "table" then
+		local result = {}
+		for _, item in ipairs(normalized_list_values(value)) do
+			local valid, err = validate_server_item(item)
+			if not valid then
+				return nil, err
+			end
+			if valid ~= "" then
+				result[#result + 1] = valid
+			end
+		end
+		return result
+	end
+
+	return validate_server_item(value)
+end
+
 local function validate_port_or_zero(self, value)
 	value = trim(value)
 	if value == "" then
@@ -166,7 +205,7 @@ local function validate_port_or_zero(self, value)
 	return nil, translate("端口范围必须为 0~65535")
 end
 
-local function validate_input_rule(self, value)
+local function validate_input_rule_item(value)
 	value = trim(value)
 	if value == "" then
 		return value
@@ -177,7 +216,25 @@ local function validate_input_rule(self, value)
 	return value
 end
 
-local function validate_port_mapping(self, value)
+local function validate_input_rule(self, value)
+	if type(value) == "table" then
+		local result = {}
+		for _, item in ipairs(normalized_list_values(value)) do
+			local valid, err = validate_input_rule_item(item)
+			if not valid then
+				return nil, err
+			end
+			if valid ~= "" then
+				result[#result + 1] = valid
+			end
+		end
+		return result
+	end
+
+	return validate_input_rule_item(value)
+end
+
+local function validate_port_mapping_item(value)
 	value = trim(value)
 	if value == "" then
 		return value
@@ -186,6 +243,24 @@ local function validate_port_mapping(self, value)
 		return nil, translate("格式错误，应为 协议://本地监听地址-目标虚拟IP-目标映射地址")
 	end
 	return value
+end
+
+local function validate_port_mapping(self, value)
+	if type(value) == "table" then
+		local result = {}
+		for _, item in ipairs(normalized_list_values(value)) do
+			local valid, err = validate_port_mapping_item(item)
+			if not valid then
+				return nil, err
+			end
+			if valid ~= "" then
+				result[#result + 1] = valid
+			end
+		end
+		return result
+	end
+
+	return validate_port_mapping_item(value)
 end
 
 local function validate_cert_mode(self, value)
@@ -197,27 +272,6 @@ local function validate_cert_mode(self, value)
 		return value
 	end
 	return nil, translate("证书验证模式仅支持 skip、standard 或 finger:指纹")
-end
-
-local function normalized_list_values(value)
-	local result = {}
-
-	if type(value) == "string" then
-		value = { value }
-	end
-
-	if type(value) ~= "table" then
-		return result
-	end
-
-	for _, item in ipairs(value) do
-		item = trim(item)
-		if item ~= "" then
-			result[#result + 1] = item
-		end
-	end
-
-	return result
 end
 
 local function bind_dynamiclist(option)
@@ -261,6 +315,12 @@ s:tab("upload", translate("上传程序"))
 
 local enabled = s:taboption("general", Flag, "enabled", translate("启用cli 客户端"))
 enabled.rmempty = false
+enabled.write = function(self, section, value)
+	self.map.uci:set(self.map.config, section, self.option, value)
+	if value == "1" then
+		self.map.uci:set(self.map.config, "vnt2_web", "enabled", "0")
+	end
+end
 
 local restart_btn = s:taboption("general", Button, "_restart_cli", translate("重启客户端"))
 restart_btn.inputtitle = translate("重启")
@@ -377,9 +437,9 @@ tcp_stun.placeholder = "stun.nextcloud.com:443"
 bind_dynamiclist(tcp_stun)
 
 local download_repo_cli = s:taboption("advanced", Value, "download_repo", translate("客户端下载仓库"),
-	translate("默认 vnt-dev/vnt，通常无需修改"))
-download_repo_cli.placeholder = "vnt-dev/vnt"
-download_repo_cli.default = "vnt-dev/vnt"
+	translate("默认 vnt-dev/vnts，通常无需修改"))
+download_repo_cli.placeholder = "vnt-dev/vnts"
+download_repo_cli.default = "vnt-dev/vnts"
 download_repo_cli.validate = validate_nonempty
 
 local vnt2_cli_bin = s:taboption("advanced", Value, "vnt2_cli_bin", translate("vnt2_cli 程序路径"),
@@ -391,6 +451,20 @@ local vnt2_ctrl_bin = s:taboption("advanced", Value, "vnt2_ctrl_bin", translate(
 	translate("用于读取运行状态、节点信息、路由信息；自动下载成功后会自动写入实际路径"))
 vnt2_ctrl_bin.placeholder = "/usr/bin/vnt2_ctrl"
 vnt2_ctrl_bin.validate = validate_nonempty
+
+local cli_conf_file = s:taboption("advanced", Value, "cli_conf_file", translate("配置文件路径"),
+	translate("用于指定 vnt2_cli 运行时配置文件路径"))
+cli_conf_file.placeholder = "/etc/vnt2/vnt2-cli.toml"
+cli_conf_file.default = "/etc/vnt2/vnt2-cli.toml"
+cli_conf_file.validate = validate_nonempty
+
+local cli_conf_shared_tip = s:taboption("advanced", DummyValue, "_cli_conf_shared_tip")
+cli_conf_shared_tip.rawhtml = true
+cli_conf_shared_tip.cfgvalue = function()
+	return [[
+<div class="cbi-value-description">vnt2_cli 客户端和 vnt2_web 客户端 共用同一配置文件</div>
+]]
+end
 
 local tun_name = s:taboption("advanced", Value, "tun_name", translate("虚拟网卡名称"),
 	translate("多开时请确保不同实例网卡名不冲突"))
@@ -552,6 +626,12 @@ w:tab("upload", translate("上传程序"))
 
 local web_enabled = w:taboption("general", Flag, "enabled", translate("启用web 客户端"))
 web_enabled.rmempty = false
+web_enabled.write = function(self, section, value)
+	self.map.uci:set(self.map.config, section, self.option, value)
+	if value == "1" then
+		self.map.uci:set(self.map.config, "vnt2_cli", "enabled", "0")
+	end
+end
 
 local web_restart = w:taboption("general", Button, "_restart_web", translate("重启 Web 服务"))
 web_restart.inputtitle = translate("重启")
@@ -563,15 +643,42 @@ web_restart.write = function()
 end
 
 local download_repo_web = w:taboption("general", Value, "download_repo", translate("Web 下载仓库"),
-	translate("默认 vnt-dev/vnt，通常无需修改"))
-download_repo_web.placeholder = "vnt-dev/vnt"
-download_repo_web.default = "vnt-dev/vnt"
+	translate("默认 vnt-dev/vnts，通常无需修改"))
+download_repo_web.placeholder = "vnt-dev/vnts"
+download_repo_web.default = "vnt-dev/vnts"
 download_repo_web.validate = validate_nonempty
 
 local vnt2_web_bin = w:taboption("general", Value, "vnt2_web_bin", translate("vnt2_web 程序路径"),
 	translate("默认 /usr/bin/vnt2_web；若不存在，将优先尝试自动下载，失败后回退到 /tmp 上传程序"))
 vnt2_web_bin.placeholder = "/usr/bin/vnt2_web"
 vnt2_web_bin.validate = validate_nonempty
+
+local web_cli_conf_file = w:taboption("general", Value, "_shared_cli_conf_file", translate("配置文件路径"),
+	translate("用于指定 vnt2_cli / vnt2_web 共用配置文件路径"))
+web_cli_conf_file.placeholder = "/etc/vnt2/vnt2-cli.toml"
+web_cli_conf_file.default = "/etc/vnt2/vnt2-cli.toml"
+web_cli_conf_file.cfgvalue = function(self, section)
+	return m.uci:get("vnt2", "vnt2_cli", "cli_conf_file") or "/etc/vnt2/vnt2-cli.toml"
+end
+web_cli_conf_file.write = function(self, section, value)
+	value = trim(value)
+	if value == "" then
+		value = "/etc/vnt2/vnt2-cli.toml"
+	end
+	m.uci:set("vnt2", "vnt2_cli", "cli_conf_file", value)
+end
+web_cli_conf_file.remove = function(self, section)
+	m.uci:delete("vnt2", "vnt2_cli", "cli_conf_file")
+end
+web_cli_conf_file.validate = validate_nonempty
+
+local web_cli_conf_shared_tip = w:taboption("general", DummyValue, "_web_cli_conf_shared_tip")
+web_cli_conf_shared_tip.rawhtml = true
+web_cli_conf_shared_tip.cfgvalue = function()
+	return [[
+<div class="cbi-value-description">vnt2_cli 客户端和 vnt2_web 客户端 共用同一配置文件</div>
+]]
+end
 
 local web_host = w:taboption("general", Value, "web_host", translate("监听地址"),
 	translate("默认仅监听本地 127.0.0.1；若需外部访问，请改为 0.0.0.0 并按需开启 WAN 放行"))

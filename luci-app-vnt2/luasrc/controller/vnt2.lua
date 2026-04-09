@@ -12,14 +12,13 @@ function index()
 
 	entry({ "admin", "vpn", "vnt2" }, alias("admin", "vpn", "vnt2", "config"), _("VNT2"), 45).dependent = true
 	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("基本设置"), 46).leaf = true
-	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("cli客户端日志"), 47).leaf = true
-	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("web客户端日志"), 48).leaf = true
+	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("客户端日志"), 47).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "status" }, call("act_status")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_client_log" }, call("get_client_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "clear_client_log" }, call("clear_client_log")).leaf = true
-	entry({ "admin", "vpn", "vnt2", "get_web_log" }, call("get_web_log")).leaf = true
-	entry({ "admin", "vpn", "vnt2", "clear_web_log" }, call("clear_web_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "get_web_log" }, call("get_client_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "clear_web_log" }, call("clear_client_log")).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "vnt2_info" }, call("vnt2_info")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "vnt2_ips" }, call("vnt2_ips")).leaf = true
@@ -278,9 +277,42 @@ local function get_cmdline(pid)
 	return trim(sys.exec("tr '\\000' ' ' </proc/" .. tostring(pid) .. "/cmdline 2>/dev/null"))
 end
 
+local function get_router_host()
+	local http_host = trim(http.getenv("HTTP_HOST") or "")
+	if http_host ~= "" then
+		local host = http_host:match("^%[([^%]]+)%]") or http_host:match("^([^:]+)")
+		host = trim(host)
+		if host ~= "" then
+			return host
+		end
+	end
+
+	local server_addr = trim(http.getenv("SERVER_ADDR") or "")
+	if server_addr ~= "" then
+		return server_addr
+	end
+
+	local lan_ip = trim(sys.exec("uci -q get network.lan.ipaddr 2>/dev/null | head -n1"))
+	if lan_ip ~= "" then
+		return lan_ip
+	end
+
+	local web_host = get_web_host()
+	if web_host == "0.0.0.0" or web_host == "::" or web_host == "127.0.0.1" or web_host == "::1" then
+		return "192.168.1.1"
+	end
+
+	return web_host
+end
+
 local function build_web_url()
-	local host = get_web_host()
+	local host = get_router_host()
 	local port = get_web_port()
+
+	if host:find(":", 1, true) and not host:match("^%[.*%]$") then
+		host = "[" .. host .. "]"
+	end
+
 	return "http://" .. host .. ":" .. tostring(port) .. "/"
 end
 
@@ -345,21 +377,20 @@ local function merge_logs(...)
 end
 
 function get_client_log()
-	plain_write(merge_logs("/tmp/vnt2-cli.log", "/tmp/vnt2-download.log"))
+	plain_write(merge_logs("/tmp/vnt2-cli.log", "/tmp/vnt2-web.log", "/tmp/vnt2-download.log"))
 end
 
 function clear_client_log()
-	sys.call("rm -f /tmp/vnt2-cli*.log /tmp/vnt2-download.log /tmp/vnt2-download-*.log /tmp/vnt2-download-cli.state >/dev/null 2>&1")
+	sys.call("rm -f /tmp/vnt2-cli*.log /tmp/vnt2-web*.log /tmp/vnt2-download.log /tmp/vnt2-download-*.log /tmp/vnt2-download-cli.state /tmp/vnt2-download-web.state >/dev/null 2>&1")
 	json_write({ ok = true })
 end
 
 function get_web_log()
-	plain_write(merge_logs("/tmp/vnt2-web.log", "/tmp/vnt2-download.log"))
+	get_client_log()
 end
 
 function clear_web_log()
-	sys.call("rm -f /tmp/vnt2-web*.log /tmp/vnt2-download.log /tmp/vnt2-download-*.log /tmp/vnt2-download-web.state >/dev/null 2>&1")
-	json_write({ ok = true })
+	clear_client_log()
 end
 
 function vnt2_info()
