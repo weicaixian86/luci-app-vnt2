@@ -17,8 +17,10 @@ function index()
 	entry({ "admin", "vpn", "vnt2", "status" }, call("act_status")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_client_log" }, call("get_client_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "clear_client_log" }, call("clear_client_log")).leaf = true
-	entry({ "admin", "vpn", "vnt2", "get_web_log" }, call("get_client_log")).leaf = true
-	entry({ "admin", "vpn", "vnt2", "clear_web_log" }, call("clear_client_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "get_web_log" }, call("get_web_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "clear_web_log" }, call("clear_web_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "get_download_log" }, call("get_download_log")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "clear_download_log" }, call("clear_download_log")).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "vnt2_info" }, call("vnt2_info")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "vnt2_ips" }, call("vnt2_ips")).leaf = true
@@ -365,32 +367,40 @@ function act_status()
 	json_write(e)
 end
 
-local function merge_logs(...)
-	local parts = {}
-	for _, path in ipairs({ ... }) do
-		local content = get_log_content(path)
-		if content ~= "" then
-			parts[#parts + 1] = content
-		end
+local function clear_log_file(path)
+	if not path or path == "" then
+		return
 	end
-	return table.concat(parts, "\n")
+	fs.writefile(path, "")
 end
 
 function get_client_log()
-	plain_write(merge_logs("/tmp/vnt2-cli.log", "/tmp/vnt2-web.log", "/tmp/vnt2-download.log"))
+	plain_write(get_log_content("/tmp/vnt2-cli.log"))
 end
 
 function clear_client_log()
-	sys.call("rm -f /tmp/vnt2-cli*.log /tmp/vnt2-web*.log /tmp/vnt2-download.log /tmp/vnt2-download-*.log /tmp/vnt2-download-cli.state /tmp/vnt2-download-web.state >/dev/null 2>&1")
+	clear_log_file("/tmp/vnt2-cli.log")
 	json_write({ ok = true })
 end
 
 function get_web_log()
-	get_client_log()
+	plain_write(get_log_content("/tmp/vnt2-web.log"))
 end
 
 function clear_web_log()
-	clear_client_log()
+	clear_log_file("/tmp/vnt2-web.log")
+	json_write({ ok = true })
+end
+
+function get_download_log()
+	plain_write(get_log_content("/tmp/vnt2-download.log"))
+end
+
+function clear_download_log()
+	clear_log_file("/tmp/vnt2-download.log")
+	fs.remove("/tmp/vnt2-download-cli.state")
+	fs.remove("/tmp/vnt2-download-web.state")
+	json_write({ ok = true })
 end
 
 function vnt2_info()

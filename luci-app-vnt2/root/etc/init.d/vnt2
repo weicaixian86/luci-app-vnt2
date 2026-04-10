@@ -801,7 +801,7 @@ build_cli_config() {
 
 start_cli_instance() {
 	local cfg="$1"
-	local enabled cli_bin tun_name no_tun forward_list bind_dev cli_conf_file
+	local enabled cli_bin ctrl_bin tun_name no_tun forward_list bind_dev cli_conf_file
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
@@ -810,10 +810,23 @@ start_cli_instance() {
 	fi
 
 	log_cli "开始启动"
-	cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" log_cli "$DOWNLOAD_CLI_STATE" "cli")" || {
-		log_cli "启动失败：未找到可执行文件，请上传或安装 vnt2_cli"
-		return 1
-	}
+	config_get cli_bin "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli"
+	config_get ctrl_bin "$cfg" "vnt2_ctrl_bin" "/usr/bin/vnt2_ctrl"
+
+	if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin"; then
+		log_cli "检测到 CLI/CTRL 程序不完整，尝试自动下载或回退到上传程序"
+		cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" log_cli "$DOWNLOAD_CLI_STATE" "cli")" || {
+			log_cli "启动失败：未找到完整的 vnt2_cli / vnt2_ctrl，请上传或安装程序"
+			return 1
+		}
+		ctrl_bin="$(uci -q get ${CONF}.${cfg}.vnt2_ctrl_bin)"
+		if ! ensure_exec "$ctrl_bin"; then
+			log_cli "启动失败：vnt2_ctrl 缺失，自动下载或上传回退未准备完整"
+			return 1
+		fi
+	else
+		log_cli "检测到现有 CLI/CTRL 程序完整：cli=${cli_bin} ctrl=${ctrl_bin}"
+	fi
 
 	config_get cli_conf_file "$cfg" "cli_conf_file" "${CLI_CONF_DEFAULT}"
 	[ -n "$cli_conf_file" ] || cli_conf_file="${CLI_CONF_DEFAULT}"

@@ -508,9 +508,9 @@ tcp_stun.placeholder = "stun.nextcloud.com:443"
 bind_dynamiclist(tcp_stun)
 
 local download_repo_cli = s:taboption("advanced", Value, "download_repo", translate("客户端下载仓库"),
-	translate("默认 vnt-dev/vnts，通常无需修改"))
-download_repo_cli.placeholder = "vnt-dev/vnts"
-download_repo_cli.default = "vnt-dev/vnts"
+	translate("默认 vnt-dev/vnt，通常无需修改"))
+download_repo_cli.placeholder = "vnt-dev/vnt"
+download_repo_cli.default = "vnt-dev/vnt"
 download_repo_cli.validate = validate_nonempty
 
 local vnt2_cli_bin = s:taboption("advanced", Value, "vnt2_cli_bin", translate("vnt2_cli 程序路径"),
@@ -714,9 +714,9 @@ web_restart.write = function()
 end
 
 local download_repo_web = w:taboption("general", Value, "download_repo", translate("Web 下载仓库"),
-	translate("默认 vnt-dev/vnts，通常无需修改"))
-download_repo_web.placeholder = "vnt-dev/vnts"
-download_repo_web.default = "vnt-dev/vnts"
+	translate("默认 vnt-dev/vnt，通常无需修改"))
+download_repo_web.placeholder = "vnt-dev/vnt"
+download_repo_web.default = "vnt-dev/vnt"
 download_repo_web.validate = validate_nonempty
 
 local vnt2_web_bin = w:taboption("general", Value, "vnt2_web_bin", translate("vnt2_web 程序路径"),
