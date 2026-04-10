@@ -7,10 +7,6 @@ on:
         description: "Release tag"
         required: true
         default: "v2.0.0"
-      release_description:
-        description: "Release description"
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -21,7 +17,7 @@ env:
   OPENWRT_TARGET: "x86/64"
   SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
   PACKAGE_NAME: "luci-app-vnt2"
-  APP_SOURCE_DIR: "luci-app-vnt2"
+  APP_SOURCE_DIR: "luci-app-vnt2/luci-app-vnt2"
 
 jobs:
   build:
@@ -138,7 +134,6 @@ jobs:
           name: ${{ github.event.inputs.release_tag }}
           body: |
             编译时间: ${{ env.BUILD_TIME }}
-            ${{ github.event.inputs.release_description }}
           files: output/*.ipk
           generate_release_notes: false
           append_body: false

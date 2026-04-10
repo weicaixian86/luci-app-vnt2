@@ -1,64 +1,133 @@
-<%
-	local protocol = "http://"
-%>
 <script type="text/javascript">
 //<![CDATA[
 (function() {
-	function runningStatus(ok) {
-		return ok
-			? "<span style='color:green;'> 运行中</span>"
-			: "<span style='color:red;'> 未运行</span>";
+	function escapeHtml(str) {
+		var div = document.createElement("div");
+		div.appendChild(document.createTextNode(String(str == null ? "" : str)));
+		return div.innerHTML;
 	}
 
-	function metric(label, value, color, prefix) {
+	function yesNo(v) {
+		return v === "1" || v === 1 || v === true ? "是" : "否";
+	}
+
+	function runningBadge(ok) {
+		return ok
+			? "<span style='display:inline-block;padding:2px 8px;background:#e8f5e9;color:#2e7d32;border-radius:12px;'>运行中</span>"
+			: "<span style='display:inline-block;padding:2px 8px;background:#ffebee;color:#c62828;border-radius:12px;'>未运行</span>";
+	}
+
+	function kv(label, value) {
 		if (value === undefined || value === null || value === "") {
 			return "";
 		}
-		return (prefix || "") + label + "<span style='color:" + (color || "#333") + ";'>" + value + "</span>";
+		return "<div style='margin:4px 0;'><strong>" + escapeHtml(label) + "</strong>" + escapeHtml(value) + "</div>";
 	}
 
-	function buildCliLine(data) {
-		var html = "<em><b>vnt2_cli" + runningStatus(data.cli_running);
-
-		if (data.cli_running) {
-			html += metric(" 已运行：", data.cli_runtime, "#DA70D6");
-			html += metric("<br>CPU占用：", data.cli_cpu, "#6A5ACD");
-			html += metric("&nbsp;&nbsp;&nbsp;&nbsp;内存占用：", data.cli_ram, "#0000CD");
-			html += metric("<br>当前版本：", data.cli_tag, "#CD853F");
-			html += metric("&nbsp;&nbsp;&nbsp;&nbsp;最新版本：", data.latest_tag, "#FFA500");
+	function listBlock(label, values) {
+		if (!values || !values.length) {
+			return "";
 		}
+		var items = [];
+		for (var i = 0; i < values.length; i++) {
+			items.push("<li>" + escapeHtml(values[i]) + "</li>");
+		}
+		return "<div style='margin:6px 0;'><strong>" + escapeHtml(label) + "</strong><ul style='margin:6px 0 0 20px;'>" + items.join("") + "</ul></div>";
+	}
 
-		html += "</b></em>";
+	function downloadStateBlock(title, data) {
+		if (!data) {
+			return "";
+		}
+		var lines = [];
+		if (data.state) lines.push("状态：" + data.state);
+		if (data.tag) lines.push("版本：" + data.tag);
+		if (data.asset) lines.push("资产：" + data.asset);
+		if (data.arch) lines.push("架构：" + data.arch);
+		if (data.path) lines.push("保存路径：" + data.path);
+		if (data.time) lines.push("时间：" + data.time);
+		if (data.message) lines.push("说明：" + data.message);
+		if (!lines.length) {
+			return "";
+		}
+		return "<div style='margin-top:8px;padding:8px 10px;background:#fafafa;border:1px solid #eee;border-radius:6px;'>" +
+			"<strong>" + escapeHtml(title) + "</strong><br />" + escapeHtml(lines.join(" | ")) + "</div>";
+	}
+
+	function codeBlock(title, content) {
+		if (!content) {
+			return "";
+		}
+		return "<div style='margin-top:10px;'><strong>" + escapeHtml(title) + "</strong>" +
+			"<pre style='margin-top:6px;max-height:220px;overflow:auto;background:#0b1020;color:#d7e3ff;padding:12px;border-radius:8px;white-space:pre-wrap;word-break:break-all;'>" +
+			escapeHtml(content) + "</pre></div>";
+	}
+
+	function buildCliCard(data) {
+		var html = "";
+		html += "<div class='cbi-section' style='margin-bottom:16px;'>";
+		html += "<h3 style='margin-bottom:10px;'>vnt2_cli " + runningBadge(data.cli_running) + "</h3>";
+		html += kv("当前版本：", data.cli_tag || "未知");
+		html += kv("最新版本：", data.latest_tag || "未知");
+		html += kv("运行时长：", data.cli_runtime || "未运行");
+		html += kv("CPU：", data.cli_cpu || "-");
+		html += kv("内存：", data.cli_ram || "-");
+		html += kv("网络编号：", data.cli_network_code || "-");
+		html += kv("设备名称：", data.cli_device_name || "-");
+		html += kv("设备 ID：", data.cli_device_id || "-");
+		html += kv("虚拟网卡：", data.cli_tun_name || "-");
+		html += kv("控制端口：", data.ctrl_port || "-");
+		html += kv("无 TUN 模式：", yesNo(data.cli_no_tun));
+		html += kv("关闭 NAT：", yesNo(data.cli_no_nat));
+		html += kv("自动下载：", yesNo(data.cli_auto_download));
+		html += kv("下载仓库：", data.cli_download_repo || "-");
+		html += kv("下载版本：", data.cli_download_tag || "-");
+		html += listBlock("服务器列表", data.cli_servers);
+		html += downloadStateBlock("CLI 下载状态", data.cli_download);
+		html += codeBlock("本机信息预览", data.cli_info_preview);
+		html += codeBlock("节点列表预览", data.cli_ips_preview);
+		html += "</div>";
 		return html;
 	}
 
-	function buildWebButton(data) {
-		if (!data.web_running || !data.web_port) {
-			return "";
+	function buildWebCard(data) {
+		var html = "";
+		html += "<div class='cbi-section' style='margin-bottom:16px;'>";
+		html += "<h3 style='margin-bottom:10px;'>vnt2_web " + runningBadge(data.web_running) + "</h3>";
+		html += kv("当前版本：", data.web_tag || "未知");
+		html += kv("最新版本：", data.latest_tag || "未知");
+		html += kv("运行时长：", data.web_runtime || "未运行");
+		html += kv("CPU：", data.web_cpu || "-");
+		html += kv("内存：", data.web_ram || "-");
+		html += kv("监听地址：", data.web_host || "-");
+		html += kv("监听端口：", data.web_port || "-");
+		html += kv("访问地址：", data.web_url || "-");
+		html += kv("日志级别：", data.web_log_level || "-");
+		html += kv("允许 WAN 访问：", yesNo(data.web_wan));
+		html += kv("自动下载：", yesNo(data.web_auto_download));
+		html += kv("下载仓库：", data.web_download_repo || "-");
+		html += kv("下载版本：", data.web_download_tag || "-");
+		html += downloadStateBlock("Web 下载状态", data.web_download);
+
+		if (data.web_running && data.web_url) {
+			html += "<div style='margin-top:12px;'>" +
+				"<input class='cbi-button cbi-button-apply' type='button' value='打开 VNT2 Web 界面' onclick='window.open(\"" + escapeHtml(data.web_url) + "\", \"_blank\")' />" +
+				"</div>";
 		}
 
-		var webHost = data.web_host || window.location.hostname;
-		if (webHost === "0.0.0.0" || webHost === "::") {
-			webHost = window.location.hostname;
-		}
-
-		return "&nbsp;&nbsp;&nbsp;<input class=\"cbi-button cbi-button-reload mar-10\" type=\"button\" value=\"打开 VNT2 Web 界面\" onclick=\"window.open('<%=protocol%>" +
-			webHost + ":" + data.web_port + "/')\"/>";
+		html += "</div>";
+		return html;
 	}
 
-	function buildWebLine(data) {
-		var html = "<em><b>vnt2_web" + runningStatus(data.web_running);
-
-		if (data.web_running) {
-			html += metric(" 已运行：", data.web_runtime, "#DA70D6");
-			html += metric("<br>CPU占用：", data.web_cpu, "#6A5ACD");
-			html += metric("&nbsp;&nbsp;&nbsp;&nbsp;内存占用：", data.web_ram, "#0000CD");
-			html += metric("<br>当前版本：", data.web_tag, "#CD853F");
-			html += metric("&nbsp;&nbsp;&nbsp;&nbsp;最新版本：", data.latest_tag, "#FFA500");
-			html += buildWebButton(data);
-		}
-
-		html += "</b></em>";
+	function buildSummary(data) {
+		var html = "<div class='cbi-section'>";
+		html += "<h3 style='margin-bottom:10px;'>状态总览</h3>";
+		html += "<div style='line-height:1.9;'>";
+		html += "<div><strong>客户端：</strong>" + runningBadge(data.cli_running) + "</div>";
+		html += "<div><strong>Web 服务：</strong>" + runningBadge(data.web_running) + "</div>";
+		html += "<div><strong>下载日志大小：</strong>" + escapeHtml(data.download_log_size || 0) + " 字节</div>";
+		html += "</div>";
+		html += "</div>";
 		return html;
 	}
 
@@ -73,14 +142,12 @@
 			return;
 		}
 
-		st.innerHTML = buildCliLine(data) + "<br><br>" + buildWebLine(data);
+		st.innerHTML = buildSummary(data) + buildCliCard(data) + buildWebCard(data);
 	});
 })();
 //]]>
 </script>
 
-<fieldset class="cbi-section">
-	<p id="vnt2_status">
-		<em><%:Collecting data...%></em>
-	</p>
-</fieldset>
+<div id="vnt2_status">
+	<em><%:Collecting data...%></em>
+</div>

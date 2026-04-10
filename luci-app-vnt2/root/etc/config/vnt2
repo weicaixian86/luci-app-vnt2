@@ -5,7 +5,7 @@ config vnt2_cli
 	option download_repo 'vnt-dev/vnt'
 	option vnt2_cli_bin '/usr/bin/vnt2_cli'
 	option vnt2_ctrl_bin '/usr/bin/vnt2_ctrl'
-	option cli_conf_file '/etc/vnt2/vnt2-cli.toml'
+	option cli_conf_file '/etc/config/vnt2'
 	list server 'quic://101.35.230.139:6660'
 	option network_code '123456'
 	option ip ''

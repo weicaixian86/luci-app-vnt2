@@ -9,8 +9,8 @@ WEB_LOG="/tmp/vnt2-web.log"
 DOWNLOAD_LOG="/tmp/vnt2-download.log"
 CLI_TIME="/tmp/vnt2_cli_time"
 WEB_TIME="/tmp/vnt2_web_time"
-CLI_CONF_DIR="/etc/vnt2"
-CLI_CONF_DEFAULT="${CLI_CONF_DIR}/vnt2-cli.toml"
+CLI_CONF_DIR="/etc/config"
+CLI_CONF_DEFAULT="/etc/config/vnt2"
 CLI_CONF_FILE=""
 RUNTIME_FILE="/tmp/.vnt2_runtime"
 DOWNLOAD_CACHE_BASE="/tmp/vnt2-download-cache"
@@ -278,7 +278,7 @@ get_release_api_url() {
 	local tag="$2"
 
 	if [ -z "$repo" ]; then
-		repo="vnt-dev/vnts"
+		repo="vnt-dev/vnt"
 	fi
 
 	if [ -z "$tag" ] || [ "$tag" = "latest" ]; then
@@ -434,9 +434,9 @@ auto_download_bundle() {
 	}
 
 	config_get download_tag "$cfg" "download_tag" "latest"
-	config_get download_repo "$cfg" "download_repo" "vnt-dev/vnts"
+	config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
 	[ -n "$download_tag" ] || download_tag="latest"
-	[ -n "$download_repo" ] || download_repo="vnt-dev/vnts"
+	[ -n "$download_repo" ] || download_repo="vnt-dev/vnt"
 
 	arch_name="$(detect_arch_name)"
 	arch_patterns="$(detect_arch_patterns "$arch_name")"
@@ -687,8 +687,8 @@ build_cli_config() {
 	local cfg="$1"
 	local network_code ip device_id device_name mtu tun_name
 	local no_punch rtx compress fec no_nat no_tun allow_mapping
-	local cert_mode ctrl_port tunnel_port password vnt2_forward
-	local bind_dev cli_conf_file cli_conf_dir
+	local cert_mode ctrl_port tunnel_port password
+	local bind_dev cli_conf_file cli_conf_dir vnt2_forward
 
 	local server_list input_list output_list mapping_list udp_stun_list tcp_stun_list
 	local server_args="" input_args="" output_args="" mapping_args="" udp_stun_args="" tcp_stun_args=""
@@ -738,7 +738,9 @@ build_cli_config() {
 	config_get ctrl_port "$cfg" "ctrl_port"
 	config_get tunnel_port "$cfg" "tunnel_port"
 	config_get password "$cfg" "password"
-	config_get vnt2_forward "$cfg" "vnt2_forward"
+	config_list_foreach "$cfg" vnt2_forward append_runtime_item vnt2_forward
+	vnt2_forward="$(sed -n 's/^vnt2_forward=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+	vnt2_forward="$(trim_list "$vnt2_forward")"
 	config_get bind_dev "$cfg" "bind_dev"
 	config_get cli_conf_file "$cfg" "cli_conf_file" "${CLI_CONF_DEFAULT}"
 
