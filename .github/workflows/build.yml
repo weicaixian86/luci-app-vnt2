@@ -17,7 +17,6 @@ env:
   OPENWRT_TARGET: "x86/64"
   SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
   PACKAGE_NAME: "luci-app-vnt2"
-  APP_SOURCE_DIR: "luci-app-vnt2/luci-app-vnt2"
 
 jobs:
   build:
@@ -61,14 +60,32 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: Detect package source dir
+        shell: bash
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/Makefile"; then
+            echo "APP_SOURCE_DIR=." >> "$GITHUB_ENV"
+          elif [ -f "$GITHUB_WORKSPACE/${PACKAGE_NAME}/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/${PACKAGE_NAME}/Makefile"; then
+            echo "APP_SOURCE_DIR=${PACKAGE_NAME}" >> "$GITHUB_ENV"
+          elif [ -f "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile"; then
+            echo "APP_SOURCE_DIR=luci-app-vnt2" >> "$GITHUB_ENV"
+          else
+            echo "Unable to locate package source directory"
+            find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name Makefile | sort
+            exit 1
+          fi
+          echo "Resolved APP_SOURCE_DIR=$APP_SOURCE_DIR"
+
       - name: Link package into SDK
         shell: bash
         run: |
+          test -n "${APP_SOURCE_DIR}"
           test -d "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}"
           test -f "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
           cd sdk
           mkdir -p package/custom
-          ln -sfn "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}" "package/custom/${PACKAGE_NAME}"
+          rm -rf "package/custom/${PACKAGE_NAME}"
+          cp -a "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}" "package/custom/${PACKAGE_NAME}"
           test -f "package/custom/${PACKAGE_NAME}/Makefile"
 
       - name: Apply package version from release tag
