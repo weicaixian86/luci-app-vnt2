@@ -242,6 +242,37 @@ local function get_cached_latest_tag(repo)
 	return tag
 end
 
+local function normalize_display_tag(tag)
+	tag = trim(tag)
+	if tag == "" then
+		return ""
+	end
+	tag = tag:gsub("^[vV]", "")
+	return tag
+end
+
+local function get_vnt2_latest_tag(repo, configured_tag)
+	repo = trim(repo)
+	configured_tag = trim(configured_tag)
+
+	if repo == "" then
+		repo = "vnt-dev/vnt"
+	end
+
+	if repo == "vnt-dev/vnt" then
+		if configured_tag ~= "" and configured_tag ~= "latest" then
+			return normalize_display_tag(configured_tag)
+		end
+		return "2.0.0"
+	end
+
+	if configured_tag ~= "" and configured_tag ~= "latest" then
+		return normalize_display_tag(configured_tag)
+	end
+
+	return normalize_display_tag(get_cached_latest_tag(repo))
+end
+
 local function get_log_content(path)
 	return fs.readfile(path) or ""
 end
@@ -450,23 +481,20 @@ function act_status()
 	e.web_tag = get_local_tag(get_web_bin())
 	e.server_tag = get_local_tag(get_server_bin())
 
-	local latest_tag = ""
-	if cli_cfg.download_repo ~= "" then
-		latest_tag = get_cached_latest_tag(cli_cfg.download_repo)
-	end
-	if latest_tag == "" and web_cfg.download_repo ~= "" then
-		latest_tag = get_cached_latest_tag(web_cfg.download_repo)
+	local latest_tag = get_vnt2_latest_tag(cli_cfg.download_repo, cli_cfg.download_tag)
+	if latest_tag == "" then
+		latest_tag = get_vnt2_latest_tag(web_cfg.download_repo, web_cfg.download_tag)
 	end
 	if latest_tag == "" then
-		latest_tag = get_cached_latest_tag("vnt-dev/vnt")
+		latest_tag = get_vnt2_latest_tag("vnt-dev/vnt", "latest")
 	end
 
 	local latest_server_tag = ""
 	if server_cfg.download_repo ~= "" then
-		latest_server_tag = get_cached_latest_tag(server_cfg.download_repo)
+		latest_server_tag = normalize_display_tag(get_cached_latest_tag(server_cfg.download_repo))
 	end
 	if latest_server_tag == "" then
-		latest_server_tag = get_cached_latest_tag("lz-ycx/vnts")
+		latest_server_tag = normalize_display_tag(get_cached_latest_tag("lz-ycx/vnts"))
 	end
 
 	e.latest_tag = latest_tag

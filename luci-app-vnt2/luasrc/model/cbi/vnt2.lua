@@ -431,6 +431,12 @@ mutual_exclusion_tip.cfgvalue = function()
 ]] .. render_mutual_exclusion_script()
 end
 
+local cli_conf_path = s:taboption("general", DummyValue, "_cli_conf_path", translate("配置文件路径"))
+cli_conf_path.rawhtml = true
+cli_conf_path.cfgvalue = function()
+	return "<code>/etc/config/vnt2.toml</code>"
+end
+
 local enabled = s:taboption("general", Flag, "enabled", translate("启用cli 客户端"))
 enabled.rmempty = false
 enabled.write = function(self, section, value)
@@ -747,6 +753,12 @@ w:tab("general", translate("基本设置"))
 w:tab("advanced", translate("高级设置"))
 w:tab("upload", translate("上传程序"))
 
+local web_conf_path = w:taboption("general", DummyValue, "_web_conf_path", translate("配置文件路径"))
+web_conf_path.rawhtml = true
+web_conf_path.cfgvalue = function()
+	return "<code>/etc/config/vnt2.toml</code>"
+end
+
 local web_enabled = w:taboption("general", Flag, "enabled", translate("启用web 客户端"))
 web_enabled.rmempty = false
 web_enabled.write = function(self, section, value)
@@ -861,6 +873,12 @@ v:tab("cluster", translate("集群与网络"))
 v:tab("advanced", translate("高级设置"))
 v:tab("infos", translate("服务信息"))
 v:tab("upload", translate("上传程序"))
+
+local server_conf_path = v:taboption("general", DummyValue, "_server_conf_path", translate("配置文件路径"))
+server_conf_path.rawhtml = true
+server_conf_path.cfgvalue = function()
+	return "<code>/etc/config/vnts2.toml</code>"
+end
 
 local server_enabled = v:taboption("general", Flag, "enabled", translate("启用vnts2 服务端"))
 server_enabled.rmempty = false

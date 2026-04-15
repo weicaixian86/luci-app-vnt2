@@ -76,30 +76,6 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 	.vnt2-links a {
 		margin-right: 12px;
 	}
-	.vnt2-summary {
-		margin-top: 14px;
-	}
-	.vnt2-summary pre {
-		margin: 8px 0 0;
-		max-height: 180px;
-		overflow: auto;
-		padding: 10px;
-		background: #fafafa;
-		border: 1px solid #ececec;
-		border-radius: 6px;
-		white-space: pre-wrap;
-		word-break: break-all;
-		font-size: 12px;
-		line-height: 1.5;
-	}
-	.vnt2-toolbar {
-		margin: 12px 0 0;
-		font-size: 12px;
-		color: #666;
-	}
-	.vnt2-toolbar span {
-		margin-right: 14px;
-	}
 </style>
 
 <div class="vnt2-status-wrap">
@@ -177,22 +153,6 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 		</div>
 	</div>
 
-	<div class="vnt2-summary vnt2-card">
-		<h3>运行摘要</h3>
-		<table>
-			<tr><td>客户端信息预览</td><td id="cli_info_short">-</td></tr>
-			<tr><td>客户端节点预览</td><td id="cli_ips_short">-</td></tr>
-			<tr><td>服务端白名单</td><td id="server_white_list">-</td></tr>
-			<tr><td>服务端附加网段</td><td id="server_custom_net">-</td></tr>
-			<tr><td>服务端配置文件</td><td id="server_conf_file">-</td></tr>
-			<tr><td>下载日志大小</td><td id="download_log_size">-</td></tr>
-		</table>
-		<pre id="server_conf_preview">加载中...</pre>
-		<div class="vnt2-toolbar">
-			<span>状态面板每 5 秒自动刷新一次</span>
-			<span>如果本地环境无 curl，远端最新版本号可能显示为空</span>
-		</div>
-	</div>
 </div>
 
 <script type="text/javascript">
@@ -220,14 +180,6 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 			return "-";
 		}
 		return v.join(" / ");
-	}
-
-	function shortText(v, max) {
-		v = text(v, "-");
-		if (v.length <= max) {
-			return v;
-		}
-		return v.substring(0, max) + " ...";
 	}
 
 	function setBadge(id, running) {
@@ -297,13 +249,6 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 		setHtml("server_peer_servers", joinList(data.server_peer_servers));
 		setHtml("server_download", stateText(data.server_download));
 
-		setHtml("cli_info_short", shortText(data.cli_info_preview, 240));
-		setHtml("cli_ips_short", shortText(data.cli_ips_preview, 240));
-		setHtml("server_white_list", joinList(data.server_white_list));
-		setHtml("server_custom_net", joinList(data.server_custom_net));
-		setHtml("server_conf_file", text(data.server_conf_file));
-		setHtml("download_log_size", text(data.download_log_size) + " bytes");
-		byId("server_conf_preview").textContent = text(data.server_conf_preview, "暂无配置内容");
 	}
 
 	function updateStatus() {
