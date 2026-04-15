@@ -441,6 +441,29 @@ select_release_asset() {
 	return 1
 }
 
+extract_zip_asset() {
+	local asset_file="$1"
+	local dest_dir="$2"
+
+	if command -v unzip >/dev/null 2>&1; then
+		unzip -qo "$asset_file" -d "$dest_dir" >/dev/null 2>&1 && return 0
+	fi
+
+	if command -v busybox >/dev/null 2>&1; then
+		busybox unzip -o "$asset_file" -d "$dest_dir" >/dev/null 2>&1 && return 0
+	fi
+
+	if command -v bsdtar >/dev/null 2>&1; then
+		bsdtar -xf "$asset_file" -C "$dest_dir" >/dev/null 2>&1 && return 0
+	fi
+
+	if tar -tf "$asset_file" >/dev/null 2>&1; then
+		tar -xf "$asset_file" -C "$dest_dir" >/dev/null 2>&1 && return 0
+	fi
+
+	return 1
+}
+
 extract_release_asset() {
 	local asset_file="$1"
 	local dest_dir="$2"
@@ -457,11 +480,7 @@ extract_release_asset() {
 			tar -xJf "$asset_file" -C "$dest_dir" >/dev/null 2>&1 || return 1
 		;;
 		*.zip)
-			if command -v unzip >/dev/null 2>&1; then
-				unzip -qo "$asset_file" -d "$dest_dir" >/dev/null 2>&1 || return 1
-			else
-				return 1
-			fi
+			extract_zip_asset "$asset_file" "$dest_dir" || return 1
 		;;
 		*)
 			base="$(basename "$asset_file")"
@@ -546,12 +565,26 @@ install_binary_to_usrbin() {
 	local target_path
 
 	[ -n "$src" ] || return 1
+	[ -f "$src" ] || return 1
 	[ -n "$target_name" ] || return 1
 	target_path="${INSTALL_BIN_DIR}/${target_name}"
 
-	mkdir -p "${INSTALL_BIN_DIR}" >/dev/null 2>&1 || return 1
-	cp -f "$src" "$target_path" >/dev/null 2>&1 || return 1
-	chmod 755 "$target_path" >/dev/null 2>&1 || return 1
+	mkdir -p "${INSTALL_BIN_DIR}" >/dev/null 2>&1 || {
+		log_download "创建安装目录失败：${INSTALL_BIN_DIR}"
+		return 1
+	}
+	cp -f "$src" "$target_path" >/dev/null 2>&1 || {
+		log_download "复制程序到 ${target_path} 失败，源文件：${src}"
+		return 1
+	}
+	chmod 755 "$target_path" >/dev/null 2>&1 || {
+		log_download "设置执行权限失败：${target_path}"
+		return 1
+	}
+	[ -f "$target_path" ] || {
+		log_download "安装后未找到目标文件：${target_path}"
+		return 1
+	}
 	echo "$target_path"
 	return 0
 }
@@ -786,7 +819,7 @@ prepare_binary() {
 	local state_file="$5"
 	local scope="$6"
 
-	local bin
+	local bin uploaded target_name installed_bin
 	config_get bin "$cfg" "$option" "$default_path"
 
 	if ensure_exec "$bin"; then
@@ -802,14 +835,20 @@ prepare_binary() {
 		fi
 	fi
 
-	local uploaded
 	uploaded="$(find_uploaded_bin "$upload_name")"
 	if [ -n "$uploaded" ]; then
 		log_download "${scope} 自动下载失败，回退到本地上传程序 ${uploaded}"
-		bin="$uploaded"
+		target_name="${option%_bin}"
+		installed_bin="$(install_binary_to_usrbin "$uploaded" "$target_name" 2>/dev/null)"
+		if ensure_exec "$installed_bin"; then
+			bin="$installed_bin"
+			write_download_state "$state_file" "fallback" "自动下载失败，已改用上传程序并安装到 /usr/bin" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$installed_bin"
+		else
+			bin="$uploaded"
+			write_download_state "$state_file" "fallback" "自动下载失败，已回退到本地上传程序" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$uploaded"
+		fi
 		uci -q set ${CONF}.${cfg}.${option}="$bin"
 		uci commit ${CONF} >/dev/null 2>&1
-		write_download_state "$state_file" "fallback" "自动下载失败，已回退到本地上传程序" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$uploaded"
 	fi
 
 	ensure_exec "$bin" || return 1

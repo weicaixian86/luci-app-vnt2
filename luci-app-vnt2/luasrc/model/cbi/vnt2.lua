@@ -442,12 +442,6 @@ mutual_exclusion_tip.cfgvalue = function()
 ]] .. render_mutual_exclusion_script()
 end
 
-local cli_conf_path = s:taboption("general", Value, "client_conf_file", translate("配置文件路径"),
-	translate("vnt2_cli 使用的 TOML 配置文件绝对路径；vnt2_web 与其共用同一客户端配置结构"))
-cli_conf_path.placeholder = "/etc/config/vnt2.toml"
-cli_conf_path.default = "/etc/config/vnt2.toml"
-cli_conf_path.validate = validate_file_path
-
 local enabled = s:taboption("general", Flag, "enabled", translate("启用cli 客户端"))
 enabled.rmempty = false
 enabled.write = function(self, section, value)
@@ -597,6 +591,12 @@ local vnt2_ctrl_bin = s:taboption("advanced", Value, "vnt2_ctrl_bin", translate(
 	translate("用于读取运行状态、节点信息、路由信息；自动下载成功后会自动写入实际路径"))
 vnt2_ctrl_bin.placeholder = "/usr/bin/vnt2_ctrl"
 vnt2_ctrl_bin.validate = validate_nonempty
+
+local cli_conf_path = s:taboption("advanced", Value, "client_conf_file", translate("配置文件路径"),
+	translate("vnt2_cli 使用的 TOML 配置文件绝对路径；vnt2_web 与其共用同一客户端配置结构"))
+cli_conf_path.placeholder = "/etc/config/vnt2.toml"
+cli_conf_path.default = "/etc/config/vnt2.toml"
+cli_conf_path.validate = validate_file_path
 
 local cli_conf_shared_tip = s:taboption("advanced", DummyValue, "_cli_conf_shared_tip")
 cli_conf_shared_tip.rawhtml = true
@@ -764,20 +764,6 @@ w:tab("general", translate("基本设置"))
 w:tab("advanced", translate("高级设置"))
 w:tab("upload", translate("上传程序"))
 
-local web_conf_path = w:taboption("general", Value, "client_conf_file", translate("配置文件路径"),
-	translate("vnt2_web 使用的客户端 TOML 配置文件绝对路径，通常与 vnt2_cli 保持一致"))
-web_conf_path.placeholder = "/etc/config/vnt2.toml"
-web_conf_path.default = "/etc/config/vnt2.toml"
-web_conf_path.validate = validate_file_path
-web_conf_path.write = function(self, section, value)
-	value = validate_file_path(self, value)
-	if not value then
-		return
-	end
-	self.map.uci:set(self.map.config, section, self.option, value)
-	set_sections_option_by_type(self.map.config, "vnt2_cli", "client_conf_file", value)
-end
-
 local web_enabled = w:taboption("general", Flag, "enabled", translate("启用web 客户端"))
 web_enabled.rmempty = false
 web_enabled.write = function(self, section, value)
@@ -839,6 +825,20 @@ open_web.write = function()
 	http.redirect(luci.dispatcher.build_url("admin", "vpn", "vnt2", "open_web"))
 end
 
+local web_conf_path = w:taboption("advanced", Value, "client_conf_file", translate("配置文件路径"),
+	translate("vnt2_web 使用的客户端 TOML 配置文件绝对路径，通常与 vnt2_cli 保持一致"))
+web_conf_path.placeholder = "/etc/config/vnt2.toml"
+web_conf_path.default = "/etc/config/vnt2.toml"
+web_conf_path.validate = validate_file_path
+web_conf_path.write = function(self, section, value)
+	value = validate_file_path(self, value)
+	if not value then
+		return
+	end
+	self.map.uci:set(self.map.config, section, self.option, value)
+	set_sections_option_by_type(self.map.config, "vnt2_cli", "client_conf_file", value)
+end
+
 local web_user = w:taboption("advanced", Value, "web_user", translate("页面备注用户名"),
 	translate("当前原生 vnt2_web 未由本 LuCI 页面接管认证，此处仅作为备注保存"))
 web_user.placeholder = "admin"
@@ -892,12 +892,6 @@ v:tab("cluster", translate("集群与网络"))
 v:tab("advanced", translate("高级设置"))
 v:tab("infos", translate("服务信息"))
 v:tab("upload", translate("上传程序"))
-
-local server_conf_path = v:taboption("general", Value, "server_conf_file", translate("配置文件路径"),
-	translate("vnts2 服务端使用的 TOML 配置文件绝对路径"))
-server_conf_path.placeholder = "/etc/config/vnts2.toml"
-server_conf_path.default = "/etc/config/vnts2.toml"
-server_conf_path.validate = validate_file_path
 
 local server_enabled = v:taboption("general", Flag, "enabled", translate("启用vnts2 服务端"))
 server_enabled.rmempty = false
@@ -1021,6 +1015,12 @@ local custom_net = v:taboption("cluster", DynamicList, "custom_net", translate("
 custom_net.placeholder = "10.27.0.0/24"
 custom_net.validate = validate_cidr
 bind_dynamiclist(custom_net)
+
+local server_conf_path = v:taboption("advanced", Value, "server_conf_file", translate("配置文件路径"),
+	translate("vnts2 服务端使用的 TOML 配置文件绝对路径"))
+server_conf_path.placeholder = "/etc/config/vnts2.toml"
+server_conf_path.default = "/etc/config/vnts2.toml"
+server_conf_path.validate = validate_file_path
 
 local server_tip = v:taboption("advanced", DummyValue, "_server_tip", translate("说明"))
 server_tip.rawhtml = true
