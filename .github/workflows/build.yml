@@ -27,7 +27,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set build time
+      - name: Set build metadata
         shell: bash
         run: |
           echo "BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$GITHUB_ENV"
@@ -64,29 +64,18 @@ jobs:
         shell: bash
         run: |
           if [ -f "$GITHUB_WORKSPACE/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/Makefile"; then
-            echo "APP_SOURCE_DIR=." >> "$GITHUB_ENV"
+            APP_SOURCE_DIR="."
           elif [ -f "$GITHUB_WORKSPACE/${PACKAGE_NAME}/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/${PACKAGE_NAME}/Makefile"; then
-            echo "APP_SOURCE_DIR=${PACKAGE_NAME}" >> "$GITHUB_ENV"
+            APP_SOURCE_DIR="${PACKAGE_NAME}"
           elif [ -f "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile"; then
-            echo "APP_SOURCE_DIR=luci-app-vnt2" >> "$GITHUB_ENV"
+            APP_SOURCE_DIR="luci-app-vnt2"
           else
             echo "Unable to locate package source directory"
             find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name Makefile | sort
             exit 1
           fi
+          echo "APP_SOURCE_DIR=$APP_SOURCE_DIR" >> "$GITHUB_ENV"
           echo "Resolved APP_SOURCE_DIR=$APP_SOURCE_DIR"
-
-      - name: Link package into SDK
-        shell: bash
-        run: |
-          test -n "${APP_SOURCE_DIR}"
-          test -d "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}"
-          test -f "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
-          cd sdk
-          mkdir -p package/custom
-          rm -rf "package/custom/${PACKAGE_NAME}"
-          cp -a "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}" "package/custom/${PACKAGE_NAME}"
-          test -f "package/custom/${PACKAGE_NAME}/Makefile"
 
       - name: Apply package version from release tag
         shell: bash
@@ -101,6 +90,18 @@ jobs:
           sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
           grep -E "^PKG_NAME:=|^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
 
+      - name: Link package into SDK
+        shell: bash
+        run: |
+          test -n "${APP_SOURCE_DIR}"
+          test -d "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}"
+          test -f "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
+          cd sdk
+          mkdir -p package/custom
+          rm -rf "package/custom/${PACKAGE_NAME}"
+          cp -a "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}" "package/custom/${PACKAGE_NAME}"
+          test -f "package/custom/${PACKAGE_NAME}/Makefile"
+
       - name: Generate defconfig
         shell: bash
         run: |
@@ -112,7 +113,7 @@ jobs:
         run: |
           set -o pipefail
           cd sdk
-          make package/${PACKAGE_NAME}/compile V=sc -j1 2>&1 | tee build-${PACKAGE_NAME}.log
+          make package/${PACKAGE_NAME}/compile V=sc -j"$(nproc)" 2>&1 | tee build-${PACKAGE_NAME}.log
 
       - name: Dump package build logs on failure
         if: failure()
@@ -130,8 +131,9 @@ jobs:
           find sdk/bin/packages -type f -name "${PACKAGE_NAME}_*.ipk" -exec cp -f {} output/ \;
           test -n "$(find output -maxdepth 1 -type f -name '*.ipk')"
           for file in output/*.ipk; do
-            new_name="$(echo "$(basename "$file")" | sed -E "s/^${PACKAGE_NAME}_[^-]+-r([0-9]+)_all\.ipk$/${PACKAGE_NAME}_${RAW_TAG}-r\1_all.ipk/")"
-            if [ "$new_name" != "$(basename "$file")" ]; then
+            base="$(basename "$file")"
+            new_name="$(echo "$base" | sed -E "s/^${PACKAGE_NAME}_[^-]+-r([0-9]+)_all\.ipk$/${PACKAGE_NAME}_${RAW_TAG}-r\1_all.ipk/")"
+            if [ "$new_name" != "$base" ]; then
               mv -f "$file" "output/$new_name"
             fi
           done
@@ -161,6 +163,8 @@ jobs:
           body: |
             编译时间: ${{ env.BUILD_TIME }}
           files: output/*.ipk
+          draft: false
+          prerelease: false
           generate_release_notes: false
           append_body: false
           make_latest: true

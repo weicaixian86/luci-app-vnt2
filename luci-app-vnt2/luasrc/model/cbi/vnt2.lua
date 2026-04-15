@@ -5,7 +5,9 @@ local util = require "luci.util"
 local sys = require "luci.sys"
 
 local m = Map("vnt2", translate("VNT2"))
-m.description = translate('VNT2 是一个简单、高效、可快速组建虚拟局域网的工具。<br>官网：<a href="https://rustvnt.com/" target="_blank">rustvnt.com</a>&nbsp;&nbsp;项目：<a href="https://github.com/vnt-dev/vnt" target="_blank">github.com/vnt-dev/vnt</a>&nbsp;&nbsp;当前 LuCI 适配基于 vnt2_cli / vnt2_ctrl / vnt2_web 实际能力开发，适用于 OpenWrt 24.10。')
+m.description = translate(
+	'VNT2 是一个简单、高效、可快速组建虚拟局域网的工具。<br>官网：<a href="https://rustvnt.com/" target="_blank">rustvnt.com</a>&nbsp;&nbsp;项目：<a href="https://github.com/vnt-dev/vnt" target="_blank">github.com/vnt-dev/vnt</a>&nbsp;&nbsp;当前 LuCI 适配同时覆盖 vnt2_cli / vnt2_ctrl / vnt2_web / vnts2，适用于 OpenWrt 24.10。'
+)
 
 m:section(SimpleSection).template = "vnt2/vnt2_status"
 
@@ -164,7 +166,7 @@ local function add_file_upload_handler(note_options)
 
 			if uploaded_name:sub(-7) == ".tar.gz" then
 				sys.call("tar -xzf " .. util.shellquote(full) .. " -C /tmp >/dev/null 2>&1")
-				for _, bin in ipairs({ "vnt2_cli", "vnt2_ctrl", "vnt2_web" }) do
+				for _, bin in ipairs({ "vnt2_cli", "vnt2_ctrl", "vnt2_web", "vnts2", "vnts" }) do
 					if fs.access(dir .. bin) then
 						sys.call("chmod 755 " .. util.shellquote(dir .. bin) .. " >/dev/null 2>&1")
 						msg = msg .. "<br />- " .. util.pcdata(dir .. bin) .. " " .. translate("已就绪，重启服务后生效")
@@ -268,6 +270,40 @@ local function validate_port_or_zero(self, value)
 	return nil, translate("端口范围必须为 0~65535")
 end
 
+local function validate_bind_addr(self, value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+
+	if value:match("^%d+%.%d+%.%d+%.%d+:%d+$") then
+		return value
+	end
+
+	if value:match("^%[[0-9a-fA-F:]+%]:%d+$") then
+		return value
+	end
+
+	if value:match("^[%w._-]+:%d+$") then
+		return value
+	end
+
+	return nil, translate("地址格式错误，应为 host:port、IPv4:port 或 [IPv6]:port")
+end
+
+local function validate_cidr(self, value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+
+	if value:match("^%d+%.%d+%.%d+%.%d+/%d+$") then
+		return value
+	end
+
+	return nil, translate("CIDR 格式错误，例如 10.26.0.0/24")
+end
+
 local function validate_input_rule_item(value)
 	value = trim(value)
 	if value == "" then
@@ -362,6 +398,7 @@ end
 
 local cli_running = process_running("vnt2_cli")
 local web_running = process_running("vnt2_web")
+local server_running = process_running("vnts2") or process_running("vnts")
 
 -- ==================== vnt2_cli ====================
 local s = m:section(TypedSection, "vnt2_cli", translate("vnt2_cli 客户端设置"))
@@ -534,17 +571,17 @@ local vnt2_ctrl_bin = s:taboption("advanced", Value, "vnt2_ctrl_bin", translate(
 vnt2_ctrl_bin.placeholder = "/usr/bin/vnt2_ctrl"
 vnt2_ctrl_bin.validate = validate_nonempty
 
-local cli_conf_file = s:taboption("advanced", Value, "cli_conf_file", translate("配置文件路径"),
-	translate("用于指定 vnt2_cli / vnt2_web 共用配置文件路径；默认直接写入 OpenWrt UCI 配置文件 /etc/config/vnt2"))
-cli_conf_file.placeholder = "/etc/config/vnt2"
-cli_conf_file.default = "/etc/config/vnt2"
+local cli_conf_file = s:taboption("advanced", Value, "cli_conf_file", translate("客户端配置文件路径"),
+	translate("由 LuCI 自动生成 TOML 配置文件并用于启动 vnt2_cli；建议保留默认值"))
+cli_conf_file.placeholder = "/etc/config/vnt2/vnt2-cli.toml"
+cli_conf_file.default = "/etc/config/vnt2/vnt2-cli.toml"
 cli_conf_file.validate = validate_nonempty
 
 local cli_conf_shared_tip = s:taboption("advanced", DummyValue, "_cli_conf_shared_tip")
 cli_conf_shared_tip.rawhtml = true
 cli_conf_shared_tip.cfgvalue = function()
 	return [[
-<div class="cbi-value-description">vnt2_cli 客户端和 vnt2_web 客户端 共用同一配置文件</div>
+<div class="cbi-value-description">vnt2_cli 客户端和 vnt2_web 客户端为独立运行方式，但此 LuCI 页面会统一管理两者。</div>
 ]]
 end
 
@@ -567,7 +604,7 @@ tunnel_port.placeholder = "0"
 tunnel_port.validate = validate_port_or_zero
 
 local bind_dev = s:taboption("advanced", ListValue, "bind_dev", translate("绑定出口网卡"),
-	translate("当前 vnt2 原生参数未直接提供对应选项，此项作为扩展保留并由 init 脚本保存"))
+	translate("当前以环境变量形式传递给启动脚本，适合需要指定出口链路的场景"))
 bind_dev:value("", translate("不绑定"))
 for _, dev in ipairs(list_net_devices()) do
 	bind_dev:value(dev.iface, dev.iface .. " (" .. dev.ip .. ")")
@@ -585,9 +622,9 @@ panel_tip:depends("info_mode", "panel")
 panel_tip.cfgvalue = function()
 	return [[
 <div class="cbi-value-description">
-	<div>1. 页面顶部状态面板支持自动轮询显示客户端 / Web 服务运行状态、版本、资源占用与当前配置摘要。</div>
+	<div>1. 页面顶部状态面板支持自动轮询显示客户端 / Web 服务 / VNTS2 服务端运行状态、版本、资源占用与配置摘要。</div>
 	<div>2. 当前页面下方可手动读取 vnt2_ctrl 输出，包括本机信息、节点列表、设备详情、路由信息和实际启动参数。</div>
-	<div>3. 日志实时查看请进入“客户端日志 / Web 日志”菜单。</div>
+	<div>3. 服务端状态、日志和参数请结合“服务端设置”与“服务端日志”菜单查看。</div>
 </div>
 ]]
 end
@@ -746,33 +783,6 @@ local vnt2_web_bin = w:taboption("general", Value, "vnt2_web_bin", translate("vn
 vnt2_web_bin.placeholder = "/usr/bin/vnt2_web"
 vnt2_web_bin.validate = validate_nonempty
 
-local web_cli_conf_file = w:taboption("general", Value, "_shared_cli_conf_file", translate("配置文件路径"),
-	translate("用于指定 vnt2_cli / vnt2_web 共用配置文件路径；默认直接写入 OpenWrt UCI 配置文件 /etc/config/vnt2"))
-web_cli_conf_file.placeholder = "/etc/config/vnt2"
-web_cli_conf_file.default = "/etc/config/vnt2"
-web_cli_conf_file.cfgvalue = function(self, section)
-	return m.uci:get("vnt2", "vnt2_cli", "cli_conf_file") or "/etc/config/vnt2"
-end
-web_cli_conf_file.write = function(self, section, value)
-	value = trim(value)
-	if value == "" then
-		value = "/etc/config/vnt2"
-	end
-	m.uci:set("vnt2", "vnt2_cli", "cli_conf_file", value)
-end
-web_cli_conf_file.remove = function(self, section)
-	m.uci:delete("vnt2", "vnt2_cli", "cli_conf_file")
-end
-web_cli_conf_file.validate = validate_nonempty
-
-local web_cli_conf_shared_tip = w:taboption("general", DummyValue, "_web_cli_conf_shared_tip")
-web_cli_conf_shared_tip.rawhtml = true
-web_cli_conf_shared_tip.cfgvalue = function()
-	return [[
-<div class="cbi-value-description">vnt2_cli 客户端和 vnt2_web 客户端 共用同一配置文件</div>
-]]
-end
-
 local web_host = w:taboption("general", Value, "web_host", translate("监听地址"),
 	translate("默认仅监听本地 127.0.0.1；若需外部访问，请改为 0.0.0.0 并按需开启 WAN 放行"))
 web_host.placeholder = "127.0.0.1"
@@ -836,6 +846,193 @@ local web_upload_note = w:taboption("upload", DummyValue, "_upload_note_web")
 web_upload_note.rawhtml = true
 web_upload_note.template = "vnt2/other_dvalue"
 
-add_file_upload_handler({ upload_note, web_upload_note })
+-- ==================== vnts2 ====================
+local v = m:section(TypedSection, "vnts2", translate("vnts2 服务端设置"))
+v.anonymous = true
+v.addremove = false
+
+v:tab("general", translate("基本设置"))
+v:tab("listen", translate("监听与认证"))
+v:tab("cluster", translate("集群与网络"))
+v:tab("advanced", translate("高级设置"))
+v:tab("infos", translate("服务信息"))
+v:tab("upload", translate("上传程序"))
+
+local server_enabled = v:taboption("general", Flag, "enabled", translate("启用vnts2 服务端"))
+server_enabled.rmempty = false
+
+local server_restart = v:taboption("general", Button, "_restart_server", translate("重启服务端"))
+server_restart.inputtitle = translate("重启")
+server_restart.inputstyle = "apply"
+server_restart.description = translate("快速重启 vnts2")
+server_restart:depends("enabled", "1")
+server_restart.write = function()
+	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")
+end
+
+local auto_download_server = v:taboption("general", Flag, "auto_download", translate("自动下载程序"),
+	translate("当本地缺少 vnts2 时，自动从 GitHub Releases 下载匹配当前架构的发行包"))
+auto_download_server.rmempty = false
+auto_download_server.default = auto_download_server.enabled
+
+local download_tag_server = v:taboption("general", Value, "download_tag", translate("服务端下载版本"),
+	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签"))
+download_tag_server.placeholder = "latest"
+download_tag_server.default = "latest"
+download_tag_server.validate = validate_nonempty
+
+local download_repo_server = v:taboption("general", Value, "download_repo", translate("服务端下载仓库"),
+	translate("默认 lz-ycx/vnts，可按你的实际仓库修改"))
+download_repo_server.placeholder = "lz-ycx/vnts"
+download_repo_server.default = "lz-ycx/vnts"
+download_repo_server.validate = validate_nonempty
+
+local vnts2_bin = v:taboption("general", Value, "vnts2_bin", translate("vnts2 程序路径"),
+	translate("默认 /usr/bin/vnts2；若不存在，将优先尝试自动下载，失败后回退到 /tmp 上传程序"))
+vnts2_bin.placeholder = "/usr/bin/vnts2"
+vnts2_bin.validate = validate_nonempty
+
+local server_conf_file = v:taboption("general", Value, "server_conf_file", translate("服务端配置文件路径"),
+	translate("由 LuCI 自动生成 TOML 配置文件并用于启动 vnts2；建议保留默认值"))
+server_conf_file.placeholder = "/etc/vnt2/vnts2.toml"
+server_conf_file.default = "/etc/vnt2/vnts2.toml"
+server_conf_file.validate = validate_nonempty
+
+local tcp_bind = v:taboption("listen", Value, "tcp_bind", translate("TCP 监听地址"),
+	translate("例如 0.0.0.0:29872"))
+tcp_bind.placeholder = "0.0.0.0:29872"
+tcp_bind.validate = validate_bind_addr
+
+local quic_bind = v:taboption("listen", Value, "quic_bind", translate("QUIC 监听地址"),
+	translate("例如 0.0.0.0:29872"))
+quic_bind.placeholder = "0.0.0.0:29872"
+quic_bind.validate = validate_bind_addr
+
+local ws_bind = v:taboption("listen", Value, "ws_bind", translate("WS/WSS 监听地址"),
+	translate("例如 0.0.0.0:29872"))
+ws_bind.placeholder = "0.0.0.0:29872"
+ws_bind.validate = validate_bind_addr
+
+local web_bind = v:taboption("listen", Value, "web_bind", translate("管理页面监听地址"),
+	translate("例如 0.0.0.0:29871"))
+web_bind.placeholder = "0.0.0.0:29871"
+web_bind.validate = validate_bind_addr
+
+local server_quic_bind = v:taboption("listen", Value, "server_quic_bind", translate("QUIC 代理地址"),
+	translate("用于多服务端 / 代理场景，留空则不启用"))
+server_quic_bind.placeholder = "0.0.0.0:29900"
+server_quic_bind.validate = validate_bind_addr
+
+local cert = v:taboption("listen", Value, "cert", translate("TLS 证书路径"),
+	translate("启用 TLS / WSS / QUIC TLS 时所用证书"))
+cert.placeholder = "/etc/ssl/vnts.crt"
+
+local key = v:taboption("listen", Value, "key", translate("TLS 私钥路径"),
+	translate("与证书配套使用"))
+key.placeholder = "/etc/ssl/vnts.key"
+
+local username = v:taboption("listen", Value, "username", translate("管理用户名"),
+	translate("用于 vnts2 内置 Web 管理页登录"))
+username.placeholder = "admin"
+
+local password_server = v:taboption("listen", Value, "password", translate("管理密码"),
+	translate("用于 vnts2 内置 Web 管理页登录"))
+password_server.password = true
+password_server.placeholder = "admin"
+
+local server_token = v:taboption("listen", Value, "server_token", translate("服务端令牌"),
+	translate("多服务端互联或上游鉴权场景可用，留空则不启用"))
+server_token.password = true
+
+local open_wan_tcp = v:taboption("listen", Flag, "open_wan_tcp", translate("允许 WAN 访问 TCP 端口"))
+open_wan_tcp.rmempty = false
+
+local open_wan_quic = v:taboption("listen", Flag, "open_wan_quic", translate("允许 WAN 访问 QUIC 端口"))
+open_wan_quic.rmempty = false
+
+local open_wan_ws = v:taboption("listen", Flag, "open_wan_ws", translate("允许 WAN 访问 WS/WSS 端口"))
+open_wan_ws.rmempty = false
+
+local open_wan_web = v:taboption("listen", Flag, "open_wan_web", translate("允许 WAN 访问管理页面端口"))
+open_wan_web.rmempty = false
+
+local network = v:taboption("cluster", Value, "network", translate("虚拟网段"),
+	translate("服务端负责分配的虚拟地址池，例如 10.26.0.0/24"))
+network.placeholder = "10.26.0.0/24"
+network.validate = validate_cidr
+
+local lease_duration = v:taboption("cluster", Value, "lease_duration", translate("租约时长（秒）"),
+	translate("客户端虚拟地址租约时长"))
+lease_duration.placeholder = "86400"
+lease_duration.datatype = "uinteger"
+
+local persistence = v:taboption("cluster", Flag, "persistence", translate("启用持久化"),
+	translate("开启后服务端会持久化地址租约和相关状态"))
+persistence.rmempty = false
+
+local white_list = v:taboption("cluster", DynamicList, "white_list", translate("白名单令牌"),
+	translate("用于限制允许接入的 token 列表"))
+white_list.placeholder = "demo-token"
+bind_dynamiclist(white_list)
+
+local peer_servers = v:taboption("cluster", DynamicList, "peer_servers", translate("上游/同伴服务端"),
+	translate("用于多服务端互联，格式一般为 host:port"))
+peer_servers.placeholder = "1.2.3.4:29872"
+peer_servers.validate = validate_server
+bind_dynamiclist(peer_servers)
+
+local custom_net = v:taboption("cluster", DynamicList, "custom_net", translate("附加网段列表"),
+	translate("为服务端附加更多 CIDR 配置"))
+custom_net.placeholder = "10.27.0.0/24"
+custom_net.validate = validate_cidr
+bind_dynamiclist(custom_net)
+
+local server_tip = v:taboption("advanced", DummyValue, "_server_tip", translate("说明"))
+server_tip.rawhtml = true
+server_tip.cfgvalue = function()
+	return [[
+<div class="cbi-value-description">
+	<div>1. vnts2 通过 LuCI 自动生成 TOML 配置文件并以 <code>--conf</code> 方式启动。</div>
+	<div>2. TCP / QUIC / WS/WSS / Web 管理页均可独立监听，并可按需开放 WAN 防火墙规则。</div>
+	<div>3. 若启用自动下载，默认会从服务端仓库 Releases 中选择匹配当前架构的压缩包。</div>
+</div>
+]]
+end
+
+local server_cmd = v:taboption("infos", Button, "_server_cmd", translate("读取服务端启动参数"))
+server_cmd.inputtitle = translate("刷新")
+server_cmd.inputstyle = "apply"
+server_cmd.write = function()
+	if server_running then
+		sys.call("tr '\\000' ' ' </proc/$(pidof vnts2 2>/dev/null | awk '{print $1}')/cmdline >/tmp/vnts2_cmd 2>/dev/null || tr '\\000' ' ' </proc/$(pidof vnts 2>/dev/null | awk '{print $1}')/cmdline >/tmp/vnts2_cmd 2>/dev/null")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnts2。' >/tmp/vnts2_cmd")
+	end
+end
+
+local server_cmd_content = v:taboption("infos", DummyValue, "_server_cmd_content")
+server_cmd_content.rawhtml = true
+server_cmd_content.cfgvalue = function()
+	return render_pre("/tmp/vnts2_cmd")
+end
+
+local server_conf_preview = v:taboption("infos", DummyValue, "_server_conf_preview", translate("当前服务端配置预览"))
+server_conf_preview.rawhtml = true
+server_conf_preview.cfgvalue = function()
+	local path = m.uci:get_first("vnt2", "vnts2", "server_conf_file") or "/etc/vnt2/vnts2.toml"
+	return render_pre(path)
+end
+
+local server_upload = v:taboption("upload", FileUpload, "upload_server")
+server_upload.optional = true
+server_upload.default = ""
+server_upload.template = "vnt2/other_upload"
+server_upload.description = translate("支持上传 vnts2 / vnts 二进制文件，或包含这些文件的 .tar.gz 压缩包；当自动下载失败时，系统会自动回退使用这里上传的程序。")
+
+local server_upload_note = v:taboption("upload", DummyValue, "_upload_note_server")
+server_upload_note.rawhtml = true
+server_upload_note.template = "vnt2/other_dvalue"
+
+add_file_upload_handler({ upload_note, web_upload_note, server_upload_note })
 
 return m

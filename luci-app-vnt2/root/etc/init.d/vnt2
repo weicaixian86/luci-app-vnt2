@@ -4,18 +4,29 @@ START=99
 USE_PROCD=1
 
 CONF="vnt2"
+
 CLI_LOG="/tmp/vnt2-cli.log"
 WEB_LOG="/tmp/vnt2-web.log"
+SERVER_LOG="/tmp/vnts2.log"
 DOWNLOAD_LOG="/tmp/vnt2-download.log"
+
 CLI_TIME="/tmp/vnt2_cli_time"
 WEB_TIME="/tmp/vnt2_web_time"
-CLI_CONF_DIR="/etc/config"
-CLI_CONF_DEFAULT="/etc/config/vnt2"
+SERVER_TIME="/tmp/vnts2_time"
+
+CLI_CONF_DIR="/etc/config/vnt2"
+CLI_CONF_DEFAULT="/etc/config/vnt2/vnt2-cli.toml"
+SERVER_CONF_DIR="/etc/vnt2"
+SERVER_CONF_DEFAULT="/etc/vnt2/vnts2.toml"
+
 CLI_CONF_FILE=""
+SERVER_CONF_FILE=""
 RUNTIME_FILE="/tmp/.vnt2_runtime"
+
 DOWNLOAD_CACHE_BASE="/tmp/vnt2-download-cache"
 DOWNLOAD_CLI_STATE="/tmp/vnt2-download-cli.state"
 DOWNLOAD_WEB_STATE="/tmp/vnt2-download-web.state"
+DOWNLOAD_SERVER_STATE="/tmp/vnt2-download-server.state"
 
 . /lib/functions.sh
 . /lib/functions/procd.sh
@@ -28,6 +39,10 @@ log_web() {
 	echo "$(date '+%Y-%m-%d %H:%M:%S') vnt2-web : $*" >>"${WEB_LOG}"
 }
 
+log_server() {
+	echo "$(date '+%Y-%m-%d %H:%M:%S') vnts2 : $*" >>"${SERVER_LOG}"
+}
+
 log_download() {
 	echo "$(date '+%Y-%m-%d %H:%M:%S') download : $*" >>"${DOWNLOAD_LOG}"
 }
@@ -35,6 +50,7 @@ log_download() {
 ensure_log_files() {
 	[ -f "${CLI_LOG}" ] || : >"${CLI_LOG}"
 	[ -f "${WEB_LOG}" ] || : >"${WEB_LOG}"
+	[ -f "${SERVER_LOG}" ] || : >"${SERVER_LOG}"
 	[ -f "${DOWNLOAD_LOG}" ] || : >"${DOWNLOAD_LOG}"
 }
 
@@ -51,40 +67,44 @@ sanitize_name() {
 	printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/_/g'
 }
 
-append_toml_array() {
-	local key="$1"
-	shift
+append_toml_array_file() {
+	local file="$1"
+	local key="$2"
+	shift 2
 	local first=1
 	[ "$#" -gt 0 ] || return 0
 
-	printf '%s = [' "$key" >>"${CLI_CONF_FILE}"
+	printf '%s = [' "$key" >>"${file}"
 	while [ "$#" -gt 0 ]; do
 		local item="$1"
 		shift
 		[ -n "$item" ] || continue
-		[ "$first" = "1" ] || printf ', ' >>"${CLI_CONF_FILE}"
+		[ "$first" = "1" ] || printf ', ' >>"${file}"
 		first=0
-		printf '"%s"' "$(toml_escape "$item")" >>"${CLI_CONF_FILE}"
+		printf '"%s"' "$(toml_escape "$item")" >>"${file}"
 	done
-	printf ']\n' >>"${CLI_CONF_FILE}"
+	printf ']\n' >>"${file}"
 }
 
-append_toml_bool() {
-	local key="$1"
-	local val="$2"
-	[ "$val" = "1" ] && echo "${key} = true" >>"${CLI_CONF_FILE}"
+append_toml_bool_file() {
+	local file="$1"
+	local key="$2"
+	local val="$3"
+	[ "$val" = "1" ] && echo "${key} = true" >>"${file}"
 }
 
-append_toml_string() {
-	local key="$1"
-	local val="$2"
-	[ -n "$val" ] && printf '%s = "%s"\n' "$key" "$(toml_escape "$val")" >>"${CLI_CONF_FILE}"
+append_toml_string_file() {
+	local file="$1"
+	local key="$2"
+	local val="$3"
+	[ -n "$val" ] && printf '%s = "%s"\n' "$key" "$(toml_escape "$val")" >>"${file}"
 }
 
-append_toml_int() {
-	local key="$1"
-	local val="$2"
-	[ -n "$val" ] && echo "${key} = ${val}" >>"${CLI_CONF_FILE}"
+append_toml_int_file() {
+	local file="$1"
+	local key="$2"
+	local val="$3"
+	[ -n "$val" ] && echo "${key} = ${val}" >>"${file}"
 }
 
 append_runtime_item() {
@@ -277,9 +297,7 @@ get_release_api_url() {
 	local repo="$1"
 	local tag="$2"
 
-	if [ -z "$repo" ]; then
-		repo="vnt-dev/vnt"
-	fi
+	[ -n "$repo" ] || repo="vnt-dev/vnt"
 
 	if [ -z "$tag" ] || [ "$tag" = "latest" ]; then
 		echo "https://api.github.com/repos/${repo}/releases/latest"
@@ -291,48 +309,68 @@ get_release_api_url() {
 select_release_asset() {
 	local json_file="$1"
 	local arch_patterns="$2"
+	local scope="$3"
 	local urls asset pattern
 
 	urls="$(sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" 2>/dev/null | sed 's#\\/#/#g')"
 	[ -n "$urls" ] || return 1
 
-	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
-		[ -n "$asset" ] && {
-			echo "$asset"
-			return 0
-		}
-	done
+	case "$scope" in
+		cli|web)
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
 
-	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
-		[ -n "$asset" ] && {
-			echo "$asset"
-			return 0
-		}
-	done
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
 
-	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
-		[ -n "$asset" ] && {
-			echo "$asset"
-			return 0
-		}
-	done
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
 
-	for pattern in $arch_patterns; do
-		asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.zip$' | head -n1)"
-		[ -n "$asset" ] && {
-			echo "$asset"
-			return 0
-		}
-	done
+			asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+			[ -n "$asset" ] && {
+				echo "$asset"
+				return 0
+			}
+		;;
+		server)
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
 
-	asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -iE '\.(tar\.gz|tgz|tar\.xz)$' | head -n1)"
-	[ -n "$asset" ] && {
-		echo "$asset"
-		return 0
-	}
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnts|server)' | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
+
+			asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+			[ -n "$asset" ] && {
+				echo "$asset"
+				return 0
+			}
+		;;
+	esac
 
 	asset="$(printf '%s\n' "$urls" | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
 	[ -n "$asset" ] && {
@@ -390,42 +428,23 @@ cache_bundle_ready() {
 		web)
 			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
 		;;
+		server)
+			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnts2")"
+		;;
 		*)
 			return 1
 		;;
 	esac
 }
 
-apply_downloaded_bins_to_uci() {
-	local cfg="$1"
-	local extracted_dir="$2"
-
-	local cli_bin ctrl_bin web_bin
-	cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
-	ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
-	web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
-
-	if ensure_exec "$cli_bin"; then
-		uci -q set ${CONF}.${cfg}.vnt2_cli_bin="$cli_bin"
-	fi
-	if ensure_exec "$ctrl_bin"; then
-		uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="$ctrl_bin"
-	fi
-	if ensure_exec "$web_bin"; then
-		uci -q set ${CONF}.${cfg}.vnt2_web_bin="$web_bin"
-	fi
-	uci commit ${CONF} >/dev/null 2>&1
-}
-
 auto_download_bundle() {
 	local cfg="$1"
 	local scope="$2"
 	local state_file="$3"
-	local log_func="$4"
 
 	local auto_download download_tag download_repo api_url arch_name arch_patterns
 	local cache_key cache_dir json_file release_tag asset_url asset_name asset_file extracted_dir
-	local cli_bin ctrl_bin web_bin
+	local cli_bin ctrl_bin web_bin server_bin server_name
 
 	config_get_bool auto_download "$cfg" "auto_download" "1"
 	[ "$auto_download" = "1" ] || {
@@ -433,14 +452,22 @@ auto_download_bundle() {
 		return 1
 	}
 
-	config_get download_tag "$cfg" "download_tag" "latest"
-	config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
+	case "$scope" in
+		server)
+			config_get download_tag "$cfg" "download_tag" "latest"
+			config_get download_repo "$cfg" "download_repo" "lz-ycx/vnts"
+		;;
+		*)
+			config_get download_tag "$cfg" "download_tag" "latest"
+			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
+		;;
+	esac
 	[ -n "$download_tag" ] || download_tag="latest"
 	[ -n "$download_repo" ] || download_repo="vnt-dev/vnt"
 
 	arch_name="$(detect_arch_name)"
 	arch_patterns="$(detect_arch_patterns "$arch_name")"
-	cache_key="$(sanitize_name "${download_repo}_${download_tag}_${arch_name}")"
+	cache_key="$(sanitize_name "${download_repo}_${download_tag}_${arch_name}_${scope}")"
 	cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
 	json_file="${cache_dir}/release.json"
 	extracted_dir="${cache_dir}/extracted"
@@ -450,7 +477,24 @@ auto_download_bundle() {
 	if cache_bundle_ready "$extracted_dir" "$scope"; then
 		log_download "检测到 ${scope} 已有缓存包，直接复用 ${extracted_dir}"
 		write_download_state "$state_file" "cached" "已复用本地缓存程序" "$(basename "$cache_dir")" "$download_tag" "$arch_name" "$extracted_dir"
-		apply_downloaded_bins_to_uci "$cfg" "$extracted_dir"
+
+		case "$scope" in
+			cli)
+				cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
+				ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
+				ensure_exec "$cli_bin" && uci -q set ${CONF}.${cfg}.vnt2_cli_bin="$cli_bin"
+				ensure_exec "$ctrl_bin" && uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="$ctrl_bin"
+			;;
+			web)
+				web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+				ensure_exec "$web_bin" && uci -q set ${CONF}.${cfg}.vnt2_web_bin="$web_bin"
+			;;
+			server)
+				server_bin="$(locate_extracted_bin "$extracted_dir" "vnts2")"
+				ensure_exec "$server_bin" && uci -q set ${CONF}.${cfg}.vnts2_bin="$server_bin"
+			;;
+		esac
+		uci commit ${CONF} >/dev/null 2>&1
 		return 0
 	fi
 
@@ -466,8 +510,8 @@ auto_download_bundle() {
 
 	release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
 	[ -n "$release_tag" ] || release_tag="$download_tag"
-	asset_url="$(select_release_asset "$json_file" "$arch_patterns")" || {
-		log_download "未找到匹配 ${arch_name} 的发行资源"
+	asset_url="$(select_release_asset "$json_file" "$arch_patterns" "$scope")" || {
+		log_download "未找到匹配 ${arch_name} 的 ${scope} 发行资源"
 		write_download_state "$state_file" "failed" "未找到匹配当前架构的发行资源" "" "$release_tag" "$arch_name" ""
 		return 1
 	}
@@ -494,12 +538,10 @@ auto_download_bundle() {
 		return 1
 	fi
 
-	cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
-	ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
-	web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
-
 	case "$scope" in
 		cli)
+			cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
+			ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
 			if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin"; then
 				log_download "下载包中未找到完整的 vnt2_cli / vnt2_ctrl"
 				write_download_state "$state_file" "failed" "下载包中未找到完整的 vnt2_cli / vnt2_ctrl" "$asset_name" "$release_tag" "$arch_name" ""
@@ -513,6 +555,7 @@ auto_download_bundle() {
 			return 0
 		;;
 		web)
+			web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
 			if ! ensure_exec "$web_bin"; then
 				log_download "下载包中未找到 vnt2_web"
 				write_download_state "$state_file" "failed" "下载包中未找到 vnt2_web" "$asset_name" "$release_tag" "$arch_name" ""
@@ -522,6 +565,24 @@ auto_download_bundle() {
 			uci commit ${CONF} >/dev/null 2>&1
 			log_download "Web 程序已准备完成：web=${web_bin}"
 			write_download_state "$state_file" "success" "已自动下载并准备 vnt2_web" "$asset_name" "$release_tag" "$arch_name" "$web_bin"
+			return 0
+		;;
+		server)
+			server_name="vnts2"
+			server_bin="$(locate_extracted_bin "$extracted_dir" "$server_name")"
+			if ! ensure_exec "$server_bin"; then
+				server_name="vnts"
+				server_bin="$(locate_extracted_bin "$extracted_dir" "$server_name")"
+			fi
+			if ! ensure_exec "$server_bin"; then
+				log_download "下载包中未找到 vnts2 / vnts"
+				write_download_state "$state_file" "failed" "下载包中未找到 vnts2 / vnts" "$asset_name" "$release_tag" "$arch_name" ""
+				return 1
+			fi
+			uci -q set ${CONF}.${cfg}.vnts2_bin="$server_bin"
+			uci commit ${CONF} >/dev/null 2>&1
+			log_download "服务端程序已准备完成：server=${server_bin}"
+			write_download_state "$state_file" "success" "已自动下载并准备 vnts2" "$asset_name" "$release_tag" "$arch_name" "$server_bin"
 			return 0
 		;;
 	esac
@@ -535,9 +596,8 @@ prepare_binary() {
 	local option="$2"
 	local default_path="$3"
 	local upload_name="$4"
-	local log_func="$5"
-	local state_file="$6"
-	local scope="$7"
+	local state_file="$5"
+	local scope="$6"
 
 	local bin
 	config_get bin "$cfg" "$option" "$default_path"
@@ -547,7 +607,7 @@ prepare_binary() {
 		return 0
 	fi
 
-	if auto_download_bundle "$cfg" "$scope" "$state_file" "$log_func"; then
+	if auto_download_bundle "$cfg" "$scope" "$state_file"; then
 		bin="$(uci -q get ${CONF}.${cfg}.${option})"
 		if ensure_exec "$bin"; then
 			echo "$bin"
@@ -558,11 +618,10 @@ prepare_binary() {
 	local uploaded
 	uploaded="$(find_uploaded_bin "$upload_name")"
 	if [ -n "$uploaded" ]; then
-		$log_func "自动下载不可用，检测到上传程序 ${uploaded}，将回退使用该路径启动"
 		log_download "${scope} 自动下载失败，回退到本地上传程序 ${uploaded}"
 		bin="$uploaded"
 		uci -q set ${CONF}.${cfg}.${option}="$bin"
-		uci commit ${CONF}
+		uci commit ${CONF} >/dev/null 2>&1
 		write_download_state "$state_file" "fallback" "自动下载失败，已回退到本地上传程序" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$uploaded"
 	fi
 
@@ -653,6 +712,20 @@ cleanup_network() {
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
+ensure_firewall_rule() {
+	local rule="$1"
+	local name="$2"
+	local proto="$3"
+	local port="$4"
+
+	uci set firewall.${rule}='rule'
+	uci set firewall.${rule}.name="${name}"
+	uci set firewall.${rule}.src='wan'
+	uci set firewall.${rule}.target='ACCEPT'
+	uci set firewall.${rule}.proto="${proto}"
+	uci set firewall.${rule}.dest_port="${port}"
+}
+
 configure_web_firewall() {
 	local host="$1"
 	local port="$2"
@@ -660,12 +733,7 @@ configure_web_firewall() {
 
 	uci -q delete firewall.vnt2web
 	if [ "$wan" = "1" ] && [ -n "$port" ] && [ "$host" = "0.0.0.0" -o "$host" = "::" ]; then
-		uci set firewall.vnt2web='rule'
-		uci set firewall.vnt2web.name='vnt2_web'
-		uci set firewall.vnt2web.src='wan'
-		uci set firewall.vnt2web.target='ACCEPT'
-		uci set firewall.vnt2web.proto='tcp'
-		uci set firewall.vnt2web.dest_port="$port"
+		ensure_firewall_rule "vnt2web" "vnt2_web" "tcp" "$port"
 	fi
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
@@ -675,10 +743,47 @@ cleanup_web_firewall() {
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
-collect_list_values() {
+configure_server_firewall() {
+	local tcp_bind="$1"
+	local quic_bind="$2"
+	local ws_bind="$3"
+	local web_bind="$4"
+	local open_tcp="$5"
+	local open_quic="$6"
+	local open_ws="$7"
+	local open_web="$8"
+
+	local tcp_port quic_port ws_port web_port
+	tcp_port="${tcp_bind##*:}"
+	quic_port="${quic_bind##*:}"
+	ws_port="${ws_bind##*:}"
+	web_port="${web_bind##*:}"
+
+	uci -q delete firewall.vnts2_tcp
+	uci -q delete firewall.vnts2_quic
+	uci -q delete firewall.vnts2_ws
+	uci -q delete firewall.vnts2_web
+
+	[ "$open_tcp" = "1" ] && [ -n "$tcp_port" ] && ensure_firewall_rule "vnts2_tcp" "vnts2_tcp" "tcp" "$tcp_port"
+	[ "$open_quic" = "1" ] && [ -n "$quic_port" ] && ensure_firewall_rule "vnts2_quic" "vnts2_quic" "udp" "$quic_port"
+	[ "$open_ws" = "1" ] && [ -n "$ws_port" ] && ensure_firewall_rule "vnts2_ws" "vnts2_ws" "tcp" "$ws_port"
+	[ "$open_web" = "1" ] && [ -n "$web_port" ] && ensure_firewall_rule "vnts2_web" "vnts2_web" "tcp" "$web_port"
+
+	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+cleanup_server_firewall() {
+	uci -q delete firewall.vnts2_tcp
+	uci -q delete firewall.vnts2_quic
+	uci -q delete firewall.vnts2_ws
+	uci -q delete firewall.vnts2_web
+	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+collect_runtime_list() {
 	local cfg="$1"
 	local opt="$2"
-	> "${RUNTIME_FILE}.${opt}"
+	: > "${RUNTIME_FILE}.${opt}"
 	config_list_foreach "$cfg" "$opt" append_runtime_item "$opt"
 	sed -n "s/^${opt}=//p" "${RUNTIME_FILE}" 2>/dev/null >"${RUNTIME_FILE}.${opt}"
 }
@@ -772,31 +877,100 @@ build_cli_config() {
 		tcp_stun_args="${tcp_stun_args}__ITEM__${item}"
 	done
 
-	[ -n "$server_args" ] && append_toml_array "server" $(printf '%s\n' "$server_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$ip" ] && append_toml_string "ip" "$ip"
-	[ -n "$device_id" ] && append_toml_string "device_id" "$device_id"
-	[ -n "$device_name" ] && append_toml_string "device_name" "$device_name"
-	[ -n "$tun_name" ] && append_toml_string "tun_name" "$tun_name"
-	[ -n "$password" ] && append_toml_string "password" "$password"
-	[ -n "$cert_mode" ] && append_toml_string "cert_mode" "$cert_mode"
-	[ -n "$mtu" ] && append_toml_int "mtu" "$mtu"
-	[ -n "$ctrl_port" ] && append_toml_int "ctrl_port" "$ctrl_port"
-	[ -n "$tunnel_port" ] && append_toml_int "tunnel_port" "$tunnel_port"
-	append_toml_bool "no_punch" "$no_punch"
-	append_toml_bool "rtx" "$rtx"
-	append_toml_bool "compress" "$compress"
-	append_toml_bool "fec" "$fec"
-	append_toml_bool "no_nat" "$no_nat"
-	append_toml_bool "no_tun" "$no_tun"
-	append_toml_bool "allow_mapping" "$allow_mapping"
-	[ -n "$input_args" ] && append_toml_array "input" $(printf '%s\n' "$input_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$output_args" ] && append_toml_array "output" $(printf '%s\n' "$output_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$mapping_args" ] && append_toml_array "port_mapping" $(printf '%s\n' "$mapping_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$udp_stun_args" ] && append_toml_array "udp_stun" $(printf '%s\n' "$udp_stun_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$tcp_stun_args" ] && append_toml_array "tcp_stun" $(printf '%s\n' "$tcp_stun_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$server_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "server" $(printf '%s\n' "$server_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$ip" ] && append_toml_string_file "${CLI_CONF_FILE}" "ip" "$ip"
+	[ -n "$device_id" ] && append_toml_string_file "${CLI_CONF_FILE}" "device_id" "$device_id"
+	[ -n "$device_name" ] && append_toml_string_file "${CLI_CONF_FILE}" "device_name" "$device_name"
+	[ -n "$tun_name" ] && append_toml_string_file "${CLI_CONF_FILE}" "tun_name" "$tun_name"
+	[ -n "$password" ] && append_toml_string_file "${CLI_CONF_FILE}" "password" "$password"
+	[ -n "$cert_mode" ] && append_toml_string_file "${CLI_CONF_FILE}" "cert_mode" "$cert_mode"
+	[ -n "$mtu" ] && append_toml_int_file "${CLI_CONF_FILE}" "mtu" "$mtu"
+	[ -n "$ctrl_port" ] && append_toml_int_file "${CLI_CONF_FILE}" "cmd_port" "$ctrl_port"
+	[ -n "$tunnel_port" ] && append_toml_int_file "${CLI_CONF_FILE}" "port" "$tunnel_port"
+	append_toml_bool_file "${CLI_CONF_FILE}" "no_punch" "$no_punch"
+	append_toml_bool_file "${CLI_CONF_FILE}" "use_channel_type" "$rtx"
+	append_toml_bool_file "${CLI_CONF_FILE}" "compressor" "$compress"
+	append_toml_bool_file "${CLI_CONF_FILE}" "use_fec" "$fec"
+	append_toml_bool_file "${CLI_CONF_FILE}" "disable_stats" "0"
+	append_toml_bool_file "${CLI_CONF_FILE}" "no_proxy" "$no_nat"
+	append_toml_bool_file "${CLI_CONF_FILE}" "no_tun" "$no_tun"
+	append_toml_bool_file "${CLI_CONF_FILE}" "allow_wire_guard" "$allow_mapping"
+	[ -n "$input_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "in_ips" $(printf '%s\n' "$input_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$output_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "out_ips" $(printf '%s\n' "$output_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$mapping_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "mapping" $(printf '%s\n' "$mapping_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$udp_stun_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "stun_server" $(printf '%s\n' "$udp_stun_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
+	[ -n "$tcp_stun_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "stun_server_tcp" $(printf '%s\n' "$tcp_stun_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
 
-	echo "$vnt2_forward" > /tmp/vnt2_forward.list
-	echo "$bind_dev" > /tmp/vnt2_bind_dev
+	echo "$vnt2_forward" >/tmp/vnt2_forward.list
+	echo "$bind_dev" >/tmp/vnt2_bind_dev
+	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
+	return 0
+}
+
+build_server_config() {
+	local cfg="$1"
+	local server_conf_file server_conf_dir
+	local tcp_bind quic_bind ws_bind web_bind server_quic_bind
+	local cert key network lease_duration persistence username password server_token
+	local white_list peer_servers custom_net
+
+	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
+
+	config_get server_conf_file "$cfg" "server_conf_file" "${SERVER_CONF_DEFAULT}"
+	[ -n "$server_conf_file" ] || server_conf_file="${SERVER_CONF_DEFAULT}"
+	SERVER_CONF_FILE="$server_conf_file"
+	server_conf_dir="$(dirname "${SERVER_CONF_FILE}")"
+	[ -n "$server_conf_dir" ] || server_conf_dir="${SERVER_CONF_DIR}"
+
+	config_get tcp_bind "$cfg" "tcp_bind" "0.0.0.0:29872"
+	config_get quic_bind "$cfg" "quic_bind" "0.0.0.0:29872"
+	config_get ws_bind "$cfg" "ws_bind" "0.0.0.0:29872"
+	config_get web_bind "$cfg" "web_bind" "0.0.0.0:29871"
+	config_get server_quic_bind "$cfg" "server_quic_bind"
+	config_get cert "$cfg" "cert"
+	config_get key "$cfg" "key"
+	config_get network "$cfg" "network" "10.26.0.0/24"
+	config_get lease_duration "$cfg" "lease_duration" "86400"
+	config_get_bool persistence "$cfg" "persistence" "1"
+	config_get username "$cfg" "username" "admin"
+	config_get password "$cfg" "password" "admin"
+	config_get server_token "$cfg" "server_token"
+
+	config_list_foreach "$cfg" white_list append_runtime_item white_list
+	config_list_foreach "$cfg" peer_servers append_runtime_item peer_servers
+	config_list_foreach "$cfg" custom_net append_runtime_item custom_net
+
+	white_list="$(sed -n 's/^white_list=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+	peer_servers="$(sed -n 's/^peer_servers=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+	custom_net="$(sed -n 's/^custom_net=//p' "${RUNTIME_FILE}" 2>/dev/null)"
+
+	mkdir -p "${server_conf_dir}"
+	: >"${SERVER_CONF_FILE}"
+
+	append_toml_string_file "${SERVER_CONF_FILE}" "tcp" "$tcp_bind"
+	append_toml_string_file "${SERVER_CONF_FILE}" "quic" "$quic_bind"
+	append_toml_string_file "${SERVER_CONF_FILE}" "ws" "$ws_bind"
+	append_toml_string_file "${SERVER_CONF_FILE}" "web" "$web_bind"
+	append_toml_string_file "${SERVER_CONF_FILE}" "quic_proxy" "$server_quic_bind"
+	append_toml_string_file "${SERVER_CONF_FILE}" "cert" "$cert"
+	append_toml_string_file "${SERVER_CONF_FILE}" "key" "$key"
+	append_toml_string_file "${SERVER_CONF_FILE}" "network" "$network"
+	append_toml_int_file "${SERVER_CONF_FILE}" "lease_duration" "$lease_duration"
+	append_toml_bool_file "${SERVER_CONF_FILE}" "persistence" "$persistence"
+	append_toml_string_file "${SERVER_CONF_FILE}" "username" "$username"
+	append_toml_string_file "${SERVER_CONF_FILE}" "password" "$password"
+	append_toml_string_file "${SERVER_CONF_FILE}" "token" "$server_token"
+
+	if [ -n "$(trim_list "$white_list")" ]; then
+		append_toml_array_file "${SERVER_CONF_FILE}" "white_token" $(trim_list "$white_list")
+	fi
+	if [ -n "$(trim_list "$peer_servers")" ]; then
+		append_toml_array_file "${SERVER_CONF_FILE}" "server_address" $(trim_list "$peer_servers")
+	fi
+	if [ -n "$(trim_list "$custom_net")" ]; then
+		append_toml_array_file "${SERVER_CONF_FILE}" "cidr" $(trim_list "$custom_net")
+	fi
+
 	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
 	return 0
 }
@@ -817,7 +991,7 @@ start_cli_instance() {
 
 	if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin"; then
 		log_cli "检测到 CLI/CTRL 程序不完整，尝试自动下载或回退到上传程序"
-		cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" log_cli "$DOWNLOAD_CLI_STATE" "cli")" || {
+		cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" "$DOWNLOAD_CLI_STATE" "cli")" || {
 			log_cli "启动失败：未找到完整的 vnt2_cli / vnt2_ctrl，请上传或安装程序"
 			return 1
 		}
@@ -878,7 +1052,7 @@ start_web_instance() {
 	fi
 
 	log_web "开始启动"
-	web_bin="$(prepare_binary "$cfg" "vnt2_web_bin" "/usr/bin/vnt2_web" "vnt2_web" log_web "$DOWNLOAD_WEB_STATE" "web")" || {
+	web_bin="$(prepare_binary "$cfg" "vnt2_web_bin" "/usr/bin/vnt2_web" "vnt2_web" "$DOWNLOAD_WEB_STATE" "web")" || {
 		log_web "启动失败：未找到可执行文件，请上传或安装 vnt2_web"
 		return 1
 	}
@@ -905,14 +1079,68 @@ start_web_instance() {
 	log_web "启动命令已提交"
 }
 
+start_server_instance() {
+	local cfg="$1"
+	local enabled server_bin server_conf_file
+	local tcp_bind quic_bind ws_bind web_bind
+	local open_tcp open_quic open_ws open_web
+
+	config_get_bool enabled "$cfg" "enabled" "0"
+	if [ "$enabled" != "1" ]; then
+		log_server "未启用，跳过启动"
+		return 0
+	fi
+
+	log_server "开始启动"
+	server_bin="$(prepare_binary "$cfg" "vnts2_bin" "/usr/bin/vnts2" "vnts2" "$DOWNLOAD_SERVER_STATE" "server")" || {
+		log_server "启动失败：未找到可执行文件，请上传或安装 vnts2"
+		return 1
+	}
+
+	if ! build_server_config "$cfg"; then
+		log_server "启动失败：生成配置文件失败"
+		return 1
+	fi
+
+	config_get server_conf_file "$cfg" "server_conf_file" "${SERVER_CONF_DEFAULT}"
+	config_get tcp_bind "$cfg" "tcp_bind" "0.0.0.0:29872"
+	config_get quic_bind "$cfg" "quic_bind" "0.0.0.0:29872"
+	config_get ws_bind "$cfg" "ws_bind" "0.0.0.0:29872"
+	config_get web_bind "$cfg" "web_bind" "0.0.0.0:29871"
+	config_get_bool open_tcp "$cfg" "open_wan_tcp" "0"
+	config_get_bool open_quic "$cfg" "open_wan_quic" "0"
+	config_get_bool open_ws "$cfg" "open_wan_ws" "0"
+	config_get_bool open_web "$cfg" "open_wan_web" "0"
+
+	configure_server_firewall "$tcp_bind" "$quic_bind" "$ws_bind" "$web_bind" "$open_tcp" "$open_quic" "$open_ws" "$open_web"
+
+	log_server "使用 ${server_bin} 启动，配置文件 ${server_conf_file}"
+	procd_open_instance "vnts2"
+	procd_set_param command /bin/sh -c "exec \"${server_bin}\" --conf \"${server_conf_file}\" >>\"${SERVER_LOG}\" 2>&1"
+	procd_set_param stdout 0
+	procd_set_param stderr 0
+	procd_set_param respawn
+	procd_set_param file "${server_conf_file}"
+	procd_set_param limits core="unlimited"
+	procd_set_param limits nofile="1048576 1048576"
+	procd_set_param term_timeout 10
+	procd_close_instance
+	date +%s >"${SERVER_TIME}"
+	log_server "启动命令已提交"
+}
+
 start_service() {
 	ensure_log_files
 	log_cli "服务启动流程开始"
 	log_web "服务启动流程开始"
+	log_server "服务启动流程开始"
 	log_download "服务启动流程开始"
+
 	config_load "${CONF}"
 	start_cli_instance "vnt2_cli"
 	start_web_instance "vnt2_web"
+	start_server_instance "vnts2"
+
 	log_download "服务启动流程结束"
 }
 
@@ -920,12 +1148,17 @@ stop_service() {
 	ensure_log_files
 	log_cli "服务停止流程开始"
 	log_web "服务停止流程开始"
+	log_server "服务停止流程开始"
 	log_download "服务停止流程开始"
-	rm -f "${CLI_TIME}" "${WEB_TIME}" "${RUNTIME_FILE}" "${RUNTIME_FILE}".* /tmp/vnt2_forward.list /tmp/vnt2_bind_dev
+
+	rm -f "${CLI_TIME}" "${WEB_TIME}" "${SERVER_TIME}" "${RUNTIME_FILE}" "${RUNTIME_FILE}".* /tmp/vnt2_forward.list /tmp/vnt2_bind_dev
 	cleanup_network
 	cleanup_web_firewall
+	cleanup_server_firewall
+
 	log_cli "服务已停止"
 	log_web "服务已停止"
+	log_server "服务已停止"
 	log_download "服务停止流程结束"
 }
 

@@ -1,153 +1,322 @@
+<%
+local dsp = require "luci.dispatcher"
+local status_url = dsp.build_url("admin", "vpn", "vnt2", "status")
+local open_web_url = dsp.build_url("admin", "vpn", "vnt2", "open_web")
+local client_log_url = dsp.build_url("admin", "vpn", "vnt2", "client_log")
+local web_log_url = dsp.build_url("admin", "vpn", "vnt2", "web_log")
+local server_log_url = dsp.build_url("admin", "vpn", "vnt2", "server_log")
+local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
+%>
+
+<style type="text/css">
+	.vnt2-status-wrap {
+		margin: 10px 0 24px;
+	}
+	.vnt2-status-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+		gap: 14px;
+	}
+	.vnt2-card {
+		border: 1px solid #d9d9d9;
+		border-radius: 8px;
+		padding: 14px 16px;
+		background: #fff;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+	}
+	.vnt2-card h3 {
+		margin: 0 0 10px;
+		font-size: 16px;
+		line-height: 1.4;
+	}
+	.vnt2-badge {
+		display: inline-block;
+		min-width: 68px;
+		padding: 2px 10px;
+		border-radius: 999px;
+		font-size: 12px;
+		line-height: 22px;
+		color: #fff;
+		text-align: center;
+		margin-left: 8px;
+		vertical-align: middle;
+	}
+	.vnt2-on {
+		background: #19a15f;
+	}
+	.vnt2-off {
+		background: #d9534f;
+	}
+	.vnt2-warn {
+		background: #f0ad4e;
+	}
+	.vnt2-card table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 12px;
+	}
+	.vnt2-card td {
+		padding: 5px 0;
+		border-bottom: 1px dashed #ececec;
+		vertical-align: top;
+		word-break: break-all;
+	}
+	.vnt2-card td:first-child {
+		width: 104px;
+		color: #666;
+		padding-right: 8px;
+	}
+	.vnt2-card td:last-child {
+		color: #222;
+	}
+	.vnt2-links {
+		margin-top: 9px;
+		font-size: 12px;
+	}
+	.vnt2-links a {
+		margin-right: 12px;
+	}
+	.vnt2-summary {
+		margin-top: 14px;
+	}
+	.vnt2-summary pre {
+		margin: 8px 0 0;
+		max-height: 180px;
+		overflow: auto;
+		padding: 10px;
+		background: #fafafa;
+		border: 1px solid #ececec;
+		border-radius: 6px;
+		white-space: pre-wrap;
+		word-break: break-all;
+		font-size: 12px;
+		line-height: 1.5;
+	}
+	.vnt2-toolbar {
+		margin: 12px 0 0;
+		font-size: 12px;
+		color: #666;
+	}
+	.vnt2-toolbar span {
+		margin-right: 14px;
+	}
+</style>
+
+<div class="vnt2-status-wrap">
+	<div class="vnt2-status-grid">
+		<div class="vnt2-card">
+			<h3>
+				vnt2_cli 客户端
+				<span id="cli_status_badge" class="vnt2-badge vnt2-off">未运行</span>
+			</h3>
+			<table>
+				<tr><td>本地版本</td><td id="cli_tag">-</td></tr>
+				<tr><td>最新版本</td><td id="latest_tag">-</td></tr>
+				<tr><td>运行时长</td><td id="cli_runtime">-</td></tr>
+				<tr><td>进程/PID</td><td id="cli_pid">-</td></tr>
+				<tr><td>CPU / 内存</td><td id="cli_usage">-</td></tr>
+				<tr><td>网络编号</td><td id="cli_network_code">-</td></tr>
+				<tr><td>设备名称</td><td id="cli_device_name">-</td></tr>
+				<tr><td>设备 ID</td><td id="cli_device_id">-</td></tr>
+				<tr><td>服务器地址</td><td id="cli_servers">-</td></tr>
+				<tr><td>TUN / NAT</td><td id="cli_tun_nat">-</td></tr>
+				<tr><td>控制端口</td><td id="ctrl_port">-</td></tr>
+				<tr><td>下载状态</td><td id="cli_download">-</td></tr>
+			</table>
+			<div class="vnt2-links">
+				<a href="<%=client_log_url%>">查看客户端日志</a>
+				<a href="<%=download_log_url%>">查看下载日志</a>
+			</div>
+		</div>
+
+		<div class="vnt2-card">
+			<h3>
+				vnt2_web 客户端
+				<span id="web_status_badge" class="vnt2-badge vnt2-off">未运行</span>
+			</h3>
+			<table>
+				<tr><td>本地版本</td><td id="web_tag">-</td></tr>
+				<tr><td>最新版本</td><td id="web_latest_tag">-</td></tr>
+				<tr><td>运行时长</td><td id="web_runtime">-</td></tr>
+				<tr><td>进程/PID</td><td id="web_pid">-</td></tr>
+				<tr><td>CPU / 内存</td><td id="web_usage">-</td></tr>
+				<tr><td>监听地址</td><td id="web_addr">-</td></tr>
+				<tr><td>日志级别</td><td id="web_log_level">-</td></tr>
+				<tr><td>WAN 放行</td><td id="web_wan">-</td></tr>
+				<tr><td>访问地址</td><td id="web_url">-</td></tr>
+				<tr><td>下载状态</td><td id="web_download">-</td></tr>
+			</table>
+			<div class="vnt2-links">
+				<a href="<%=open_web_url%>" target="_blank">打开 vnt2_web 页面</a>
+				<a href="<%=web_log_url%>">查看 Web 日志</a>
+			</div>
+		</div>
+
+		<div class="vnt2-card">
+			<h3>
+				vnts2 服务端
+				<span id="server_status_badge" class="vnt2-badge vnt2-off">未运行</span>
+			</h3>
+			<table>
+				<tr><td>本地版本</td><td id="server_tag">-</td></tr>
+				<tr><td>最新版本</td><td id="latest_server_tag">-</td></tr>
+				<tr><td>运行时长</td><td id="server_runtime">-</td></tr>
+				<tr><td>进程/PID</td><td id="server_pid">-</td></tr>
+				<tr><td>CPU / 内存</td><td id="server_usage">-</td></tr>
+				<tr><td>TCP / QUIC</td><td id="server_tcp_quic">-</td></tr>
+				<tr><td>WS / WEB</td><td id="server_ws_web">-</td></tr>
+				<tr><td>虚拟网段</td><td id="server_network">-</td></tr>
+				<tr><td>持久化 / 租约</td><td id="server_persistence">-</td></tr>
+				<tr><td>集群节点</td><td id="server_peer_servers">-</td></tr>
+				<tr><td>下载状态</td><td id="server_download">-</td></tr>
+			</table>
+			<div class="vnt2-links">
+				<a href="<%=server_log_url%>">查看服务端日志</a>
+				<a href="<%=download_log_url%>">查看下载日志</a>
+			</div>
+		</div>
+	</div>
+
+	<div class="vnt2-summary vnt2-card">
+		<h3>运行摘要</h3>
+		<table>
+			<tr><td>客户端信息预览</td><td id="cli_info_short">-</td></tr>
+			<tr><td>客户端节点预览</td><td id="cli_ips_short">-</td></tr>
+			<tr><td>服务端白名单</td><td id="server_white_list">-</td></tr>
+			<tr><td>服务端附加网段</td><td id="server_custom_net">-</td></tr>
+			<tr><td>服务端配置文件</td><td id="server_conf_file">-</td></tr>
+			<tr><td>下载日志大小</td><td id="download_log_size">-</td></tr>
+		</table>
+		<pre id="server_conf_preview">加载中...</pre>
+		<div class="vnt2-toolbar">
+			<span>状态面板每 5 秒自动刷新一次</span>
+			<span>如果本地环境无 curl，远端最新版本号可能显示为空</span>
+		</div>
+	</div>
+</div>
+
 <script type="text/javascript">
 //<![CDATA[
 (function() {
-	function escapeHtml(str) {
-		var div = document.createElement("div");
-		div.appendChild(document.createTextNode(String(str == null ? "" : str)));
-		return div.innerHTML;
+	var statusUrl = "<%=status_url%>";
+
+	function byId(id) {
+		return document.getElementById(id);
+	}
+
+	function text(v, empty) {
+		if (v === null || v === undefined || v === "") {
+			return empty || "-";
+		}
+		return String(v);
 	}
 
 	function yesNo(v) {
-		return v === "1" || v === 1 || v === true ? "是" : "否";
+		return String(v) === "1" ? "已启用" : "未启用";
 	}
 
-	function runningBadge(ok) {
-		return ok
-			? "<span style='display:inline-block;padding:2px 8px;background:#e8f5e9;color:#2e7d32;border-radius:12px;'>运行中</span>"
-			: "<span style='display:inline-block;padding:2px 8px;background:#ffebee;color:#c62828;border-radius:12px;'>未运行</span>";
-	}
-
-	function kv(label, value) {
-		if (value === undefined || value === null || value === "") {
-			return "";
+	function joinList(v) {
+		if (!v || !v.length) {
+			return "-";
 		}
-		return "<div style='margin:4px 0;'><strong>" + escapeHtml(label) + "</strong>" + escapeHtml(value) + "</div>";
+		return v.join(" / ");
 	}
 
-	function listBlock(label, values) {
-		if (!values || !values.length) {
-			return "";
+	function shortText(v, max) {
+		v = text(v, "-");
+		if (v.length <= max) {
+			return v;
 		}
+		return v.substring(0, max) + " ...";
+	}
+
+	function setBadge(id, running) {
+		var node = byId(id);
+		if (!node) return;
+		node.className = "vnt2-badge " + (running ? "vnt2-on" : "vnt2-off");
+		node.innerHTML = running ? "运行中" : "未运行";
+	}
+
+	function setHtml(id, value) {
+		var node = byId(id);
+		if (node) {
+			node.innerHTML = value;
+		}
+	}
+
+	function stateText(obj) {
+		if (!obj) return "-";
 		var items = [];
-		for (var i = 0; i < values.length; i++) {
-			items.push("<li>" + escapeHtml(values[i]) + "</li>");
-		}
-		return "<div style='margin:6px 0;'><strong>" + escapeHtml(label) + "</strong><ul style='margin:6px 0 0 20px;'>" + items.join("") + "</ul></div>";
+		if (obj.state) items.push("状态：" + obj.state);
+		if (obj.tag) items.push("版本：" + obj.tag);
+		if (obj.arch) items.push("架构：" + obj.arch);
+		if (obj.asset) items.push("资源：" + obj.asset);
+		if (obj.message) items.push(obj.message);
+		if (obj.time) items.push("时间：" + obj.time);
+		return items.length ? items.join("<br />") : "-";
 	}
 
-	function downloadStateBlock(title, data) {
-		if (!data) {
-			return "";
-		}
-		var lines = [];
-		if (data.state) lines.push("状态：" + data.state);
-		if (data.tag) lines.push("版本：" + data.tag);
-		if (data.asset) lines.push("资产：" + data.asset);
-		if (data.arch) lines.push("架构：" + data.arch);
-		if (data.path) lines.push("保存路径：" + data.path);
-		if (data.time) lines.push("时间：" + data.time);
-		if (data.message) lines.push("说明：" + data.message);
-		if (!lines.length) {
-			return "";
-		}
-		return "<div style='margin-top:8px;padding:8px 10px;background:#fafafa;border:1px solid #eee;border-radius:6px;'>" +
-			"<strong>" + escapeHtml(title) + "</strong><br />" + escapeHtml(lines.join(" | ")) + "</div>";
+	function render(data) {
+		setBadge("cli_status_badge", data.cli_running);
+		setBadge("web_status_badge", data.web_running);
+		setBadge("server_status_badge", data.server_running);
+
+		setHtml("cli_tag", text(data.cli_tag));
+		setHtml("latest_tag", text(data.latest_tag));
+		setHtml("cli_runtime", text(data.cli_runtime));
+		setHtml("cli_pid", data.cli_running ? ("PID " + text(data.cli_pid)) : "未运行");
+		setHtml("cli_usage", [text(data.cli_cpu, "0"), text(data.cli_ram, "0 MB")].join(" / "));
+		setHtml("cli_network_code", text(data.cli_network_code));
+		setHtml("cli_device_name", text(data.cli_device_name));
+		setHtml("cli_device_id", text(data.cli_device_id));
+		setHtml("cli_servers", joinList(data.cli_servers));
+		setHtml("cli_tun_nat", "TUN：" + (String(data.cli_no_tun) === "1" ? "关闭" : text(data.cli_tun_name)) + " / NAT：" + (String(data.cli_no_nat) === "1" ? "关闭" : "开启"));
+		setHtml("ctrl_port", text(data.ctrl_port));
+		setHtml("cli_download", stateText(data.cli_download));
+
+		setHtml("web_tag", text(data.web_tag));
+		setHtml("web_latest_tag", text(data.latest_tag));
+		setHtml("web_runtime", text(data.web_runtime));
+		setHtml("web_pid", data.web_running ? ("PID " + text(data.web_pid)) : "未运行");
+		setHtml("web_usage", [text(data.web_cpu, "0"), text(data.web_ram, "0 MB")].join(" / "));
+		setHtml("web_addr", text(data.web_host) + ":" + text(data.web_port));
+		setHtml("web_log_level", text(data.web_log_level));
+		setHtml("web_wan", yesNo(data.web_wan));
+		setHtml("web_url", data.web_url ? ('<a href="' + data.web_url + '" target="_blank">' + data.web_url + "</a>") : "-");
+		setHtml("web_download", stateText(data.web_download));
+
+		setHtml("server_tag", text(data.server_tag));
+		setHtml("latest_server_tag", text(data.latest_server_tag));
+		setHtml("server_runtime", text(data.server_runtime));
+		setHtml("server_pid", data.server_running ? ("PID " + text(data.server_pid)) : "未运行");
+		setHtml("server_usage", [text(data.server_cpu, "0"), text(data.server_ram, "0 MB")].join(" / "));
+		setHtml("server_tcp_quic", "TCP：" + text(data.server_tcp_bind) + "<br />QUIC：" + text(data.server_quic_bind));
+		setHtml("server_ws_web", "WS/WSS：" + text(data.server_ws_bind) + "<br />WEB：" + text(data.server_web_bind));
+		setHtml("server_network", text(data.server_network));
+		setHtml("server_persistence", "持久化：" + yesNo(data.server_persistence) + " / 租约：" + text(data.server_lease_duration) + " 秒");
+		setHtml("server_peer_servers", joinList(data.server_peer_servers));
+		setHtml("server_download", stateText(data.server_download));
+
+		setHtml("cli_info_short", shortText(data.cli_info_preview, 240));
+		setHtml("cli_ips_short", shortText(data.cli_ips_preview, 240));
+		setHtml("server_white_list", joinList(data.server_white_list));
+		setHtml("server_custom_net", joinList(data.server_custom_net));
+		setHtml("server_conf_file", text(data.server_conf_file));
+		setHtml("download_log_size", text(data.download_log_size) + " bytes");
+		byId("server_conf_preview").textContent = text(data.server_conf_preview, "暂无配置内容");
 	}
 
-	function codeBlock(title, content) {
-		if (!content) {
-			return "";
-		}
-		return "<div style='margin-top:10px;'><strong>" + escapeHtml(title) + "</strong>" +
-			"<pre style='margin-top:6px;max-height:220px;overflow:auto;background:#0b1020;color:#d7e3ff;padding:12px;border-radius:8px;white-space:pre-wrap;word-break:break-all;'>" +
-			escapeHtml(content) + "</pre></div>";
+	function updateStatus() {
+		XHR.get(statusUrl, null, function(x, data) {
+			if (!data) {
+				return;
+			}
+			render(data);
+		});
 	}
 
-	function buildCliCard(data) {
-		var html = "";
-		html += "<div class='cbi-section' style='margin-bottom:16px;'>";
-		html += "<h3 style='margin-bottom:10px;'>vnt2_cli " + runningBadge(data.cli_running) + "</h3>";
-		html += kv("当前版本：", data.cli_tag || "未知");
-		html += kv("最新版本：", data.latest_tag || "未知");
-		html += kv("运行时长：", data.cli_runtime || "未运行");
-		html += kv("CPU：", data.cli_cpu || "-");
-		html += kv("内存：", data.cli_ram || "-");
-		html += kv("网络编号：", data.cli_network_code || "-");
-		html += kv("设备名称：", data.cli_device_name || "-");
-		html += kv("设备 ID：", data.cli_device_id || "-");
-		html += kv("虚拟网卡：", data.cli_tun_name || "-");
-		html += kv("控制端口：", data.ctrl_port || "-");
-		html += kv("无 TUN 模式：", yesNo(data.cli_no_tun));
-		html += kv("关闭 NAT：", yesNo(data.cli_no_nat));
-		html += kv("自动下载：", yesNo(data.cli_auto_download));
-		html += kv("下载仓库：", data.cli_download_repo || "-");
-		html += kv("下载版本：", data.cli_download_tag || "-");
-		html += listBlock("服务器列表", data.cli_servers);
-		html += downloadStateBlock("CLI 下载状态", data.cli_download);
-		html += codeBlock("本机信息预览", data.cli_info_preview);
-		html += codeBlock("节点列表预览", data.cli_ips_preview);
-		html += "</div>";
-		return html;
-	}
-
-	function buildWebCard(data) {
-		var html = "";
-		html += "<div class='cbi-section' style='margin-bottom:16px;'>";
-		html += "<h3 style='margin-bottom:10px;'>vnt2_web " + runningBadge(data.web_running) + "</h3>";
-		html += kv("当前版本：", data.web_tag || "未知");
-		html += kv("最新版本：", data.latest_tag || "未知");
-		html += kv("运行时长：", data.web_runtime || "未运行");
-		html += kv("CPU：", data.web_cpu || "-");
-		html += kv("内存：", data.web_ram || "-");
-		html += kv("监听地址：", data.web_host || "-");
-		html += kv("监听端口：", data.web_port || "-");
-		html += kv("访问地址：", data.web_url || "-");
-		html += kv("日志级别：", data.web_log_level || "-");
-		html += kv("允许 WAN 访问：", yesNo(data.web_wan));
-		html += kv("自动下载：", yesNo(data.web_auto_download));
-		html += kv("下载仓库：", data.web_download_repo || "-");
-		html += kv("下载版本：", data.web_download_tag || "-");
-		html += downloadStateBlock("Web 下载状态", data.web_download);
-
-		if (data.web_running && data.web_url) {
-			html += "<div style='margin-top:12px;'>" +
-				"<input class='cbi-button cbi-button-apply' type='button' value='打开 VNT2 Web 界面' onclick='window.open(\"" + escapeHtml(data.web_url) + "\", \"_blank\")' />" +
-				"</div>";
-		}
-
-		html += "</div>";
-		return html;
-	}
-
-	function buildSummary(data) {
-		var html = "<div class='cbi-section'>";
-		html += "<h3 style='margin-bottom:10px;'>状态总览</h3>";
-		html += "<div style='line-height:1.9;'>";
-		html += "<div><strong>客户端：</strong>" + runningBadge(data.cli_running) + "</div>";
-		html += "<div><strong>Web 服务：</strong>" + runningBadge(data.web_running) + "</div>";
-		html += "<div><strong>下载日志大小：</strong>" + escapeHtml(data.download_log_size || 0) + " 字节</div>";
-		html += "</div>";
-		html += "</div>";
-		return html;
-	}
-
-	XHR.poll(3, '<%=url([[admin]], [[vpn]], [[vnt2]], [[status]])%>', null, function(x, data) {
-		var st = document.getElementById("vnt2_status");
-		if (!st) {
-			return;
-		}
-
-		if (!data) {
-			st.innerHTML = "<em><%:Collecting data...%></em>";
-			return;
-		}
-
-		st.innerHTML = buildSummary(data) + buildCliCard(data) + buildWebCard(data);
-	});
+	updateStatus();
+	window.setInterval(updateStatus, 5000);
 })();
 //]]>
 </script>
-
-<div id="vnt2_status">
-	<em><%:Collecting data...%></em>
-</div>
