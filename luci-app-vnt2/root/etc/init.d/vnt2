@@ -239,16 +239,51 @@ download_file() {
 	esac
 }
 
-get_release_api_url() {
+normalize_release_tag() {
+	local tag="$1"
+	tag="$(trim_value "$tag")"
+	tag="${tag#v}"
+	tag="${tag#V}"
+	echo "$tag"
+}
+
+resolve_v2_release_tag() {
 	local repo="$1"
 	local tag="$2"
 
 	[ -n "$repo" ] || repo="vnt-dev/vnt"
+	tag="$(trim_value "$tag")"
 
-	if [ -z "$tag" ] || [ "$tag" = "latest" ]; then
+	case "$repo" in
+		vnt-dev/vnt|vnt-dev/vnts)
+			if [ -z "$tag" ] || [ "$tag" = "latest" ]; then
+				echo "2.0.0"
+			else
+				normalize_release_tag "$tag"
+			fi
+		;;
+		*)
+			if [ -n "$tag" ] && [ "$tag" != "latest" ]; then
+				normalize_release_tag "$tag"
+			else
+				echo "$tag"
+			fi
+		;;
+	esac
+}
+
+get_release_api_url() {
+	local repo="$1"
+	local tag="$2"
+	local resolved_tag
+
+	[ -n "$repo" ] || repo="vnt-dev/vnt"
+	resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
+
+	if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
 		echo "https://api.github.com/repos/${repo}/releases/latest"
 	else
-		echo "https://api.github.com/repos/${repo}/releases/tags/${tag}"
+		echo "https://api.github.com/repos/${repo}/releases/tags/v${resolved_tag}"
 	fi
 }
 
@@ -256,15 +291,32 @@ select_release_asset() {
 	local json_file="$1"
 	local arch_patterns="$2"
 	local scope="$3"
-	local urls asset pattern
+	local urls asset pattern primary_arch
 
 	urls="$(sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" 2>/dev/null | sed 's#\\/#/#g')"
 	[ -n "$urls" ] || return 1
+	primary_arch="$(printf '%s\n' "$arch_patterns" | awk '{print $1}')"
 
 	case "$scope" in
 		cli|web)
+			if [ -n "$primary_arch" ]; then
+				asset="$(printf '%s\n' "$urls" | grep -iE "/vnt2[-_]${primary_arch}[-_].*unknown-linux-musl.*\.zip$" | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			fi
+
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt2[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '\.zip$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
+
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt2[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
@@ -280,28 +332,18 @@ select_release_asset() {
 			done
 
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnt2|vnt|cli|ctrl|web)' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
 				}
 			done
 
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnt|cli|ctrl|web)' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
+			asset="$(printf '%s\n' "$urls" | grep -iE '/vnt2[-_]' | head -n1)"
+			[ -n "$asset" ] && {
+				echo "$asset"
+				return 0
+			}
 
 			asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | head -n1)"
 			[ -n "$asset" ] && {
@@ -310,8 +352,24 @@ select_release_asset() {
 			}
 		;;
 		server)
+			if [ -n "$primary_arch" ]; then
+				asset="$(printf '%s\n' "$urls" | grep -iE "/vnts2[-_]${primary_arch}[-_].*unknown-linux-musl[^./]*$" | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			fi
+
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts2[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -ivE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
+
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts2[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
@@ -327,20 +385,18 @@ select_release_asset() {
 			done
 
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnts|server)' | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnts2|vnts|server)' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
 				}
 			done
 
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnts|server)' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
+			asset="$(printf '%s\n' "$urls" | grep -iE '/vnts2[-_]' | head -n1)"
+			[ -n "$asset" ] && {
+				echo "$asset"
+				return 0
+			}
 
 			asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | head -n1)"
 			[ -n "$asset" ] && {
@@ -446,6 +502,24 @@ locate_extracted_bin() {
 	return 1
 }
 
+normalize_server_binary_name() {
+	local extracted_dir="$1"
+	local server_bin normalized_bin
+
+	server_bin="$(locate_extracted_bin "$extracted_dir" "vnts2")"
+	[ -n "$server_bin" ] || server_bin="$(locate_extracted_bin "$extracted_dir" "vnts")"
+	[ -n "$server_bin" ] || return 1
+
+	normalized_bin="${extracted_dir}/vnts2"
+	if [ "$server_bin" != "$normalized_bin" ]; then
+		cp -f "$server_bin" "$normalized_bin" >/dev/null 2>&1 || return 1
+	fi
+
+	ensure_exec "$normalized_bin" || return 1
+	echo "$normalized_bin"
+	return 0
+}
+
 cache_bundle_ready() {
 	local extracted_dir="$1"
 	local scope="$2"
@@ -458,7 +532,7 @@ cache_bundle_ready() {
 			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
 		;;
 		server)
-			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnts2")" || ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnts")"
+			ensure_exec "$(normalize_server_binary_name "$extracted_dir")"
 		;;
 		*)
 			return 1
@@ -484,7 +558,7 @@ auto_download_bundle() {
 	case "$scope" in
 		server)
 			config_get download_tag "$cfg" "download_tag" "latest"
-			config_get download_repo "$cfg" "download_repo" "lz-ycx/vnts"
+			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnts"
 		;;
 		*)
 			config_get download_tag "$cfg" "download_tag" "latest"
@@ -493,6 +567,8 @@ auto_download_bundle() {
 	esac
 	[ -n "$download_tag" ] || download_tag="latest"
 	[ -n "$download_repo" ] || download_repo="vnt-dev/vnt"
+	download_tag="$(resolve_v2_release_tag "$download_repo" "$download_tag")"
+	[ -n "$download_tag" ] || download_tag="latest"
 
 	arch_name="$(detect_arch_name)"
 	arch_patterns="$(detect_arch_patterns "$arch_name")"
@@ -519,8 +595,7 @@ auto_download_bundle() {
 				ensure_exec "$web_bin" && uci -q set ${CONF}.${cfg}.vnt2_web_bin="$web_bin"
 			;;
 			server)
-				server_bin="$(locate_extracted_bin "$extracted_dir" "vnts2")"
-				ensure_exec "$server_bin" || server_bin="$(locate_extracted_bin "$extracted_dir" "vnts")"
+				server_bin="$(normalize_server_binary_name "$extracted_dir")"
 				ensure_exec "$server_bin" && uci -q set ${CONF}.${cfg}.vnts2_bin="$server_bin"
 			;;
 		esac
@@ -539,6 +614,7 @@ auto_download_bundle() {
 	fi
 
 	release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
+	release_tag="$(normalize_release_tag "$release_tag")"
 	[ -n "$release_tag" ] || release_tag="$download_tag"
 	asset_url="$(select_release_asset "$json_file" "$arch_patterns" "$scope")" || {
 		log_download "未找到匹配 ${arch_name} 的 ${scope} 发行资源"
@@ -599,14 +675,10 @@ auto_download_bundle() {
 		;;
 		server)
 			server_name="vnts2"
-			server_bin="$(locate_extracted_bin "$extracted_dir" "$server_name")"
+			server_bin="$(normalize_server_binary_name "$extracted_dir")"
 			if ! ensure_exec "$server_bin"; then
-				server_name="vnts"
-				server_bin="$(locate_extracted_bin "$extracted_dir" "$server_name")"
-			fi
-			if ! ensure_exec "$server_bin"; then
-				log_download "下载包中未找到 vnts2 / vnts"
-				write_download_state "$state_file" "failed" "下载包中未找到 vnts2 / vnts" "$asset_name" "$release_tag" "$arch_name" ""
+				log_download "下载包中未找到可用的 vnts2 / vnts，或重命名为 vnts2 失败"
+				write_download_state "$state_file" "failed" "下载包中未找到可用的 vnts2 / vnts，或重命名为 vnts2 失败" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
 			uci -q set ${CONF}.${cfg}.vnts2_bin="$server_bin"

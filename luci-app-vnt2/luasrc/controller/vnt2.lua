@@ -259,7 +259,7 @@ local function get_vnt2_latest_tag(repo, configured_tag)
 		repo = "vnt-dev/vnt"
 	end
 
-	if repo == "vnt-dev/vnt" then
+	if repo == "vnt-dev/vnt" or repo == "vnt-dev/vnts" then
 		if configured_tag ~= "" and configured_tag ~= "latest" then
 			return normalize_display_tag(configured_tag)
 		end
@@ -431,7 +431,7 @@ local function summarize_server_config()
 		persistence = cfg.persistence or "1",
 		username = cfg.username or "admin",
 		auto_download = uci_first("vnts2", "auto_download", "1"),
-		download_repo = uci_first("vnts2", "download_repo", "lz-ycx/vnts"),
+		download_repo = uci_first("vnts2", "download_repo", "vnt-dev/vnts"),
 		download_tag = uci_first("vnts2", "download_tag", "latest"),
 		white_list = cfg.white_token or {},
 		peer_servers = cfg.server_address or {},
@@ -489,12 +489,9 @@ function act_status()
 		latest_tag = get_vnt2_latest_tag("vnt-dev/vnt", "latest")
 	end
 
-	local latest_server_tag = ""
-	if server_cfg.download_repo ~= "" then
-		latest_server_tag = normalize_display_tag(get_cached_latest_tag(server_cfg.download_repo))
-	end
+	local latest_server_tag = get_vnt2_latest_tag(server_cfg.download_repo, server_cfg.download_tag)
 	if latest_server_tag == "" then
-		latest_server_tag = normalize_display_tag(get_cached_latest_tag("lz-ycx/vnts"))
+		latest_server_tag = get_vnt2_latest_tag("vnt-dev/vnts", "latest")
 	end
 
 	e.latest_tag = latest_tag
