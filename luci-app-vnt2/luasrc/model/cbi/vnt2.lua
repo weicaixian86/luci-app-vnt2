@@ -202,6 +202,17 @@ local function validate_nonempty(self, value)
 	return value
 end
 
+local function validate_file_path(self, value)
+	value = trim(value)
+	if value == "" then
+		return nil, translate("路径不能为空")
+	end
+	if value:sub(1, 1) ~= "/" then
+		return nil, translate("请输入绝对路径，例如 /etc/config/vnt2.toml")
+	end
+	return value
+end
+
 local function normalized_list_values(value)
 	local result = {}
 
@@ -431,11 +442,11 @@ mutual_exclusion_tip.cfgvalue = function()
 ]] .. render_mutual_exclusion_script()
 end
 
-local cli_conf_path = s:taboption("general", DummyValue, "_cli_conf_path", translate("配置文件路径"))
-cli_conf_path.rawhtml = true
-cli_conf_path.cfgvalue = function()
-	return "<code>/etc/config/vnt2.toml</code>"
-end
+local cli_conf_path = s:taboption("general", Value, "client_conf_file", translate("配置文件路径"),
+	translate("vnt2_cli 使用的 TOML 配置文件绝对路径；vnt2_web 与其共用同一客户端配置结构"))
+cli_conf_path.placeholder = "/etc/config/vnt2.toml"
+cli_conf_path.default = "/etc/config/vnt2.toml"
+cli_conf_path.validate = validate_file_path
 
 local enabled = s:taboption("general", Flag, "enabled", translate("启用cli 客户端"))
 enabled.rmempty = false
@@ -753,10 +764,18 @@ w:tab("general", translate("基本设置"))
 w:tab("advanced", translate("高级设置"))
 w:tab("upload", translate("上传程序"))
 
-local web_conf_path = w:taboption("general", DummyValue, "_web_conf_path", translate("配置文件路径"))
-web_conf_path.rawhtml = true
-web_conf_path.cfgvalue = function()
-	return "<code>/etc/config/vnt2.toml</code>"
+local web_conf_path = w:taboption("general", Value, "client_conf_file", translate("配置文件路径"),
+	translate("vnt2_web 使用的客户端 TOML 配置文件绝对路径，通常与 vnt2_cli 保持一致"))
+web_conf_path.placeholder = "/etc/config/vnt2.toml"
+web_conf_path.default = "/etc/config/vnt2.toml"
+web_conf_path.validate = validate_file_path
+web_conf_path.write = function(self, section, value)
+	value = validate_file_path(self, value)
+	if not value then
+		return
+	end
+	self.map.uci:set(self.map.config, section, self.option, value)
+	set_sections_option_by_type(self.map.config, "vnt2_cli", "client_conf_file", value)
 end
 
 local web_enabled = w:taboption("general", Flag, "enabled", translate("启用web 客户端"))
@@ -874,11 +893,11 @@ v:tab("advanced", translate("高级设置"))
 v:tab("infos", translate("服务信息"))
 v:tab("upload", translate("上传程序"))
 
-local server_conf_path = v:taboption("general", DummyValue, "_server_conf_path", translate("配置文件路径"))
-server_conf_path.rawhtml = true
-server_conf_path.cfgvalue = function()
-	return "<code>/etc/config/vnts2.toml</code>"
-end
+local server_conf_path = v:taboption("general", Value, "server_conf_file", translate("配置文件路径"),
+	translate("vnts2 服务端使用的 TOML 配置文件绝对路径"))
+server_conf_path.placeholder = "/etc/config/vnts2.toml"
+server_conf_path.default = "/etc/config/vnts2.toml"
+server_conf_path.validate = validate_file_path
 
 local server_enabled = v:taboption("general", Flag, "enabled", translate("启用vnts2 服务端"))
 server_enabled.rmempty = false
@@ -1008,7 +1027,7 @@ server_tip.rawhtml = true
 server_tip.cfgvalue = function()
 	return [[
 <div class="cbi-value-description">
-	<div>1. 当前 LuCI 会将客户端配置持久化到 <code>/etc/config/vnt2.toml</code>，将服务端配置持久化到 <code>/etc/config/vnts2.toml</code>，并自动同步到 UCI 表单显示。</div>
+	<div>1. 当前 LuCI 会根据“配置文件路径”字段，将客户端与服务端配置分别持久化到对应 TOML 文件，并自动同步到 UCI 表单显示。</div>
 	<div>2. TCP / QUIC / WS/WSS / Web 管理页均可独立监听，并可按需开放 WAN 防火墙规则。</div>
 	<div>3. 若启用自动下载，默认会从服务端仓库 Releases 中选择匹配当前架构的压缩包。</div>
 </div>
@@ -1035,7 +1054,9 @@ end
 local server_conf_preview = v:taboption("infos", DummyValue, "_server_conf_preview", translate("当前服务端配置预览"))
 server_conf_preview.rawhtml = true
 server_conf_preview.cfgvalue = function()
-	return render_pre(toml.SERVER_TOML)
+	return render_pre(trim(m.uci:get_first("vnt2", "vnts2", "server_conf_file")) ~= ""
+		and trim(m.uci:get_first("vnt2", "vnts2", "server_conf_file"))
+		or toml.DEFAULT_SERVER_TOML)
 end
 
 local server_upload = v:taboption("upload", FileUpload, "upload_server")

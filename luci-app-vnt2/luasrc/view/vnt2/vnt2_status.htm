@@ -18,16 +18,18 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 		gap: 14px;
 	}
 	.vnt2-card {
-		border: 1px solid #d9d9d9;
+		border: 1px solid var(--border-color-medium, var(--border-color-high, #d9d9d9));
 		border-radius: 8px;
 		padding: 14px 16px;
-		background: #fff;
+		background: var(--card-background, var(--panel-bg, var(--background-color, #fff)));
+		color: var(--text-color, inherit);
 		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 	}
 	.vnt2-card h3 {
 		margin: 0 0 10px;
 		font-size: 16px;
 		line-height: 1.4;
+		color: var(--text-color-high, var(--text-color, inherit));
 	}
 	.vnt2-badge {
 		display: inline-block;
@@ -57,17 +59,17 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 	}
 	.vnt2-card td {
 		padding: 5px 0;
-		border-bottom: 1px dashed #ececec;
+		border-bottom: 1px dashed var(--border-color-low, var(--border-color-medium, #ececec));
 		vertical-align: top;
 		word-break: break-all;
 	}
 	.vnt2-card td:first-child {
 		width: 104px;
-		color: #666;
+		color: var(--text-color-low, var(--text-color, #666));
 		padding-right: 8px;
 	}
 	.vnt2-card td:last-child {
-		color: #222;
+		color: var(--text-color-high, var(--text-color, #222));
 	}
 	.vnt2-links {
 		margin-top: 9px;
@@ -75,6 +77,7 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 	}
 	.vnt2-links a {
 		margin-right: 12px;
+		color: var(--primary, var(--link-color, inherit));
 	}
 </style>
 

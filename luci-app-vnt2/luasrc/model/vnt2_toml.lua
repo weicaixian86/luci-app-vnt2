@@ -3,8 +3,10 @@ local util = require "luci.util"
 
 local M = {}
 
-M.CLIENT_TOML = "/etc/config/vnt2.toml"
-M.SERVER_TOML = "/etc/config/vnts2.toml"
+M.DEFAULT_CLIENT_TOML = "/etc/config/vnt2.toml"
+M.DEFAULT_SERVER_TOML = "/etc/config/vnts2.toml"
+M.CLIENT_TOML = M.DEFAULT_CLIENT_TOML
+M.SERVER_TOML = M.DEFAULT_SERVER_TOML
 
 local client_defaults = {
 	network_code = "123456",
@@ -140,6 +142,24 @@ local number_keys = {
 
 local function trim(v)
 	return util.trim(tostring(v or ""))
+end
+
+local function resolve_client_toml_path(uci)
+	local path = trim(uci:get_first("vnt2", "vnt2_cli", "client_conf_file"))
+	if path == "" then
+		path = M.DEFAULT_CLIENT_TOML
+	end
+	M.CLIENT_TOML = path
+	return path
+end
+
+local function resolve_server_toml_path(uci)
+	local path = trim(uci:get_first("vnt2", "vnts2", "server_conf_file"))
+	if path == "" then
+		path = M.DEFAULT_SERVER_TOML
+	end
+	M.SERVER_TOML = path
+	return path
 end
 
 local function is_list_key(key)
@@ -328,7 +348,9 @@ local function set_uci_list(uci, config, section, option, value)
 end
 
 function M.ensure_client_toml_from_uci(uci)
-	if fs.access(M.CLIENT_TOML) then
+	local client_toml = resolve_client_toml_path(uci)
+
+	if fs.access(client_toml) then
 		return
 	end
 
@@ -345,11 +367,13 @@ function M.ensure_client_toml_from_uci(uci)
 		end
 	end
 
-	M.write_toml(M.CLIENT_TOML, data, client_order)
+	M.write_toml(client_toml, data, client_order)
 end
 
 function M.ensure_server_toml_from_uci(uci)
-	if fs.access(M.SERVER_TOML) then
+	local server_toml = resolve_server_toml_path(uci)
+
+	if fs.access(server_toml) then
 		return
 	end
 
@@ -366,7 +390,7 @@ function M.ensure_server_toml_from_uci(uci)
 		end
 	end
 
-	M.write_toml(M.SERVER_TOML, data, server_order)
+	M.write_toml(server_toml, data, server_order)
 end
 
 function M.ensure_toml_files(uci)
@@ -375,6 +399,8 @@ function M.ensure_toml_files(uci)
 end
 
 function M.export_uci_to_toml(uci)
+	local client_toml = resolve_client_toml_path(uci)
+	local server_toml = resolve_server_toml_path(uci)
 	local cli = clone_defaults(client_defaults)
 	local server = clone_defaults(server_defaults)
 
@@ -400,8 +426,8 @@ function M.export_uci_to_toml(uci)
 		end
 	end
 
-	M.write_toml(M.CLIENT_TOML, cli, client_order)
-	M.write_toml(M.SERVER_TOML, server, server_order)
+	M.write_toml(client_toml, cli, client_order)
+	M.write_toml(server_toml, server, server_order)
 
 	return cli, server
 end
@@ -409,9 +435,11 @@ end
 function M.sync_toml_to_uci(uci)
 	local cli_section = ensure_section(uci, "vnt2", "vnt2_cli")
 	local server_section = ensure_section(uci, "vnt2", "vnts2")
+	local client_toml = resolve_client_toml_path(uci)
+	local server_toml = resolve_server_toml_path(uci)
 
-	local cli = M.read_toml(M.CLIENT_TOML, client_defaults)
-	local server = M.read_toml(M.SERVER_TOML, server_defaults)
+	local cli = M.read_toml(client_toml, client_defaults)
+	local server = M.read_toml(server_toml, server_defaults)
 
 	for toml_key, uci_key in pairs(client_option_map) do
 		if is_list_key(toml_key) then
@@ -434,13 +462,15 @@ function M.sync_toml_to_uci(uci)
 end
 
 function M.get_client_summary(uci)
+	local client_toml = resolve_client_toml_path(uci)
 	M.ensure_toml_files(uci)
-	return M.read_toml(M.CLIENT_TOML, client_defaults)
+	return M.read_toml(client_toml, client_defaults)
 end
 
 function M.get_server_summary(uci)
+	local server_toml = resolve_server_toml_path(uci)
 	M.ensure_toml_files(uci)
-	return M.read_toml(M.SERVER_TOML, server_defaults)
+	return M.read_toml(server_toml, server_defaults)
 end
 
 return M

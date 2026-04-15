@@ -25,6 +25,8 @@ DOWNLOAD_CLI_STATE="/tmp/vnt2-download-cli.state"
 DOWNLOAD_WEB_STATE="/tmp/vnt2-download-web.state"
 DOWNLOAD_SERVER_STATE="/tmp/vnt2-download-server.state"
 
+INSTALL_BIN_DIR="/usr/bin"
+
 . /lib/functions.sh
 . /lib/functions/procd.sh
 
@@ -53,6 +55,24 @@ ensure_log_files() {
 
 trim_value() {
 	echo "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+resolve_client_conf_file() {
+	local cfg="${1:-vnt2_cli}"
+	local conf_path
+	config_get conf_path "$cfg" "client_conf_file" "$CLI_CONF_DEFAULT"
+	conf_path="$(trim_value "$conf_path")"
+	[ -n "$conf_path" ] || conf_path="$CLI_CONF_DEFAULT"
+	echo "$conf_path"
+}
+
+resolve_server_conf_file() {
+	local cfg="${1:-vnts2}"
+	local conf_path
+	config_get conf_path "$cfg" "server_conf_file" "$SERVER_CONF_DEFAULT"
+	conf_path="$(trim_value "$conf_path")"
+	[ -n "$conf_path" ] || conf_path="$SERVER_CONF_DEFAULT"
+	echo "$conf_path"
 }
 
 sanitize_name() {
@@ -520,6 +540,58 @@ normalize_server_binary_name() {
 	return 0
 }
 
+install_binary_to_usrbin() {
+	local src="$1"
+	local target_name="$2"
+	local target_path
+
+	[ -n "$src" ] || return 1
+	[ -n "$target_name" ] || return 1
+	target_path="${INSTALL_BIN_DIR}/${target_name}"
+
+	mkdir -p "${INSTALL_BIN_DIR}" >/dev/null 2>&1 || return 1
+	cp -f "$src" "$target_path" >/dev/null 2>&1 || return 1
+	chmod 755 "$target_path" >/dev/null 2>&1 || return 1
+	echo "$target_path"
+	return 0
+}
+
+install_bundle_to_usrbin() {
+	local extracted_dir="$1"
+	local scope="$2"
+	local cli_bin ctrl_bin web_bin server_bin
+
+	case "$scope" in
+		cli)
+			cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
+			ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
+			ensure_exec "$cli_bin" || return 1
+			ensure_exec "$ctrl_bin" || return 1
+			install_binary_to_usrbin "$cli_bin" "vnt2_cli" >/dev/null || return 1
+			install_binary_to_usrbin "$ctrl_bin" "vnt2_ctrl" >/dev/null || return 1
+			web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+			if ensure_exec "$web_bin"; then
+				install_binary_to_usrbin "$web_bin" "vnt2_web" >/dev/null || return 1
+			fi
+		;;
+		web)
+			web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+			ensure_exec "$web_bin" || return 1
+			install_binary_to_usrbin "$web_bin" "vnt2_web" >/dev/null || return 1
+		;;
+		server)
+			server_bin="$(normalize_server_binary_name "$extracted_dir")"
+			ensure_exec "$server_bin" || return 1
+			install_binary_to_usrbin "$server_bin" "vnts2" >/dev/null || return 1
+		;;
+		*)
+			return 1
+		;;
+	esac
+
+	return 0
+}
+
 cache_bundle_ready() {
 	local extracted_dir="$1"
 	local scope="$2"
@@ -583,24 +655,22 @@ auto_download_bundle() {
 		log_download "检测到 ${scope} 已有缓存包，直接复用 ${extracted_dir}"
 		write_download_state "$state_file" "cached" "已复用本地缓存程序" "$(basename "$cache_dir")" "$download_tag" "$arch_name" "$extracted_dir"
 
-		case "$scope" in
-			cli)
-				cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
-				ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
-				ensure_exec "$cli_bin" && uci -q set ${CONF}.${cfg}.vnt2_cli_bin="$cli_bin"
-				ensure_exec "$ctrl_bin" && uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="$ctrl_bin"
-			;;
-			web)
-				web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
-				ensure_exec "$web_bin" && uci -q set ${CONF}.${cfg}.vnt2_web_bin="$web_bin"
-			;;
-			server)
-				server_bin="$(normalize_server_binary_name "$extracted_dir")"
-				ensure_exec "$server_bin" && uci -q set ${CONF}.${cfg}.vnts2_bin="$server_bin"
-			;;
-		esac
-		uci commit ${CONF} >/dev/null 2>&1
-		return 0
+		if install_bundle_to_usrbin "$extracted_dir" "$scope"; then
+			case "$scope" in
+				cli)
+					uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
+					uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
+				;;
+				web)
+					uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
+				;;
+				server)
+					uci -q set ${CONF}.${cfg}.vnts2_bin="${INSTALL_BIN_DIR}/vnts2"
+				;;
+			esac
+			uci commit ${CONF} >/dev/null 2>&1
+			return 0
+		fi
 	fi
 
 	api_url="$(get_release_api_url "$download_repo" "$download_tag")"
@@ -653,11 +723,16 @@ auto_download_bundle() {
 				write_download_state "$state_file" "failed" "下载包中未找到完整的 vnt2_cli / vnt2_ctrl" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
-			uci -q set ${CONF}.${cfg}.vnt2_cli_bin="$cli_bin"
-			uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="$ctrl_bin"
+			if ! install_bundle_to_usrbin "$extracted_dir" "cli"; then
+				log_download "已下载客户端程序，但安装到 /usr/bin 失败"
+				write_download_state "$state_file" "failed" "已下载客户端程序，但安装到 /usr/bin 失败" "$asset_name" "$release_tag" "$arch_name" ""
+				return 1
+			fi
+			uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
+			uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
 			uci commit ${CONF} >/dev/null 2>&1
-			log_download "CLI 程序已准备完成：cli=${cli_bin} ctrl=${ctrl_bin}"
-			write_download_state "$state_file" "success" "已自动下载并准备 vnt2_cli / vnt2_ctrl" "$asset_name" "$release_tag" "$arch_name" "$cli_bin"
+			log_download "CLI 程序已安装完成：cli=${INSTALL_BIN_DIR}/vnt2_cli ctrl=${INSTALL_BIN_DIR}/vnt2_ctrl"
+			write_download_state "$state_file" "success" "已自动下载并安装 vnt2_cli / vnt2_ctrl 到 /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_cli"
 			return 0
 		;;
 		web)
@@ -667,10 +742,15 @@ auto_download_bundle() {
 				write_download_state "$state_file" "failed" "下载包中未找到 vnt2_web" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
-			uci -q set ${CONF}.${cfg}.vnt2_web_bin="$web_bin"
+			if ! install_bundle_to_usrbin "$extracted_dir" "web"; then
+				log_download "已下载 Web 程序，但安装到 /usr/bin 失败"
+				write_download_state "$state_file" "failed" "已下载 Web 程序，但安装到 /usr/bin 失败" "$asset_name" "$release_tag" "$arch_name" ""
+				return 1
+			fi
+			uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
 			uci commit ${CONF} >/dev/null 2>&1
-			log_download "Web 程序已准备完成：web=${web_bin}"
-			write_download_state "$state_file" "success" "已自动下载并准备 vnt2_web" "$asset_name" "$release_tag" "$arch_name" "$web_bin"
+			log_download "Web 程序已安装完成：web=${INSTALL_BIN_DIR}/vnt2_web"
+			write_download_state "$state_file" "success" "已自动下载并安装 vnt2_web 到 /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_web"
 			return 0
 		;;
 		server)
@@ -681,10 +761,15 @@ auto_download_bundle() {
 				write_download_state "$state_file" "failed" "下载包中未找到可用的 vnts2 / vnts，或重命名为 vnts2 失败" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
-			uci -q set ${CONF}.${cfg}.vnts2_bin="$server_bin"
+			if ! install_bundle_to_usrbin "$extracted_dir" "server"; then
+				log_download "已下载服务端程序，但安装到 /usr/bin 失败"
+				write_download_state "$state_file" "failed" "已下载服务端程序，但安装到 /usr/bin 失败" "$asset_name" "$release_tag" "$arch_name" ""
+				return 1
+			fi
+			uci -q set ${CONF}.${cfg}.vnts2_bin="${INSTALL_BIN_DIR}/vnts2"
 			uci commit ${CONF} >/dev/null 2>&1
-			log_download "服务端程序已准备完成：server=${server_bin}"
-			write_download_state "$state_file" "success" "已自动下载并准备 vnts2" "$asset_name" "$release_tag" "$arch_name" "$server_bin"
+			log_download "服务端程序已安装完成：server=${INSTALL_BIN_DIR}/vnts2"
+			write_download_state "$state_file" "success" "已自动下载并安装 vnts2 到 /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnts2"
 			return 0
 		;;
 	esac
@@ -959,7 +1044,7 @@ prepare_cli_runtime() {
 	local cfg="$1"
 	local forward_list bind_dev tun_name no_tun
 
-	CLI_CONF_FILE="${CLI_CONF_DEFAULT}"
+	CLI_CONF_FILE="$(resolve_client_conf_file "$cfg")"
 
 	if ! toml_validate_client_config "${CLI_CONF_FILE}"; then
 		return 1
@@ -992,7 +1077,9 @@ append_forward_item() {
 }
 
 prepare_server_runtime() {
-	SERVER_CONF_FILE="${SERVER_CONF_DEFAULT}"
+	local cfg="${1:-vnts2}"
+
+	SERVER_CONF_FILE="$(resolve_server_conf_file "$cfg")"
 
 	if ! toml_validate_server_config "${SERVER_CONF_FILE}"; then
 		return 1
@@ -1091,7 +1178,8 @@ start_web_instance() {
 
 	configure_web_firewall "$web_host" "$web_port" "$web_wan"
 
-	log_web "使用 ${web_bin} 监听 ${web_host}:${web_port}"
+	CLI_CONF_FILE="$(resolve_client_conf_file "vnt2_cli")"
+	log_web "使用 ${web_bin} 监听 ${web_host}:${web_port}，客户端配置文件 ${CLI_CONF_FILE}"
 	procd_open_instance "vnt2_web"
 	procd_set_param env RUST_LOG="$log_level"
 	procd_set_param command /bin/sh -c "exec \"${web_bin}\" --addr \"${web_host}:${web_port}\" >>\"${WEB_LOG}\" 2>&1"
@@ -1123,7 +1211,7 @@ start_server_instance() {
 		return 1
 	}
 
-	if ! prepare_server_runtime; then
+	if ! prepare_server_runtime "$cfg"; then
 		log_server "启动失败：服务端 TOML 配置校验失败"
 		return 1
 	fi
