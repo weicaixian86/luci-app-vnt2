@@ -9,8 +9,8 @@ on:
         default: "v2.0.0"
       release_description:
         description: "Release description"
-        required: true
-        default: "OpenWrt 24.10 x86_64 编译包"
+        required: false
+        default: ""
 
 permissions:
   contents: write
