@@ -1,19 +1,6 @@
-local fs = require "nixio.fs"
+local f = SimpleForm("vnt2")
+f.reset = false
+f.submit = false
+f:append(Template("vnt2/vnt2-download_log"))
 
-local log = SimpleForm("log", translate("下载日志"))
-log.submit = false
-log.reset = false
-
-local log_data = ""
-local files = { "/tmp/vnt2-download.log" }
-for _, file in ipairs(files) do
-	if fs.access(file) then
-		log_data = log_data .. (fs.readfile(file) or "")
-	end
-end
-
-local log_view = log:field(DummyValue, "_log")
-log_view.rawhtml = true
-log_view.template = "vnt2/vnt2-download_log"
-
-return log
+return f

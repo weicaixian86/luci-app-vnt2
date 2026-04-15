@@ -4,11 +4,14 @@ local fs = require "nixio.fs"
 local sys = require "luci.sys"
 local http = require "luci.http"
 local uci = require "luci.model.uci".cursor()
+local toml = require "luci.model.vnt2_toml"
 
 function index()
-	if not fs.access("/etc/config/vnt2") then
+	if not fs.access("/etc/config/vnt2") and not fs.access(toml.CLIENT_TOML) and not fs.access(toml.SERVER_TOML) then
 		return
 	end
+
+	toml.ensure_toml_files(uci)
 
 	entry({ "admin", "vpn", "vnt2" }, alias("admin", "vpn", "vnt2", "config"), _("VNT2"), 45).dependent = true
 	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("基本设置"), 10).leaf = true
@@ -106,7 +109,8 @@ local function get_server_bin()
 end
 
 local function get_ctrl_port()
-	return tonumber(uci_first("vnt2_cli", "ctrl_port", "11233")) or 11233
+	local cfg = toml.get_client_summary(uci)
+	return tonumber(cfg.cmd_port or "11233") or 11233
 end
 
 local function get_web_port()
@@ -117,8 +121,12 @@ local function get_web_host()
 	return uci_first("vnt2_web", "web_host", "127.0.0.1")
 end
 
+local function get_client_conf()
+	return toml.CLIENT_TOML
+end
+
 local function get_server_conf()
-	return uci_first("vnts2", "server_conf_file", "/etc/vnt2/vnts2.toml")
+	return toml.SERVER_TOML
 end
 
 local function get_pid_by_name(name)
@@ -350,15 +358,17 @@ local function build_web_url()
 end
 
 local function summarize_cli_config()
+	local cfg = toml.get_client_summary(uci)
 	return {
-		servers = uci_list("vnt2_cli", "server"),
-		network_code = uci_first("vnt2_cli", "network_code", ""),
-		device_name = uci_first("vnt2_cli", "device_name", ""),
-		device_id = uci_first("vnt2_cli", "device_id", ""),
-		tun_name = uci_first("vnt2_cli", "tun_name", "vnt-tun"),
-		no_tun = uci_first("vnt2_cli", "no_tun", "0"),
-		no_nat = uci_first("vnt2_cli", "no_nat", "0"),
-		ctrl_port = get_ctrl_port(),
+		conf_file = get_client_conf(),
+		servers = cfg.server or {},
+		network_code = cfg.network_code or "",
+		device_name = cfg.device_name or "",
+		device_id = cfg.device_id or "",
+		tun_name = cfg.tun_name or "vnt-tun",
+		no_tun = cfg.no_tun or "0",
+		no_nat = cfg.no_proxy or "0",
+		ctrl_port = tonumber(cfg.cmd_port or "11233") or 11233,
 		auto_download = uci_first("vnt2_cli", "auto_download", "1"),
 		download_repo = uci_first("vnt2_cli", "download_repo", "vnt-dev/vnt"),
 		download_tag = uci_first("vnt2_cli", "download_tag", "latest")
@@ -378,22 +388,23 @@ local function summarize_web_config()
 end
 
 local function summarize_server_config()
+	local cfg = toml.get_server_summary(uci)
 	return {
-		tcp_bind = uci_first("vnts2", "tcp_bind", "0.0.0.0:29872"),
-		quic_bind = uci_first("vnts2", "quic_bind", "0.0.0.0:29872"),
-		ws_bind = uci_first("vnts2", "ws_bind", "0.0.0.0:29872"),
-		web_bind = uci_first("vnts2", "web_bind", "0.0.0.0:29871"),
-		server_quic_bind = uci_first("vnts2", "server_quic_bind", ""),
-		network = uci_first("vnts2", "network", "10.26.0.0/24"),
-		lease_duration = uci_first("vnts2", "lease_duration", "86400"),
-		persistence = uci_first("vnts2", "persistence", "1"),
-		username = uci_first("vnts2", "username", "admin"),
+		tcp_bind = cfg.tcp or "0.0.0.0:29872",
+		quic_bind = cfg.quic or "0.0.0.0:29872",
+		ws_bind = cfg.ws or "0.0.0.0:29872",
+		web_bind = cfg.web or "0.0.0.0:29871",
+		server_quic_bind = cfg.quic_proxy or "",
+		network = cfg.network or "10.26.0.0/24",
+		lease_duration = cfg.lease_duration or "86400",
+		persistence = cfg.persistence or "1",
+		username = cfg.username or "admin",
 		auto_download = uci_first("vnts2", "auto_download", "1"),
 		download_repo = uci_first("vnts2", "download_repo", "lz-ycx/vnts"),
 		download_tag = uci_first("vnts2", "download_tag", "latest"),
-		white_list = uci_list("vnts2", "white_list"),
-		peer_servers = uci_list("vnts2", "peer_servers"),
-		custom_net = uci_list("vnts2", "custom_net"),
+		white_list = cfg.white_token or {},
+		peer_servers = cfg.server_address or {},
+		custom_net = cfg.cidr or {},
 		open_wan_tcp = uci_first("vnts2", "open_wan_tcp", "0"),
 		open_wan_quic = uci_first("vnts2", "open_wan_quic", "0"),
 		open_wan_ws = uci_first("vnts2", "open_wan_ws", "0"),
@@ -461,11 +472,13 @@ function act_status()
 	e.latest_tag = latest_tag
 	e.latest_server_tag = latest_server_tag
 
-	e.ctrl_port = get_ctrl_port()
+	e.ctrl_port = cli_cfg.ctrl_port
 	e.web_host = get_web_host()
 	e.web_port = get_web_port()
 	e.web_url = build_web_url()
 
+	e.cli_conf_file = cli_cfg.conf_file
+	e.cli_conf_preview = get_log_content(cli_cfg.conf_file)
 	e.cli_servers = cli_cfg.servers
 	e.cli_network_code = cli_cfg.network_code
 	e.cli_device_name = cli_cfg.device_name

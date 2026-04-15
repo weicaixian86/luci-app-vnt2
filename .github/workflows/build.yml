@@ -7,10 +7,6 @@ on:
         description: "Release tag"
         required: true
         default: "v2.0.0"
-      release_note:
-        description: "Release description"
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -34,12 +30,10 @@ jobs:
       - name: Set build metadata
         shell: bash
         run: |
-          echo "BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$GITHUB_ENV"
+          BUILD_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "BUILD_TIME=$BUILD_TIME" >> "$GITHUB_ENV"
           {
             echo "RELEASE_BODY<<EOF"
-            if [ -n "${{ github.event.inputs.release_note }}" ]; then
-              printf '%s\n\n' "${{ github.event.inputs.release_note }}"
-            fi
             printf '编译时间: %s\n' "$BUILD_TIME"
             echo "EOF"
           } >> "$GITHUB_ENV"
@@ -81,9 +75,11 @@ jobs:
             APP_SOURCE_DIR="${PACKAGE_NAME}"
           elif [ -f "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile"; then
             APP_SOURCE_DIR="luci-app-vnt2"
+          elif [ -f "$GITHUB_WORKSPACE/luci-app-vnt2/${PACKAGE_NAME}/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/luci-app-vnt2/${PACKAGE_NAME}/Makefile"; then
+            APP_SOURCE_DIR="luci-app-vnt2/${PACKAGE_NAME}"
           else
             echo "Unable to locate package source directory"
-            find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name Makefile | sort
+            find "$GITHUB_WORKSPACE" -maxdepth 4 -type f -name Makefile | sort
             exit 1
           fi
           echo "APP_SOURCE_DIR=$APP_SOURCE_DIR" >> "$GITHUB_ENV"

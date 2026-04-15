@@ -14,14 +14,11 @@ CLI_TIME="/tmp/vnt2_cli_time"
 WEB_TIME="/tmp/vnt2_web_time"
 SERVER_TIME="/tmp/vnts2_time"
 
-CLI_CONF_DIR="/etc/config/vnt2"
-CLI_CONF_DEFAULT="/etc/config/vnt2/vnt2-cli.toml"
-SERVER_CONF_DIR="/etc/vnt2"
-SERVER_CONF_DEFAULT="/etc/vnt2/vnts2.toml"
+CLI_CONF_DEFAULT="/etc/config/vnt2.toml"
+SERVER_CONF_DEFAULT="/etc/config/vnts2.toml"
 
 CLI_CONF_FILE=""
 SERVER_CONF_FILE=""
-RUNTIME_FILE="/tmp/.vnt2_runtime"
 
 DOWNLOAD_CACHE_BASE="/tmp/vnt2-download-cache"
 DOWNLOAD_CLI_STATE="/tmp/vnt2-download-cli.state"
@@ -54,63 +51,12 @@ ensure_log_files() {
 	[ -f "${DOWNLOAD_LOG}" ] || : >"${DOWNLOAD_LOG}"
 }
 
-trim_list() {
-	local list="$1"
-	echo "$list" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
-}
-
-toml_escape() {
-	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+trim_value() {
+	echo "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
 sanitize_name() {
 	printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/_/g'
-}
-
-append_toml_array_file() {
-	local file="$1"
-	local key="$2"
-	shift 2
-	local first=1
-	[ "$#" -gt 0 ] || return 0
-
-	printf '%s = [' "$key" >>"${file}"
-	while [ "$#" -gt 0 ]; do
-		local item="$1"
-		shift
-		[ -n "$item" ] || continue
-		[ "$first" = "1" ] || printf ', ' >>"${file}"
-		first=0
-		printf '"%s"' "$(toml_escape "$item")" >>"${file}"
-	done
-	printf ']\n' >>"${file}"
-}
-
-append_toml_bool_file() {
-	local file="$1"
-	local key="$2"
-	local val="$3"
-	[ "$val" = "1" ] && echo "${key} = true" >>"${file}"
-}
-
-append_toml_string_file() {
-	local file="$1"
-	local key="$2"
-	local val="$3"
-	[ -n "$val" ] && printf '%s = "%s"\n' "$key" "$(toml_escape "$val")" >>"${file}"
-}
-
-append_toml_int_file() {
-	local file="$1"
-	local key="$2"
-	local val="$3"
-	[ -n "$val" ] && echo "${key} = ${val}" >>"${file}"
-}
-
-append_runtime_item() {
-	local key="$1"
-	local val="$2"
-	[ -n "$val" ] && echo "${key}=${val}" >>"${RUNTIME_FILE}"
 }
 
 write_download_state() {
@@ -318,7 +264,7 @@ select_release_asset() {
 	case "$scope" in
 		cli|web)
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
@@ -326,7 +272,7 @@ select_release_asset() {
 			done
 
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
@@ -334,14 +280,30 @@ select_release_asset() {
 			done
 
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
 				}
 			done
 
-			asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
+
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnt|cli|ctrl|web)' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
+
+			asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | head -n1)"
 			[ -n "$asset" ] && {
 				echo "$asset"
 				return 0
@@ -349,7 +311,7 @@ select_release_asset() {
 		;;
 		server)
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
@@ -357,14 +319,30 @@ select_release_asset() {
 			done
 
 			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnts|server)' | grep -iE '(linux|musl|openwrt)' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | head -n1)"
 				[ -n "$asset" ] && {
 					echo "$asset"
 					return 0
 				}
 			done
 
-			asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnts|server)' | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
+
+			for pattern in $arch_patterns; do
+				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnts|server)' | head -n1)"
+				[ -n "$asset" ] && {
+					echo "$asset"
+					return 0
+				}
+			done
+
+			asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | head -n1)"
 			[ -n "$asset" ] && {
 				echo "$asset"
 				return 0
@@ -372,7 +350,13 @@ select_release_asset() {
 		;;
 	esac
 
-	asset="$(printf '%s\n' "$urls" | grep -iE '\.(tar\.gz|tgz|tar\.xz|zip)$' | head -n1)"
+	asset="$(printf '%s\n' "$urls" | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
+	[ -n "$asset" ] && {
+		echo "$asset"
+		return 0
+	}
+
+	asset="$(printf '%s\n' "$urls" | head -n1)"
 	[ -n "$asset" ] && {
 		echo "$asset"
 		return 0
@@ -391,21 +375,21 @@ extract_release_asset() {
 
 	case "$asset_file" in
 		*.tar.gz|*.tgz)
-			tar -xzf "$asset_file" -C "$dest_dir" >/dev/null 2>&1
+			tar -xzf "$asset_file" -C "$dest_dir" >/dev/null 2>&1 || return 1
 		;;
 		*.tar.xz)
-			tar -xJf "$asset_file" -C "$dest_dir" >/dev/null 2>&1
+			tar -xJf "$asset_file" -C "$dest_dir" >/dev/null 2>&1 || return 1
 		;;
 		*.zip)
 			if command -v unzip >/dev/null 2>&1; then
-				unzip -qo "$asset_file" -d "$dest_dir" >/dev/null 2>&1
+				unzip -qo "$asset_file" -d "$dest_dir" >/dev/null 2>&1 || return 1
 			else
 				return 1
 			fi
 		;;
 		*)
 			base="$(basename "$asset_file")"
-			cp -f "$asset_file" "${dest_dir}/${base}" >/dev/null 2>&1
+			cp -f "$asset_file" "${dest_dir}/${base}" >/dev/null 2>&1 || return 1
 		;;
 	esac
 }
@@ -413,8 +397,53 @@ extract_release_asset() {
 locate_extracted_bin() {
 	local root="$1"
 	local name="$2"
+	local alt_dash alt_under found
 
-	find "$root" -type f \( -name "$name" -o -name "${name}.bin" -o -name "${name//_/-}" \) 2>/dev/null | head -n1
+	alt_dash="${name//_/-}"
+	alt_under="${name//-/_}"
+
+	found="$(
+		find "$root" -type f \
+			\( \
+				-name "$name" -o \
+				-name "${name}.bin" -o \
+				-name "$alt_dash" -o \
+				-name "${alt_dash}.bin" -o \
+				-name "$alt_under" -o \
+				-name "${alt_under}.bin" -o \
+				-name "${name}-*" -o \
+				-name "${name}_*" -o \
+				-name "${alt_dash}-*" -o \
+				-name "${alt_dash}_*" -o \
+				-name "${alt_under}-*" -o \
+				-name "${alt_under}_*" \
+			\) 2>/dev/null | head -n1
+	)"
+	[ -n "$found" ] && {
+		echo "$found"
+		return 0
+	}
+
+	case "$name" in
+		vnt2_cli)
+			find "$root" -type f \( -name "vnt-cli" -o -name "vnt_cli" -o -name "vnt-cli-*" -o -name "vnt_cli_*" \) 2>/dev/null | head -n1
+			return 0
+		;;
+		vnt2_ctrl)
+			find "$root" -type f \( -name "vnt-ctrl" -o -name "vnt_ctrl" -o -name "vnt-ctrl-*" -o -name "vnt_ctrl_*" \) 2>/dev/null | head -n1
+			return 0
+		;;
+		vnt2_web)
+			find "$root" -type f \( -name "vnt-web" -o -name "vnt_web" -o -name "vnt-web-*" -o -name "vnt_web_*" \) 2>/dev/null | head -n1
+			return 0
+		;;
+		vnts2)
+			find "$root" -type f \( -name "vnts" -o -name "vnts-*" -o -name "vnts_*" \) 2>/dev/null | head -n1
+			return 0
+		;;
+	esac
+
+	return 1
 }
 
 cache_bundle_ready() {
@@ -429,7 +458,7 @@ cache_bundle_ready() {
 			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
 		;;
 		server)
-			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnts2")"
+			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnts2")" || ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnts")"
 		;;
 		*)
 			return 1
@@ -491,6 +520,7 @@ auto_download_bundle() {
 			;;
 			server)
 				server_bin="$(locate_extracted_bin "$extracted_dir" "vnts2")"
+				ensure_exec "$server_bin" || server_bin="$(locate_extracted_bin "$extracted_dir" "vnts")"
 				ensure_exec "$server_bin" && uci -q set ${CONF}.${cfg}.vnts2_bin="$server_bin"
 			;;
 		esac
@@ -627,6 +657,79 @@ prepare_binary() {
 
 	ensure_exec "$bin" || return 1
 	echo "$bin"
+	return 0
+}
+
+toml_get_raw() {
+	local file="$1"
+	local key="$2"
+	[ -f "$file" ] || return 1
+	sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$file" | head -n1
+}
+
+toml_get_string() {
+	local file="$1"
+	local key="$2"
+	local raw val
+
+	raw="$(toml_get_raw "$file" "$key" 2>/dev/null)"
+	raw="$(trim_value "$raw")"
+	case "$raw" in
+		\"*\")
+			val="${raw#\"}"
+			val="${val%\"}"
+			printf '%s\n' "$val" | sed 's/\\"/"/g; s/\\\\/\\/g'
+		;;
+		*)
+			printf '%s\n' "$raw"
+		;;
+	esac
+}
+
+toml_get_bool() {
+	local file="$1"
+	local key="$2"
+	local raw
+	raw="$(trim_value "$(toml_get_raw "$file" "$key" 2>/dev/null)")"
+	[ "$raw" = "true" ] && echo "1" || echo "0"
+}
+
+toml_validate_client_config() {
+	local file="$1"
+	local network_code server_line
+
+	[ -f "$file" ] || {
+		log_cli "客户端配置文件不存在：$file"
+		return 1
+	}
+
+	network_code="$(trim_value "$(toml_get_string "$file" "network_code")")"
+	server_line="$(trim_value "$(toml_get_raw "$file" "server")")"
+
+	[ -n "$network_code" ] || {
+		log_cli "客户端配置校验失败：network_code 不能为空"
+		return 1
+	}
+
+	case "$server_line" in
+		\[*\])
+			:
+		;;
+		*)
+			log_cli "客户端配置校验失败：server 列表不能为空"
+			return 1
+		;;
+	esac
+
+	return 0
+}
+
+toml_validate_server_config() {
+	local file="$1"
+	[ -f "$file" ] || {
+		log_server "服务端配置文件不存在：$file"
+		return 1
+	}
 	return 0
 }
 
@@ -780,204 +883,65 @@ cleanup_server_firewall() {
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
-collect_runtime_list() {
+prepare_cli_runtime() {
 	local cfg="$1"
-	local opt="$2"
-	: > "${RUNTIME_FILE}.${opt}"
-	config_list_foreach "$cfg" "$opt" append_runtime_item "$opt"
-	sed -n "s/^${opt}=//p" "${RUNTIME_FILE}" 2>/dev/null >"${RUNTIME_FILE}.${opt}"
-}
+	local forward_list bind_dev tun_name no_tun
 
-build_cli_config() {
-	local cfg="$1"
-	local network_code ip device_id device_name mtu tun_name
-	local no_punch rtx compress fec no_nat no_tun allow_mapping
-	local cert_mode ctrl_port tunnel_port password
-	local bind_dev cli_conf_file cli_conf_dir vnt2_forward
+	CLI_CONF_FILE="${CLI_CONF_DEFAULT}"
 
-	local server_list input_list output_list mapping_list udp_stun_list tcp_stun_list
-	local server_args="" input_args="" output_args="" mapping_args="" udp_stun_args="" tcp_stun_args=""
-
-	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
-
-	config_get network_code "$cfg" "network_code"
-	[ -n "$network_code" ] || {
-		log_cli "网络编号不能为空"
+	if ! toml_validate_client_config "${CLI_CONF_FILE}"; then
 		return 1
-	}
+	fi
 
-	config_list_foreach "$cfg" server append_runtime_item server
-	config_list_foreach "$cfg" input append_runtime_item input
-	config_list_foreach "$cfg" output append_runtime_item output
-	config_list_foreach "$cfg" port_mapping append_runtime_item port_mapping
-	config_list_foreach "$cfg" udp_stun append_runtime_item udp_stun
-	config_list_foreach "$cfg" tcp_stun append_runtime_item tcp_stun
-
-	server_list="$(sed -n 's/^server=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-	input_list="$(sed -n 's/^input=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-	output_list="$(sed -n 's/^output=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-	mapping_list="$(sed -n 's/^port_mapping=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-	udp_stun_list="$(sed -n 's/^udp_stun=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-	tcp_stun_list="$(sed -n 's/^tcp_stun=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-
-	server_list="$(trim_list "$server_list")"
-	[ -n "$server_list" ] || {
-		log_cli "服务器地址不能为空"
-		rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
-		return 1
-	}
-
-	config_get ip "$cfg" "ip"
-	config_get device_id "$cfg" "device_id"
-	config_get device_name "$cfg" "device_name"
-	config_get mtu "$cfg" "mtu"
-	config_get tun_name "$cfg" "tun_name"
-	config_get_bool no_punch "$cfg" "no_punch" "0"
-	config_get_bool rtx "$cfg" "rtx" "0"
-	config_get_bool compress "$cfg" "compress" "0"
-	config_get_bool fec "$cfg" "fec" "0"
-	config_get_bool no_nat "$cfg" "no_nat" "0"
-	config_get_bool no_tun "$cfg" "no_tun" "0"
-	config_get_bool allow_mapping "$cfg" "allow_mapping" "0"
-	config_get cert_mode "$cfg" "cert_mode"
-	config_get ctrl_port "$cfg" "ctrl_port"
-	config_get tunnel_port "$cfg" "tunnel_port"
-	config_get password "$cfg" "password"
-	config_list_foreach "$cfg" vnt2_forward append_runtime_item vnt2_forward
-	vnt2_forward="$(sed -n 's/^vnt2_forward=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-	vnt2_forward="$(trim_list "$vnt2_forward")"
 	config_get bind_dev "$cfg" "bind_dev"
-	config_get cli_conf_file "$cfg" "cli_conf_file" "${CLI_CONF_DEFAULT}"
+	config_list_foreach "$cfg" vnt2_forward append_forward_item
+	forward_list="${VNT2_FORWARD_LIST}"
 
-	[ -n "$cli_conf_file" ] || cli_conf_file="${CLI_CONF_DEFAULT}"
-	CLI_CONF_FILE="$cli_conf_file"
-	cli_conf_dir="$(dirname "${CLI_CONF_FILE}")"
-	[ -n "$cli_conf_dir" ] || cli_conf_dir="${CLI_CONF_DIR}"
+	tun_name="$(trim_value "$(toml_get_string "${CLI_CONF_FILE}" "tun_name")")"
+	[ -n "$tun_name" ] || tun_name="vnt-tun"
+	no_tun="$(toml_get_bool "${CLI_CONF_FILE}" "no_tun")"
 
-	mkdir -p "${cli_conf_dir}"
-	: >"${CLI_CONF_FILE}"
-	printf 'network_code = "%s"\n' "$(toml_escape "$network_code")" >>"${CLI_CONF_FILE}"
-
-	for item in $server_list; do
-		server_args="${server_args}__ITEM__${item}"
-	done
-	for item in $(trim_list "$input_list"); do
-		input_args="${input_args}__ITEM__${item}"
-	done
-	for item in $(trim_list "$output_list"); do
-		output_args="${output_args}__ITEM__${item}"
-	done
-	for item in $(trim_list "$mapping_list"); do
-		mapping_args="${mapping_args}__ITEM__${item}"
-	done
-	for item in $(trim_list "$udp_stun_list"); do
-		udp_stun_args="${udp_stun_args}__ITEM__${item}"
-	done
-	for item in $(trim_list "$tcp_stun_list"); do
-		tcp_stun_args="${tcp_stun_args}__ITEM__${item}"
-	done
-
-	[ -n "$server_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "server" $(printf '%s\n' "$server_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$ip" ] && append_toml_string_file "${CLI_CONF_FILE}" "ip" "$ip"
-	[ -n "$device_id" ] && append_toml_string_file "${CLI_CONF_FILE}" "device_id" "$device_id"
-	[ -n "$device_name" ] && append_toml_string_file "${CLI_CONF_FILE}" "device_name" "$device_name"
-	[ -n "$tun_name" ] && append_toml_string_file "${CLI_CONF_FILE}" "tun_name" "$tun_name"
-	[ -n "$password" ] && append_toml_string_file "${CLI_CONF_FILE}" "password" "$password"
-	[ -n "$cert_mode" ] && append_toml_string_file "${CLI_CONF_FILE}" "cert_mode" "$cert_mode"
-	[ -n "$mtu" ] && append_toml_int_file "${CLI_CONF_FILE}" "mtu" "$mtu"
-	[ -n "$ctrl_port" ] && append_toml_int_file "${CLI_CONF_FILE}" "cmd_port" "$ctrl_port"
-	[ -n "$tunnel_port" ] && append_toml_int_file "${CLI_CONF_FILE}" "port" "$tunnel_port"
-	append_toml_bool_file "${CLI_CONF_FILE}" "no_punch" "$no_punch"
-	append_toml_bool_file "${CLI_CONF_FILE}" "use_channel_type" "$rtx"
-	append_toml_bool_file "${CLI_CONF_FILE}" "compressor" "$compress"
-	append_toml_bool_file "${CLI_CONF_FILE}" "use_fec" "$fec"
-	append_toml_bool_file "${CLI_CONF_FILE}" "disable_stats" "0"
-	append_toml_bool_file "${CLI_CONF_FILE}" "no_proxy" "$no_nat"
-	append_toml_bool_file "${CLI_CONF_FILE}" "no_tun" "$no_tun"
-	append_toml_bool_file "${CLI_CONF_FILE}" "allow_wire_guard" "$allow_mapping"
-	[ -n "$input_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "in_ips" $(printf '%s\n' "$input_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$output_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "out_ips" $(printf '%s\n' "$output_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$mapping_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "mapping" $(printf '%s\n' "$mapping_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$udp_stun_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "stun_server" $(printf '%s\n' "$udp_stun_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-	[ -n "$tcp_stun_args" ] && append_toml_array_file "${CLI_CONF_FILE}" "stun_server_tcp" $(printf '%s\n' "$tcp_stun_args" | sed 's/__ITEM__/\n/g' | sed '/^$/d')
-
-	echo "$vnt2_forward" >/tmp/vnt2_forward.list
-	echo "$bind_dev" >/tmp/vnt2_bind_dev
-	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
+	VNT2_BIND_DEV="${bind_dev}"
+	VNT2_TUN_NAME="${tun_name}"
+	VNT2_NO_TUN="${no_tun}"
+	VNT2_FORWARD_LIST="${forward_list}"
 	return 0
 }
 
-build_server_config() {
-	local cfg="$1"
-	local server_conf_file server_conf_dir
-	local tcp_bind quic_bind ws_bind web_bind server_quic_bind
-	local cert key network lease_duration persistence username password server_token
-	local white_list peer_servers custom_net
-
-	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
-
-	config_get server_conf_file "$cfg" "server_conf_file" "${SERVER_CONF_DEFAULT}"
-	[ -n "$server_conf_file" ] || server_conf_file="${SERVER_CONF_DEFAULT}"
-	SERVER_CONF_FILE="$server_conf_file"
-	server_conf_dir="$(dirname "${SERVER_CONF_FILE}")"
-	[ -n "$server_conf_dir" ] || server_conf_dir="${SERVER_CONF_DIR}"
-
-	config_get tcp_bind "$cfg" "tcp_bind" "0.0.0.0:29872"
-	config_get quic_bind "$cfg" "quic_bind" "0.0.0.0:29872"
-	config_get ws_bind "$cfg" "ws_bind" "0.0.0.0:29872"
-	config_get web_bind "$cfg" "web_bind" "0.0.0.0:29871"
-	config_get server_quic_bind "$cfg" "server_quic_bind"
-	config_get cert "$cfg" "cert"
-	config_get key "$cfg" "key"
-	config_get network "$cfg" "network" "10.26.0.0/24"
-	config_get lease_duration "$cfg" "lease_duration" "86400"
-	config_get_bool persistence "$cfg" "persistence" "1"
-	config_get username "$cfg" "username" "admin"
-	config_get password "$cfg" "password" "admin"
-	config_get server_token "$cfg" "server_token"
-
-	config_list_foreach "$cfg" white_list append_runtime_item white_list
-	config_list_foreach "$cfg" peer_servers append_runtime_item peer_servers
-	config_list_foreach "$cfg" custom_net append_runtime_item custom_net
-
-	white_list="$(sed -n 's/^white_list=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-	peer_servers="$(sed -n 's/^peer_servers=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-	custom_net="$(sed -n 's/^custom_net=//p' "${RUNTIME_FILE}" 2>/dev/null)"
-
-	mkdir -p "${server_conf_dir}"
-	: >"${SERVER_CONF_FILE}"
-
-	append_toml_string_file "${SERVER_CONF_FILE}" "tcp" "$tcp_bind"
-	append_toml_string_file "${SERVER_CONF_FILE}" "quic" "$quic_bind"
-	append_toml_string_file "${SERVER_CONF_FILE}" "ws" "$ws_bind"
-	append_toml_string_file "${SERVER_CONF_FILE}" "web" "$web_bind"
-	append_toml_string_file "${SERVER_CONF_FILE}" "quic_proxy" "$server_quic_bind"
-	append_toml_string_file "${SERVER_CONF_FILE}" "cert" "$cert"
-	append_toml_string_file "${SERVER_CONF_FILE}" "key" "$key"
-	append_toml_string_file "${SERVER_CONF_FILE}" "network" "$network"
-	append_toml_int_file "${SERVER_CONF_FILE}" "lease_duration" "$lease_duration"
-	append_toml_bool_file "${SERVER_CONF_FILE}" "persistence" "$persistence"
-	append_toml_string_file "${SERVER_CONF_FILE}" "username" "$username"
-	append_toml_string_file "${SERVER_CONF_FILE}" "password" "$password"
-	append_toml_string_file "${SERVER_CONF_FILE}" "token" "$server_token"
-
-	if [ -n "$(trim_list "$white_list")" ]; then
-		append_toml_array_file "${SERVER_CONF_FILE}" "white_token" $(trim_list "$white_list")
+append_forward_item() {
+	local value="$1"
+	value="$(trim_value "$value")"
+	[ -n "$value" ] || return 0
+	if [ -n "${VNT2_FORWARD_LIST}" ]; then
+		VNT2_FORWARD_LIST="${VNT2_FORWARD_LIST} ${value}"
+	else
+		VNT2_FORWARD_LIST="${value}"
 	fi
-	if [ -n "$(trim_list "$peer_servers")" ]; then
-		append_toml_array_file "${SERVER_CONF_FILE}" "server_address" $(trim_list "$peer_servers")
-	fi
-	if [ -n "$(trim_list "$custom_net")" ]; then
-		append_toml_array_file "${SERVER_CONF_FILE}" "cidr" $(trim_list "$custom_net")
+}
+
+prepare_server_runtime() {
+	SERVER_CONF_FILE="${SERVER_CONF_DEFAULT}"
+
+	if ! toml_validate_server_config "${SERVER_CONF_FILE}"; then
+		return 1
 	fi
 
-	rm -f "${RUNTIME_FILE}" "${RUNTIME_FILE}".*
+	VNTS2_TCP_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "tcp")")"
+	VNTS2_QUIC_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "quic")")"
+	VNTS2_WS_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "ws")")"
+	VNTS2_WEB_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "web")")"
+
+	[ -n "${VNTS2_TCP_BIND}" ] || VNTS2_TCP_BIND="0.0.0.0:29872"
+	[ -n "${VNTS2_QUIC_BIND}" ] || VNTS2_QUIC_BIND="0.0.0.0:29872"
+	[ -n "${VNTS2_WS_BIND}" ] || VNTS2_WS_BIND="0.0.0.0:29872"
+	[ -n "${VNTS2_WEB_BIND}" ] || VNTS2_WEB_BIND="0.0.0.0:29871"
+
 	return 0
 }
 
 start_cli_instance() {
 	local cfg="$1"
-	local enabled cli_bin ctrl_bin tun_name no_tun forward_list bind_dev cli_conf_file
+	local enabled cli_bin ctrl_bin
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
@@ -1004,30 +968,21 @@ start_cli_instance() {
 		log_cli "检测到现有 CLI/CTRL 程序完整：cli=${cli_bin} ctrl=${ctrl_bin}"
 	fi
 
-	config_get cli_conf_file "$cfg" "cli_conf_file" "${CLI_CONF_DEFAULT}"
-	[ -n "$cli_conf_file" ] || cli_conf_file="${CLI_CONF_DEFAULT}"
-	CLI_CONF_FILE="$cli_conf_file"
-
-	if ! build_cli_config "$cfg"; then
-		log_cli "启动失败：生成配置文件失败"
+	VNT2_FORWARD_LIST=""
+	if ! prepare_cli_runtime "$cfg"; then
+		log_cli "启动失败：客户端 TOML 配置校验失败"
 		return 1
 	fi
 
-	config_get tun_name "$cfg" "tun_name" "vnt-tun"
-	config_get_bool no_tun "$cfg" "no_tun" "0"
-	forward_list="$(cat /tmp/vnt2_forward.list 2>/dev/null)"
-	bind_dev="$(cat /tmp/vnt2_bind_dev 2>/dev/null)"
-	rm -f /tmp/vnt2_forward.list /tmp/vnt2_bind_dev
-
-	if [ "$no_tun" != "1" ]; then
-		configure_network "$tun_name" "$forward_list"
+	if [ "${VNT2_NO_TUN}" != "1" ]; then
+		configure_network "${VNT2_TUN_NAME}" "${VNT2_FORWARD_LIST}"
 	else
 		cleanup_network
 	fi
 
 	log_cli "使用 ${cli_bin} 启动，配置文件 ${CLI_CONF_FILE}"
 	procd_open_instance "vnt2_cli"
-	[ -n "$bind_dev" ] && procd_set_param env VNT_BIND_DEV="$bind_dev"
+	[ -n "${VNT2_BIND_DEV}" ] && procd_set_param env VNT_BIND_DEV="${VNT2_BIND_DEV}"
 	procd_set_param command /bin/sh -c "exec \"${cli_bin}\" --conf \"${CLI_CONF_FILE}\" >>\"${CLI_LOG}\" 2>&1"
 	procd_set_param stdout 0
 	procd_set_param stderr 0
@@ -1081,8 +1036,7 @@ start_web_instance() {
 
 start_server_instance() {
 	local cfg="$1"
-	local enabled server_bin server_conf_file
-	local tcp_bind quic_bind ws_bind web_bind
+	local enabled server_bin
 	local open_tcp open_quic open_ws open_web
 
 	config_get_bool enabled "$cfg" "enabled" "0"
@@ -1097,30 +1051,25 @@ start_server_instance() {
 		return 1
 	}
 
-	if ! build_server_config "$cfg"; then
-		log_server "启动失败：生成配置文件失败"
+	if ! prepare_server_runtime; then
+		log_server "启动失败：服务端 TOML 配置校验失败"
 		return 1
 	fi
 
-	config_get server_conf_file "$cfg" "server_conf_file" "${SERVER_CONF_DEFAULT}"
-	config_get tcp_bind "$cfg" "tcp_bind" "0.0.0.0:29872"
-	config_get quic_bind "$cfg" "quic_bind" "0.0.0.0:29872"
-	config_get ws_bind "$cfg" "ws_bind" "0.0.0.0:29872"
-	config_get web_bind "$cfg" "web_bind" "0.0.0.0:29871"
 	config_get_bool open_tcp "$cfg" "open_wan_tcp" "0"
 	config_get_bool open_quic "$cfg" "open_wan_quic" "0"
 	config_get_bool open_ws "$cfg" "open_wan_ws" "0"
 	config_get_bool open_web "$cfg" "open_wan_web" "0"
 
-	configure_server_firewall "$tcp_bind" "$quic_bind" "$ws_bind" "$web_bind" "$open_tcp" "$open_quic" "$open_ws" "$open_web"
+	configure_server_firewall "${VNTS2_TCP_BIND}" "${VNTS2_QUIC_BIND}" "${VNTS2_WS_BIND}" "${VNTS2_WEB_BIND}" "$open_tcp" "$open_quic" "$open_ws" "$open_web"
 
-	log_server "使用 ${server_bin} 启动，配置文件 ${server_conf_file}"
+	log_server "使用 ${server_bin} 启动，配置文件 ${SERVER_CONF_FILE}"
 	procd_open_instance "vnts2"
-	procd_set_param command /bin/sh -c "exec \"${server_bin}\" --conf \"${server_conf_file}\" >>\"${SERVER_LOG}\" 2>&1"
+	procd_set_param command /bin/sh -c "exec \"${server_bin}\" --conf \"${SERVER_CONF_FILE}\" >>\"${SERVER_LOG}\" 2>&1"
 	procd_set_param stdout 0
 	procd_set_param stderr 0
 	procd_set_param respawn
-	procd_set_param file "${server_conf_file}"
+	procd_set_param file "${SERVER_CONF_FILE}"
 	procd_set_param limits core="unlimited"
 	procd_set_param limits nofile="1048576 1048576"
 	procd_set_param term_timeout 10
@@ -1151,7 +1100,7 @@ stop_service() {
 	log_server "服务停止流程开始"
 	log_download "服务停止流程开始"
 
-	rm -f "${CLI_TIME}" "${WEB_TIME}" "${SERVER_TIME}" "${RUNTIME_FILE}" "${RUNTIME_FILE}".* /tmp/vnt2_forward.list /tmp/vnt2_bind_dev
+	rm -f "${CLI_TIME}" "${WEB_TIME}" "${SERVER_TIME}"
 	cleanup_network
 	cleanup_web_firewall
 	cleanup_server_firewall
