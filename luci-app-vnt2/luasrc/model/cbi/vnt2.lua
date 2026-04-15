@@ -507,6 +507,17 @@ local tcp_stun = s:taboption("stun", DynamicList, "tcp_stun", translate("TCP STU
 tcp_stun.placeholder = "stun.nextcloud.com:443"
 bind_dynamiclist(tcp_stun)
 
+local auto_download_cli = s:taboption("advanced", Flag, "auto_download", translate("自动下载程序"),
+	translate("当本地缺少 vnt2_cli / vnt2_ctrl 时，自动从 GitHub Releases 下载匹配当前架构的发行包"))
+auto_download_cli.rmempty = false
+auto_download_cli.default = auto_download_cli.enabled
+
+local download_tag_cli = s:taboption("advanced", Value, "download_tag", translate("客户端下载版本"),
+	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签，如 v2.0.18"))
+download_tag_cli.placeholder = "latest"
+download_tag_cli.default = "latest"
+download_tag_cli.validate = validate_nonempty
+
 local download_repo_cli = s:taboption("advanced", Value, "download_repo", translate("客户端下载仓库"),
 	translate("默认 vnt-dev/vnt，通常无需修改"))
 download_repo_cli.placeholder = "vnt-dev/vnt"
@@ -524,9 +535,9 @@ vnt2_ctrl_bin.placeholder = "/usr/bin/vnt2_ctrl"
 vnt2_ctrl_bin.validate = validate_nonempty
 
 local cli_conf_file = s:taboption("advanced", Value, "cli_conf_file", translate("配置文件路径"),
-	translate("用于指定 vnt2_cli 运行时配置文件路径"))
-cli_conf_file.placeholder = "/etc/vnt2/vnt2-cli.toml"
-cli_conf_file.default = "/etc/vnt2/vnt2-cli.toml"
+	translate("用于指定 vnt2_cli / vnt2_web 共用配置文件路径；默认直接写入 OpenWrt UCI 配置文件 /etc/config/vnt2"))
+cli_conf_file.placeholder = "/etc/config/vnt2"
+cli_conf_file.default = "/etc/config/vnt2"
 cli_conf_file.validate = validate_nonempty
 
 local cli_conf_shared_tip = s:taboption("advanced", DummyValue, "_cli_conf_shared_tip")
@@ -713,6 +724,17 @@ web_restart.write = function()
 	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")
 end
 
+local auto_download_web = w:taboption("general", Flag, "auto_download", translate("自动下载程序"),
+	translate("当本地缺少 vnt2_web 时，自动从 GitHub Releases 下载匹配当前架构的发行包"))
+auto_download_web.rmempty = false
+auto_download_web.default = auto_download_web.enabled
+
+local download_tag_web = w:taboption("general", Value, "download_tag", translate("Web 下载版本"),
+	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签，如 v2.0.18"))
+download_tag_web.placeholder = "latest"
+download_tag_web.default = "latest"
+download_tag_web.validate = validate_nonempty
+
 local download_repo_web = w:taboption("general", Value, "download_repo", translate("Web 下载仓库"),
 	translate("默认 vnt-dev/vnt，通常无需修改"))
 download_repo_web.placeholder = "vnt-dev/vnt"
@@ -725,16 +747,16 @@ vnt2_web_bin.placeholder = "/usr/bin/vnt2_web"
 vnt2_web_bin.validate = validate_nonempty
 
 local web_cli_conf_file = w:taboption("general", Value, "_shared_cli_conf_file", translate("配置文件路径"),
-	translate("用于指定 vnt2_cli / vnt2_web 共用配置文件路径"))
-web_cli_conf_file.placeholder = "/etc/vnt2/vnt2-cli.toml"
-web_cli_conf_file.default = "/etc/vnt2/vnt2-cli.toml"
+	translate("用于指定 vnt2_cli / vnt2_web 共用配置文件路径；默认直接写入 OpenWrt UCI 配置文件 /etc/config/vnt2"))
+web_cli_conf_file.placeholder = "/etc/config/vnt2"
+web_cli_conf_file.default = "/etc/config/vnt2"
 web_cli_conf_file.cfgvalue = function(self, section)
-	return m.uci:get("vnt2", "vnt2_cli", "cli_conf_file") or "/etc/vnt2/vnt2-cli.toml"
+	return m.uci:get("vnt2", "vnt2_cli", "cli_conf_file") or "/etc/config/vnt2"
 end
 web_cli_conf_file.write = function(self, section, value)
 	value = trim(value)
 	if value == "" then
-		value = "/etc/vnt2/vnt2-cli.toml"
+		value = "/etc/config/vnt2"
 	end
 	m.uci:set("vnt2", "vnt2_cli", "cli_conf_file", value)
 end

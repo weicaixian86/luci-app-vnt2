@@ -91,10 +91,13 @@ jobs:
       - name: Apply package version from release tag
         shell: bash
         run: |
-          VERSION="${{ github.event.inputs.release_tag }}"
-          VERSION="${VERSION#v}"
+          RAW_TAG="${{ github.event.inputs.release_tag }}"
+          VERSION="${RAW_TAG#v}"
           VERSION="${VERSION#V}"
+          test -n "$RAW_TAG"
           test -n "$VERSION"
+          echo "RAW_TAG=$RAW_TAG" >> "$GITHUB_ENV"
+          echo "PACKAGE_VERSION=$VERSION" >> "$GITHUB_ENV"
           sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
           grep -E "^PKG_NAME:=|^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
 
@@ -126,6 +129,12 @@ jobs:
           mkdir -p output
           find sdk/bin/packages -type f -name "${PACKAGE_NAME}_*.ipk" -exec cp -f {} output/ \;
           test -n "$(find output -maxdepth 1 -type f -name '*.ipk')"
+          for file in output/*.ipk; do
+            new_name="$(echo "$(basename "$file")" | sed -E "s/^${PACKAGE_NAME}_[^-]+-r([0-9]+)_all\.ipk$/${PACKAGE_NAME}_${RAW_TAG}-r\1_all.ipk/")"
+            if [ "$new_name" != "$(basename "$file")" ]; then
+              mv -f "$file" "output/$new_name"
+            fi
+          done
           ls -lah output
 
       - name: Upload artifact
