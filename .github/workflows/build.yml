@@ -7,6 +7,10 @@ on:
         description: "Release tag"
         required: true
         default: "v2.0.0"
+      release_note:
+        description: "Release description"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -31,6 +35,14 @@ jobs:
         shell: bash
         run: |
           echo "BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$GITHUB_ENV"
+          {
+            echo "RELEASE_BODY<<EOF"
+            if [ -n "${{ github.event.inputs.release_note }}" ]; then
+              printf '%s\n\n' "${{ github.event.inputs.release_note }}"
+            fi
+            printf '编译时间: %s\n' "$BUILD_TIME"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         shell: bash
@@ -160,8 +172,7 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.release_tag }}
           name: ${{ github.event.inputs.release_tag }}
-          body: |
-            编译时间: ${{ env.BUILD_TIME }}
+          body: ${{ env.RELEASE_BODY }}
           files: output/*.ipk
           draft: false
           prerelease: false
