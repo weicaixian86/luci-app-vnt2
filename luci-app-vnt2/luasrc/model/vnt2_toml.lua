@@ -8,9 +8,12 @@ M.DEFAULT_SERVER_TOML = "/etc/config/vnts2.toml"
 M.CLIENT_TOML = M.DEFAULT_CLIENT_TOML
 M.SERVER_TOML = M.DEFAULT_SERVER_TOML
 
+local LEGACY_DEFAULT_CLIENT_SERVER = "tcp://8.163.89.234:29872"
+local DEPRECATED_DEFAULT_CLIENT_SERVER = "tcp://0.0.0.0:29872"
+
 local client_defaults = {
 	network_code = "123456",
-	server = { "tcp://0.0.0.0:29872" },
+	server = {},
 	ip = "",
 	device_id = "",
 	device_name = "",
@@ -207,6 +210,19 @@ local function normalize_list(value)
 	return out
 end
 
+local function normalize_client_server_list(value)
+	local out = normalize_list(value)
+
+	if #out == 1 then
+		local first = out[1]
+		if first == LEGACY_DEFAULT_CLIENT_SERVER or first == DEPRECATED_DEFAULT_CLIENT_SERVER then
+			return {}
+		end
+	end
+
+	return out
+end
+
 local function toml_escape(s)
 	return tostring(s or ""):gsub("\\", "\\\\"):gsub('"', '\\"')
 end
@@ -381,7 +397,11 @@ function M.ensure_client_toml_from_uci(uci)
 	for toml_key, uci_key in pairs(client_option_map) do
 		if is_list_key(toml_key) then
 			local val = uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key) or data[toml_key]
-			data[toml_key] = normalize_list(val)
+			if toml_key == "server" then
+				data[toml_key] = normalize_client_server_list(val)
+			else
+				data[toml_key] = normalize_list(val)
+			end
 		else
 			local val = uci:get_first("vnt2", "vnt2_cli", uci_key)
 			if val ~= nil then
@@ -429,7 +449,13 @@ function M.export_uci_to_toml(uci)
 
 	for toml_key, uci_key in pairs(client_option_map) do
 		if is_list_key(toml_key) then
-			cli[toml_key] = normalize_list(uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key))
+			if toml_key == "server" then
+				cli[toml_key] = normalize_client_server_list(
+					uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key)
+				)
+			else
+				cli[toml_key] = normalize_list(uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key))
+			end
 		else
 			local val = uci:get_first("vnt2", "vnt2_cli", uci_key)
 			if val ~= nil then
@@ -466,7 +492,11 @@ function M.sync_toml_to_uci(uci)
 
 	for toml_key, uci_key in pairs(client_option_map) do
 		if is_list_key(toml_key) then
-			set_uci_list(uci, "vnt2", cli_section, uci_key, cli[toml_key])
+			if toml_key == "server" then
+				set_uci_list(uci, "vnt2", cli_section, uci_key, normalize_client_server_list(cli[toml_key]))
+			else
+				set_uci_list(uci, "vnt2", cli_section, uci_key, cli[toml_key])
+			end
 		else
 			set_uci_scalar(uci, "vnt2", cli_section, uci_key, cli[toml_key])
 		end

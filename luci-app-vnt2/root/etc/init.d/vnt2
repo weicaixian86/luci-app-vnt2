@@ -18,7 +18,7 @@ CLI_CONF_DEFAULT="/etc/config/vnt2.toml"
 SERVER_CONF_DEFAULT="/etc/config/vnts2.toml"
 
 LEGACY_DEFAULT_SERVER="tcp://8.163.89.234:29872"
-DEFAULT_CLIENT_SERVER="tcp://0.0.0.0:29872"
+DEPRECATED_DEFAULT_SERVER="tcp://0.0.0.0:29872"
 
 CLI_CONF_FILE=""
 SERVER_CONF_FILE=""
@@ -111,12 +111,11 @@ migrate_legacy_client_server() {
 	first_server="${server_list%% *}"
 	first_server="$(trim_value "$first_server")"
 
-	if [ "$first_server" = "$LEGACY_DEFAULT_SERVER" ] && [ "$server_list" = "$LEGACY_DEFAULT_SERVER" ]; then
+	if [ "$server_list" = "$LEGACY_DEFAULT_SERVER" ] || [ "$server_list" = "$DEPRECATED_DEFAULT_SERVER" ]; then
 		uci -q delete ${CONF}.${cfg}.server
-		uci -q add_list ${CONF}.${cfg}.server="${DEFAULT_CLIENT_SERVER}"
 		uci commit ${CONF} >/dev/null 2>&1
 		changed="1"
-		log_cli "检测到旧默认服务端地址，已自动迁移为 ${DEFAULT_CLIENT_SERVER}"
+		log_cli "检测到历史默认服务端地址，已自动清空客户端服务端配置，等待用户手动填写"
 	fi
 
 	return 0
@@ -259,51 +258,80 @@ detect_arch_patterns() {
 }
 
 get_downloader() {
-	if command -v uclient-fetch >/dev/null 2>&1; then
-		echo "uclient-fetch"
-		return 0
-	fi
-	if command -v curl >/dev/null 2>&1; then
-		echo "curl"
-		return 0
-	fi
-	if command -v wget >/dev/null 2>&1; then
-		echo "wget"
-		return 0
-	fi
+	local purpose="$1"
+
+	case "$purpose" in
+		asset)
+			if command -v curl >/dev/null 2>&1; then
+				echo "curl"
+				return 0
+			fi
+			if command -v wget >/dev/null 2>&1; then
+				echo "wget"
+				return 0
+			fi
+			if command -v uclient-fetch >/dev/null 2>&1; then
+				echo "uclient-fetch"
+				return 0
+			fi
+		;;
+		*)
+			if command -v curl >/dev/null 2>&1; then
+				echo "curl"
+				return 0
+			fi
+			if command -v uclient-fetch >/dev/null 2>&1; then
+				echo "uclient-fetch"
+				return 0
+			fi
+			if command -v wget >/dev/null 2>&1; then
+				echo "wget"
+				return 0
+			fi
+		;;
+	esac
+
 	return 1
 }
 
 download_file() {
 	local url="$1"
 	local out="$2"
+	local purpose="${3:-generic}"
 	local downloader
+	local rc
 
-	downloader="$(get_downloader)" || return 1
+	downloader="$(get_downloader "$purpose")" || return 1
+	DOWNLOAD_LAST_TOOL="$downloader"
 
 	case "$downloader" in
-		uclient-fetch)
-			uclient-fetch -q -T 20 \
-				--header "User-Agent: luci-app-vnt2" \
-				--header "Accept: application/vnd.github+json, application/octet-stream, */*" \
-				-O "$out" "$url" >/dev/null 2>&1
-		;;
 		curl)
-			curl -fsSL --connect-timeout 20 --retry 2 \
+			curl -fsSL --connect-timeout 20 --max-time 600 --retry 3 --retry-delay 2 \
 				-A "luci-app-vnt2" \
 				-H "Accept: application/vnd.github+json, application/octet-stream, */*" \
 				-o "$out" "$url" >/dev/null 2>&1
+			rc=$?
 		;;
 		wget)
-			wget -q --timeout=20 \
+			wget -q --timeout=30 --tries=3 \
 				--header="User-Agent: luci-app-vnt2" \
 				--header="Accept: application/vnd.github+json, application/octet-stream, */*" \
 				-O "$out" "$url" >/dev/null 2>&1
+			rc=$?
+		;;
+		uclient-fetch)
+			uclient-fetch -q -T 30 \
+				--header "User-Agent: luci-app-vnt2" \
+				--header "Accept: application/vnd.github+json, application/octet-stream, */*" \
+				-O "$out" "$url" >/dev/null 2>&1
+			rc=$?
 		;;
 		*)
 			return 1
 		;;
 	esac
+
+	return $rc
 }
 
 normalize_release_tag() {
@@ -486,7 +514,7 @@ fetch_release_metadata() {
 
 	for candidate in $(get_release_api_candidates "$repo" "$tag"); do
 		log_download "尝试查询 GitHub Releases：${candidate}"
-		if download_file "$candidate" "$json_file"; then
+		if download_file "$candidate" "$json_file" "api"; then
 			response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
 			if [ -n "$response_tag" ]; then
 				echo "$candidate"
@@ -498,7 +526,7 @@ fetch_release_metadata() {
 	list_file="${json_file}.list"
 	api_url="https://api.github.com/repos/${repo}/releases"
 	log_download "尝试查询 GitHub Releases 列表：${api_url}"
-	if download_file "$api_url" "$list_file"; then
+	if download_file "$api_url" "$list_file" "api"; then
 		resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
 		normalized_tag="$(normalize_release_tag "$resolved_tag")"
 
@@ -993,8 +1021,8 @@ auto_download_bundle() {
 	fi
 
 	if [ ! -s "$asset_file" ]; then
-		if ! download_file "$asset_url" "$asset_file"; then
-			log_download "下载发行资源失败：${asset_url}"
+		if ! download_file "$asset_url" "$asset_file" "asset"; then
+			log_download "下载发行资源失败：tool=${DOWNLOAD_LAST_TOOL:-unknown} url=${asset_url}"
 			write_download_state "$state_file" "failed" "下载发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
 			return 1
 		fi
@@ -1010,8 +1038,8 @@ auto_download_bundle() {
 	if ! extract_release_asset "$asset_file" "$extracted_dir"; then
 		log_download "首次解压失败，删除缓存后重新下载重试：${asset_file}"
 		rm -f "$asset_file"
-		if ! download_file "$asset_url" "$asset_file"; then
-			log_download "重试下载发行资源失败：${asset_url}"
+		if ! download_file "$asset_url" "$asset_file" "asset"; then
+			log_download "重试下载发行资源失败：tool=${DOWNLOAD_LAST_TOOL:-unknown} url=${asset_url}"
 			write_download_state "$state_file" "failed" "重试下载发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
 			return 1
 		fi
