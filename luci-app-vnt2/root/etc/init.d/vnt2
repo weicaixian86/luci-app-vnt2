@@ -53,13 +53,29 @@ ensure_log_files() {
 	[ -f "${DOWNLOAD_LOG}" ] || : >"${DOWNLOAD_LOG}"
 }
 
+get_first_section_id() {
+	local type="$1"
+	local section=""
+	config_foreach __collect_first_section "$type"
+	section="$FIRST_SECTION_ID"
+	FIRST_SECTION_ID=""
+	echo "$section"
+}
+
+__collect_first_section() {
+	local section="$1"
+	[ -n "$FIRST_SECTION_ID" ] || FIRST_SECTION_ID="$section"
+}
+
 trim_value() {
 	echo "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
 resolve_client_conf_file() {
-	local cfg="${1:-vnt2_cli}"
+	local cfg="$1"
 	local conf_path
+
+	[ -n "$cfg" ] || cfg="$(get_first_section_id "vnt2_cli")"
 	config_get conf_path "$cfg" "client_conf_file" "$CLI_CONF_DEFAULT"
 	conf_path="$(trim_value "$conf_path")"
 	[ -n "$conf_path" ] || conf_path="$CLI_CONF_DEFAULT"
@@ -67,8 +83,10 @@ resolve_client_conf_file() {
 }
 
 resolve_server_conf_file() {
-	local cfg="${1:-vnts2}"
+	local cfg="$1"
 	local conf_path
+
+	[ -n "$cfg" ] || cfg="$(get_first_section_id "vnts2")"
 	config_get conf_path "$cfg" "server_conf_file" "$SERVER_CONF_DEFAULT"
 	conf_path="$(trim_value "$conf_path")"
 	[ -n "$conf_path" ] || conf_path="$SERVER_CONF_DEFAULT"
@@ -1217,7 +1235,7 @@ start_web_instance() {
 
 	configure_web_firewall "$web_host" "$web_port" "$web_wan"
 
-	CLI_CONF_FILE="$(resolve_client_conf_file "vnt2_cli")"
+	CLI_CONF_FILE="$(resolve_client_conf_file "$(get_first_section_id "vnt2_cli")")"
 	log_web "使用 ${web_bin} 监听 ${web_host}:${web_port}，客户端配置文件 ${CLI_CONF_FILE}"
 	procd_open_instance "vnt2_web"
 	procd_set_param env RUST_LOG="$log_level"
@@ -1278,6 +1296,8 @@ start_server_instance() {
 }
 
 start_service() {
+	local cli_cfg web_cfg server_cfg
+
 	ensure_log_files
 	log_cli "服务启动流程开始"
 	log_web "服务启动流程开始"
@@ -1285,9 +1305,13 @@ start_service() {
 	log_download "服务启动流程开始"
 
 	config_load "${CONF}"
-	start_cli_instance "vnt2_cli"
-	start_web_instance "vnt2_web"
-	start_server_instance "vnts2"
+	cli_cfg="$(get_first_section_id "vnt2_cli")"
+	web_cfg="$(get_first_section_id "vnt2_web")"
+	server_cfg="$(get_first_section_id "vnts2")"
+
+	[ -n "$cli_cfg" ] && start_cli_instance "$cli_cfg" || log_cli "未找到 vnt2_cli 配置段"
+	[ -n "$web_cfg" ] && start_web_instance "$web_cfg" || log_web "未找到 vnt2_web 配置段"
+	[ -n "$server_cfg" ] && start_server_instance "$server_cfg" || log_server "未找到 vnts2 配置段"
 
 	log_download "服务启动流程结束"
 }

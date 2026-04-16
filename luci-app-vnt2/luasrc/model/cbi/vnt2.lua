@@ -137,11 +137,45 @@ local function list_net_devices()
 end
 
 local function add_file_upload_handler(note_options)
-	local dir = "/tmp/"
+	local upload_dir = "/tmp/vnt2-upload/"
+	local install_dir = "/usr/bin/"
 	local fd
 	local uploaded_name
 
-	fs.mkdir(dir)
+	local function install_uploaded_binary(src_path, raw_name)
+		local name = trim(raw_name)
+		local target_name
+
+		if name == "vnt2_cli" or name == "vnt2_ctrl" or name == "vnt2_web" or name == "vnts2" then
+			target_name = name
+		elseif name == "vnts" then
+			target_name = "vnts2"
+		else
+			return nil, translate("未识别的程序文件名，仅支持 vnt2_cli / vnt2_ctrl / vnt2_web / vnts2 / vnts")
+		end
+
+		local target_path = install_dir .. target_name
+		if sys.call("cp -f " .. util.shellquote(src_path) .. " " .. util.shellquote(target_path) .. " >/dev/null 2>&1") ~= 0 then
+			return nil, translate("复制到 /usr/bin 失败")
+		end
+		if sys.call("chmod 755 " .. util.shellquote(target_path) .. " >/dev/null 2>&1") ~= 0 then
+			return nil, translate("设置执行权限失败")
+		end
+		return target_path, nil
+	end
+
+	local function find_extracted_binary(root, name)
+		local cmd = "find " .. util.shellquote(root) .. " -type f \\( -name "
+			.. util.shellquote(name)
+			.. " -o -name " .. util.shellquote(name .. ".bin")
+			.. " -o -name " .. util.shellquote(name .. "-*")
+			.. " -o -name " .. util.shellquote(name .. "_*")
+			.. " \\) 2>/dev/null | head -n1"
+		return trim(sys.exec(cmd))
+	end
+
+	fs.mkdirr(upload_dir)
+	fs.mkdir(install_dir)
 
 	http.setfilehandler(function(meta, chunk, eof)
 		if not fd then
@@ -154,7 +188,7 @@ local function add_file_upload_handler(note_options)
 				return
 			end
 
-			fd = nixio.open(dir .. uploaded_name, "w")
+			fd = nixio.open(upload_dir .. uploaded_name, "w")
 			if not fd then
 				for _, opt in ipairs(note_options) do
 					opt.value = translate("错误：上传失败")
@@ -171,20 +205,45 @@ local function add_file_upload_handler(note_options)
 			fd:close()
 			fd = nil
 
-			local full = dir .. uploaded_name
-			local msg = translate("文件已上传至") .. " " .. util.pcdata(full)
+			local full = upload_dir .. uploaded_name
+			local msg = translate("上传文件已接收") .. " " .. util.pcdata(full)
 
 			if uploaded_name:sub(-7) == ".tar.gz" then
-				sys.call("tar -xzf " .. util.shellquote(full) .. " -C /tmp >/dev/null 2>&1")
-				for _, bin in ipairs({ "vnt2_cli", "vnt2_ctrl", "vnt2_web", "vnts2", "vnts" }) do
-					if fs.access(dir .. bin) then
-						sys.call("chmod 755 " .. util.shellquote(dir .. bin) .. " >/dev/null 2>&1")
-						msg = msg .. "<br />- " .. util.pcdata(dir .. bin) .. " " .. translate("已就绪，重启服务后生效")
+				local extract_dir = upload_dir .. "extract/"
+				local installed = {}
+
+				sys.call("rm -rf " .. util.shellquote(extract_dir) .. " >/dev/null 2>&1")
+				fs.mkdirr(extract_dir)
+
+				if sys.call("tar -xzf " .. util.shellquote(full) .. " -C " .. util.shellquote(extract_dir) .. " >/dev/null 2>&1") == 0 then
+					for _, bin in ipairs({ "vnt2_cli", "vnt2_ctrl", "vnt2_web", "vnts2", "vnts" }) do
+						local found = find_extracted_binary(extract_dir, bin)
+						if found ~= "" then
+							local installed_path = install_uploaded_binary(found, bin)
+							if installed_path then
+								installed[#installed + 1] = installed_path
+							end
+						end
 					end
+
+					if #installed > 0 then
+						msg = msg .. "<br />" .. translate("已安装到 /usr/bin 并赋予执行权限：")
+						for _, path in ipairs(installed) do
+							msg = msg .. "<br />- " .. util.pcdata(path)
+						end
+					else
+						msg = msg .. "<br />" .. translate("压缩包中未找到可安装的 vnt2/vnts2 程序文件")
+					end
+				else
+					msg = msg .. "<br />" .. translate("压缩包解压失败")
 				end
 			else
-				sys.call("chmod 755 " .. util.shellquote(full) .. " >/dev/null 2>&1")
-				msg = msg .. "<br />- " .. translate("文件已赋予执行权限")
+				local installed_path, err = install_uploaded_binary(full, uploaded_name)
+				if installed_path then
+					msg = msg .. "<br />- " .. util.pcdata(installed_path) .. " " .. translate("已安装到 /usr/bin 并赋予执行权限")
+				else
+					msg = msg .. "<br />- " .. util.pcdata(err or translate("安装失败"))
+				end
 			end
 
 			for _, opt in ipairs(note_options) do
@@ -583,7 +642,7 @@ download_repo_cli.default = "vnt-dev/vnt"
 download_repo_cli.validate = validate_nonempty
 
 local vnt2_cli_bin = s:taboption("advanced", Value, "vnt2_cli_bin", translate("vnt2_cli 程序路径"),
-	translate("默认 /usr/bin/vnt2_cli；若不存在，将优先尝试自动下载，失败后回退到 /tmp 上传程序"))
+	translate("默认 /usr/bin/vnt2_cli；若不存在，将优先尝试自动下载，失败后回退到已上传并安装到 /usr/bin 的程序"))
 vnt2_cli_bin.placeholder = "/usr/bin/vnt2_cli"
 vnt2_cli_bin.validate = validate_nonempty
 
@@ -749,7 +808,7 @@ local upload = s:taboption("upload", FileUpload, "upload_file")
 upload.optional = true
 upload.default = ""
 upload.template = "vnt2/other_upload"
-upload.description = translate("支持上传 vnt2_cli / vnt2_ctrl / vnt2_web 二进制文件，或包含这些文件的 .tar.gz 压缩包。文件会存入 /tmp，重启服务后生效；当自动下载失败时，系统会自动回退使用这里上传的程序。")
+upload.description = translate("支持上传 vnt2_cli / vnt2_ctrl / vnt2_web 二进制文件，或包含这些文件的 .tar.gz 压缩包。上传后会自动安装到 /usr/bin/ 并赋予执行权限，重启服务后生效；当自动下载失败时，系统会自动回退使用这里上传并安装的程序。")
 
 local upload_note = s:taboption("upload", DummyValue, "_upload_note")
 upload_note.rawhtml = true
@@ -800,7 +859,7 @@ download_repo_web.default = "vnt-dev/vnt"
 download_repo_web.validate = validate_nonempty
 
 local vnt2_web_bin = w:taboption("general", Value, "vnt2_web_bin", translate("vnt2_web 程序路径"),
-	translate("默认 /usr/bin/vnt2_web；若不存在，将优先尝试自动下载，失败后回退到 /tmp 上传程序"))
+	translate("默认 /usr/bin/vnt2_web；若不存在，将优先尝试自动下载，失败后回退到已上传并安装到 /usr/bin 的程序"))
 vnt2_web_bin.placeholder = "/usr/bin/vnt2_web"
 vnt2_web_bin.validate = validate_nonempty
 
@@ -875,7 +934,7 @@ local web_upload = w:taboption("upload", FileUpload, "upload_web")
 web_upload.optional = true
 web_upload.default = ""
 web_upload.template = "vnt2/other_upload"
-web_upload.description = translate("支持上传 vnt2_web 二进制文件或包含 vnt2_web 的 .tar.gz 压缩包；当自动下载失败时，系统会自动回退使用这里上传的程序。")
+web_upload.description = translate("支持上传 vnt2_web 二进制文件或包含 vnt2_web 的 .tar.gz 压缩包；上传后会自动安装到 /usr/bin/ 并赋予执行权限；当自动下载失败时，系统会自动回退使用这里上传并安装的程序。")
 
 local web_upload_note = w:taboption("upload", DummyValue, "_upload_note_web")
 web_upload_note.rawhtml = true
@@ -917,13 +976,13 @@ download_tag_server.default = "latest"
 download_tag_server.validate = validate_nonempty
 
 local download_repo_server = v:taboption("general", Value, "download_repo", translate("服务端下载仓库"),
-	translate("默认 lz-ycx/vnts，可按你的实际仓库修改"))
-download_repo_server.placeholder = "lz-ycx/vnts"
-download_repo_server.default = "lz-ycx/vnts"
+	translate("默认 vnt-dev/vnts，通常无需修改"))
+download_repo_server.placeholder = "vnt-dev/vnts"
+download_repo_server.default = "vnt-dev/vnts"
 download_repo_server.validate = validate_nonempty
 
 local vnts2_bin = v:taboption("general", Value, "vnts2_bin", translate("vnts2 程序路径"),
-	translate("默认 /usr/bin/vnts2；若不存在，将优先尝试自动下载，失败后回退到 /tmp 上传程序"))
+	translate("默认 /usr/bin/vnts2；若不存在，将优先尝试自动下载，失败后回退到已上传并安装到 /usr/bin 的程序"))
 vnts2_bin.placeholder = "/usr/bin/vnts2"
 vnts2_bin.validate = validate_nonempty
 
@@ -1063,7 +1122,7 @@ local server_upload = v:taboption("upload", FileUpload, "upload_server")
 server_upload.optional = true
 server_upload.default = ""
 server_upload.template = "vnt2/other_upload"
-server_upload.description = translate("支持上传 vnts2 / vnts 二进制文件，或包含这些文件的 .tar.gz 压缩包；当自动下载失败时，系统会自动回退使用这里上传的程序。")
+server_upload.description = translate("支持上传 vnts2 / vnts 二进制文件，或包含这些文件的 .tar.gz 压缩包；上传后会自动安装到 /usr/bin/ 并赋予执行权限；当自动下载失败时，系统会自动回退使用这里上传并安装的程序。")
 
 local server_upload_note = v:taboption("upload", DummyValue, "_upload_note_server")
 server_upload_note.rawhtml = true
