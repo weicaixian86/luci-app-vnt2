@@ -325,6 +325,178 @@ get_release_api_url() {
 	fi
 }
 
+get_release_api_candidates() {
+	local repo="$1"
+	local tag="$2"
+	local resolved_tag normalized_tag
+
+	[ -n "$repo" ] || repo="vnt-dev/vnt"
+	resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
+	normalized_tag="$(normalize_release_tag "$resolved_tag")"
+
+	if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
+		echo "https://api.github.com/repos/${repo}/releases/latest"
+		return 0
+	fi
+
+	echo "https://api.github.com/repos/${repo}/releases/tags/${resolved_tag}"
+
+	if [ -n "$normalized_tag" ] && [ "$resolved_tag" = "$normalized_tag" ]; then
+		echo "https://api.github.com/repos/${repo}/releases/tags/v${normalized_tag}"
+	fi
+
+	echo "https://api.github.com/repos/${repo}/releases/latest"
+}
+
+extract_first_release_object() {
+	local src="$1"
+	local dst="$2"
+
+	awk '
+BEGIN {
+	in_array = 0
+	depth = 0
+	started = 0
+	out = ""
+}
+{
+	line = $0
+	if (!in_array) {
+		pos = index(line, "[")
+		if (pos > 0) {
+			in_array = 1
+			line = substr(line, pos + 1)
+		} else {
+			next
+		}
+	}
+	for (i = 1; i <= length(line); i++) {
+		c = substr(line, i, 1)
+		if (!started) {
+			if (c == "{") {
+				started = 1
+				depth = 1
+				out = "{"
+			}
+			continue
+		}
+		out = out c
+		if (c == "{") depth++
+		if (c == "}") {
+			depth--
+			if (depth == 0) {
+				print out
+				exit
+			}
+		}
+	}
+}
+' "$src" >"$dst"
+
+	[ -s "$dst" ]
+}
+
+extract_release_object_by_tag() {
+	local src="$1"
+	local dst="$2"
+	local wanted_tag="$3"
+
+	awk -v wanted="$wanted_tag" '
+BEGIN {
+	in_array = 0
+	depth = 0
+	started = 0
+	out = ""
+}
+{
+	line = $0
+	if (!in_array) {
+		pos = index(line, "[")
+		if (pos > 0) {
+			in_array = 1
+			line = substr(line, pos + 1)
+		} else {
+			next
+		}
+	}
+	for (i = 1; i <= length(line); i++) {
+		c = substr(line, i, 1)
+		if (!started) {
+			if (c == "{") {
+				started = 1
+				depth = 1
+				out = "{"
+			}
+			continue
+		}
+		out = out c
+		if (c == "{") depth++
+		if (c == "}") {
+			depth--
+			if (depth == 0) {
+				if (out ~ "\"tag_name\"[[:space:]]*:[[:space:]]*\"" wanted "\"") {
+					print out
+					exit
+				}
+				started = 0
+				out = ""
+			}
+		}
+	}
+}
+' "$src" >"$dst"
+
+	[ -s "$dst" ]
+}
+
+fetch_release_metadata() {
+	local repo="$1"
+	local tag="$2"
+	local json_file="$3"
+	local api_url response_tag candidate list_file resolved_tag normalized_tag
+
+	for candidate in $(get_release_api_candidates "$repo" "$tag"); do
+		log_download "尝试查询 GitHub Releases：${candidate}"
+		if download_file "$candidate" "$json_file"; then
+			response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
+			if [ -n "$response_tag" ]; then
+				echo "$candidate"
+				return 0
+			fi
+		fi
+	done
+
+	list_file="${json_file}.list"
+	api_url="https://api.github.com/repos/${repo}/releases"
+	log_download "尝试查询 GitHub Releases 列表：${api_url}"
+	if download_file "$api_url" "$list_file"; then
+		resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
+		normalized_tag="$(normalize_release_tag "$resolved_tag")"
+
+		if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
+			if extract_first_release_object "$list_file" "$json_file"; then
+				echo "${api_url}#latest-from-list"
+				return 0
+			fi
+		else
+			if extract_release_object_by_tag "$list_file" "$json_file" "$resolved_tag"; then
+				echo "${api_url}#tag-from-list:${resolved_tag}"
+				return 0
+			fi
+			if [ -n "$normalized_tag" ] && extract_release_object_by_tag "$list_file" "$json_file" "v${normalized_tag}"; then
+				echo "${api_url}#tag-from-list:v${normalized_tag}"
+				return 0
+			fi
+			if extract_first_release_object "$list_file" "$json_file"; then
+				echo "${api_url}#fallback-first"
+				return 0
+			fi
+		fi
+	fi
+
+	return 1
+}
+
 select_release_asset() {
 	local json_file="$1"
 	local arch_patterns="$2"
@@ -728,12 +900,14 @@ auto_download_bundle() {
 	write_download_state "$state_file" "querying" "正在查询 GitHub Releases" "" "$download_tag" "$arch_name" ""
 	log_download "开始查询 ${scope} 对应发行版：repo=${download_repo} tag=${download_tag} arch=${arch_name}"
 
-	if ! download_file "$api_url" "$json_file"; then
-		log_download "查询 GitHub Releases 失败：${api_url}"
+	api_url="$(fetch_release_metadata "$download_repo" "$download_tag" "$json_file")"
+	if [ -z "$api_url" ]; then
+		log_download "查询 GitHub Releases 失败：repo=${download_repo} tag=${download_tag}，已尝试 tags/${download_tag}、tags/v${download_tag}、latest、releases 列表接口"
 		write_download_state "$state_file" "failed" "查询 GitHub Releases 失败" "" "$download_tag" "$arch_name" ""
 		return 1
 	fi
 
+	log_download "GitHub Releases 查询成功：${api_url}"
 	release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
 	release_tag="$(normalize_release_tag "$release_tag")"
 	[ -n "$release_tag" ] || release_tag="$download_tag"

@@ -534,7 +534,7 @@ end
 local server = s:taboption("general", DynamicList, "server", translate("服务器地址"),
 	translate("支持 quic://、tcp://、wss://、dynamic:// 等格式，可填写多个以实现容灾或负载均衡"))
 server.rmempty = false
-server.placeholder = "quic://101.35.230.139:6660"
+server.placeholder = ""
 server.validate = validate_server
 bind_dynamiclist(server)
 
