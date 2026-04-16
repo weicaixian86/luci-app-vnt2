@@ -9,11 +9,11 @@ M.CLIENT_TOML = M.DEFAULT_CLIENT_TOML
 M.SERVER_TOML = M.DEFAULT_SERVER_TOML
 
 local LEGACY_DEFAULT_CLIENT_SERVER = "tcp://0.0.0.0:29872"
-local DEPRECATED_DEFAULT_CLIENT_SERVER = "tcp://0.0.0.0:29872"
+local DEPRECATED_DEFAULT_CLIENT_SERVER = "tcp://1.1.1.1:29872"
 
 local client_defaults = {
 	network_code = "123456",
-	server = { "tcp://0.0.0.0:29872" },
+	server = { "tcp://1.1.1.1:29872" },
 	ip = "",
 	device_id = "",
 	device_name = "",

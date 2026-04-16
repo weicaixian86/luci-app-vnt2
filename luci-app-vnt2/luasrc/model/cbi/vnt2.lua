@@ -320,8 +320,13 @@ end
 
 local function validate_server(self, value)
 	if type(value) == "table" then
+		local values = normalized_list_values(value)
+		if #values == 0 then
+			return nil, translate("服务器地址不能为空")
+		end
+
 		local result = {}
-		for _, item in ipairs(normalized_list_values(value)) do
+		for _, item in ipairs(values) do
 			local valid, err = validate_server_item(item)
 			if not valid then
 				return nil, err
@@ -331,6 +336,11 @@ local function validate_server(self, value)
 			end
 		end
 		return result
+	end
+
+	value = trim(value)
+	if value == "" then
+		return nil, translate("服务器地址不能为空")
 	end
 
 	return validate_server_item(value)
@@ -539,7 +549,8 @@ end
 local server = s:taboption("general", DynamicList, "server", translate("服务器地址"),
 	translate("支持 quic://、tcp://、wss://、dynamic:// 等格式，可填写多个以实现容灾或负载均衡"))
 server.rmempty = false
-server.placeholder = ""
+server.placeholder = "tcp://1.1.1.1:29872"
+server.default = "tcp://1.1.1.1:29872"
 server.validate = validate_server
 bind_dynamiclist(server)
 
@@ -838,10 +849,10 @@ web_enabled.write = function(self, section, value)
 	end
 end
 
-local web_restart = w:taboption("general", Button, "_restart_web", translate("重启 Web 服务"))
+local web_restart = w:taboption("general", Button, "_restart_web", translate("重启客户端"))
 web_restart.inputtitle = translate("重启")
 web_restart.inputstyle = "apply"
-web_restart.description = translate("快速重启 vnt2_web")
+web_restart.description = translate("在未修改参数时快速重启 vnt2_web")
 web_restart:depends("enabled", "1")
 web_restart.write = function()
 	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")

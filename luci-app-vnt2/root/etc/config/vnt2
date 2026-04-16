@@ -6,7 +6,7 @@ config vnt2_cli
 	option vnt2_cli_bin '/usr/bin/vnt2_cli'
 	option vnt2_ctrl_bin '/usr/bin/vnt2_ctrl'
 	option network_code '123456'
-	list server 'tcp://0.0.0.0:29872'
+	list server 'tcp://1.1.1.1:29872'
 	option ip ''
 	option device_id ''
 	option device_name ''

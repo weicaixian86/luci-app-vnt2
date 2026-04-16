@@ -220,20 +220,104 @@ local function format_runtime(tag_file)
 	return string.format("%02d小时%02d分%02d秒", hour, min, sec)
 end
 
+local function get_clk_tck()
+	local value = tonumber(trim(sys.exec("getconf CLK_TCK 2>/dev/null"))) or 100
+	if value < 1 then
+		value = 100
+	end
+	return value
+end
+
+local function get_page_size()
+	local value = tonumber(trim(sys.exec("getconf PAGESIZE 2>/dev/null"))) or 4096
+	if value < 1 then
+		value = 4096
+	end
+	return value
+end
+
+local function get_cpu_count()
+	local count = tonumber(trim(sys.exec([[awk '/^cpu[0-9]+ /{n++} END{print n?n:1}' /proc/stat 2>/dev/null]]))) or 1
+	if count < 1 then
+		count = 1
+	end
+	return count
+end
+
 local function get_cpu_usage(pid)
-	if not pid then
+	pid = trim(pid)
+	if pid == "" or not pid:match("^%d+$") then
 		return ""
 	end
-	local cmd = string.format([=[top -bn1 2>/dev/null | awk '$1=="%s" {print $9; exit}']=], tostring(pid))
-	return trim(sys.exec(cmd))
+
+	local stat = fs.readfile("/proc/" .. pid .. "/stat")
+	if not stat or stat == "" then
+		return ""
+	end
+
+	local right = stat:find("%)")
+	if not right then
+		return ""
+	end
+
+	local fields = {}
+	for token in stat:sub(right + 2):gmatch("%S+") do
+		fields[#fields + 1] = token
+	end
+
+	local utime = tonumber(fields[12] or "")
+	local stime = tonumber(fields[13] or "")
+	local starttime = tonumber(fields[20] or "")
+	if not utime or not stime or not starttime then
+		return ""
+	end
+
+	local uptime_line = trim(fs.readfile("/proc/uptime") or "")
+	local uptime = tonumber((uptime_line:match("^([%d%.]+)") or ""))
+	if not uptime or uptime <= 0 then
+		return ""
+	end
+
+	local clk_tck = get_clk_tck()
+	local cpu_count = get_cpu_count()
+	local elapsed = uptime - (starttime / clk_tck)
+	if elapsed <= 0 then
+		return "0.00%"
+	end
+
+	local total = (utime + stime) / clk_tck
+	local cpu = (total / elapsed) * 100
+	if cpu_count > 1 then
+		cpu = cpu / cpu_count
+	end
+	if cpu < 0 then
+		cpu = 0
+	end
+
+	return string.format("%.2f%%", cpu)
 end
 
 local function get_mem_usage(pid)
-	if not pid then
+	pid = trim(pid)
+	if pid == "" or not pid:match("^%d+$") then
 		return ""
 	end
-	local cmd = string.format([=[awk '/VmRSS/ {printf "%.2f MB", $2/1024}' /proc/%s/status 2>/dev/null]=], tostring(pid))
-	return trim(sys.exec(cmd))
+
+	local status = fs.readfile("/proc/" .. pid .. "/status") or ""
+	local rss_kb = tonumber(status:match("VmRSS:%s*(%d+)"))
+	if not rss_kb then
+		local statm = fs.readfile("/proc/" .. pid .. "/statm") or ""
+		local rss_pages = tonumber(statm:match("^%S+%s+(%d+)"))
+		if rss_pages then
+			rss_kb = (rss_pages * get_page_size()) / 1024
+		end
+	end
+
+	if not rss_kb then
+		return ""
+	end
+
+	return string.format("%.2f MB", rss_kb / 1024)
 end
 
 local function extract_semver(text)
