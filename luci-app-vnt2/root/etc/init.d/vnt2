@@ -654,6 +654,38 @@ extract_zip_asset() {
 	return 1
 }
 
+validate_asset_file() {
+	local asset_file="$1"
+
+	[ -s "$asset_file" ] || return 1
+
+	case "$asset_file" in
+		*.zip)
+			if command -v unzip >/dev/null 2>&1; then
+				unzip -t "$asset_file" >/dev/null 2>&1 && return 0
+			fi
+			if command -v busybox >/dev/null 2>&1; then
+				busybox unzip -t "$asset_file" >/dev/null 2>&1 && return 0
+			fi
+			if command -v bsdtar >/dev/null 2>&1; then
+				bsdtar -tf "$asset_file" >/dev/null 2>&1 && return 0
+			fi
+			return 1
+		;;
+		*.tar.gz|*.tgz)
+			tar -tzf "$asset_file" >/dev/null 2>&1
+			return $?
+		;;
+		*.tar.xz)
+			tar -tJf "$asset_file" >/dev/null 2>&1
+			return $?
+		;;
+		*)
+			return 0
+		;;
+	esac
+}
+
 extract_release_asset() {
 	local asset_file="$1"
 	local dest_dir="$2"
@@ -922,21 +954,49 @@ auto_download_bundle() {
 	write_download_state "$state_file" "downloading" "正在下载发行资源" "$asset_name" "$release_tag" "$arch_name" ""
 	log_download "选中资源 ${asset_name}"
 
+	if [ -s "$asset_file" ]; then
+		if validate_asset_file "$asset_file"; then
+			log_download "复用已下载资源 ${asset_file}"
+		else
+			log_download "检测到缓存资源无效，删除后重新下载：${asset_file}"
+			rm -f "$asset_file"
+		fi
+	fi
+
 	if [ ! -s "$asset_file" ]; then
 		if ! download_file "$asset_url" "$asset_file"; then
 			log_download "下载发行资源失败：${asset_url}"
 			write_download_state "$state_file" "failed" "下载发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
 			return 1
 		fi
-	else
-		log_download "复用已下载资源 ${asset_file}"
+		if ! validate_asset_file "$asset_file"; then
+			log_download "下载后的发行资源无效或已损坏：${asset_file}"
+			rm -f "$asset_file"
+			write_download_state "$state_file" "failed" "下载的发行资源无效或已损坏" "$asset_name" "$release_tag" "$arch_name" ""
+			return 1
+		fi
 	fi
 
 	write_download_state "$state_file" "extracting" "正在解压或整理程序文件" "$asset_name" "$release_tag" "$arch_name" ""
 	if ! extract_release_asset "$asset_file" "$extracted_dir"; then
-		log_download "解压失败：${asset_file}"
-		write_download_state "$state_file" "failed" "解压发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
-		return 1
+		log_download "首次解压失败，删除缓存后重新下载重试：${asset_file}"
+		rm -f "$asset_file"
+		if ! download_file "$asset_url" "$asset_file"; then
+			log_download "重试下载发行资源失败：${asset_url}"
+			write_download_state "$state_file" "failed" "重试下载发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
+			return 1
+		fi
+		if ! validate_asset_file "$asset_file"; then
+			log_download "重试下载后的发行资源仍然无效：${asset_file}"
+			rm -f "$asset_file"
+			write_download_state "$state_file" "failed" "重试下载后的发行资源无效" "$asset_name" "$release_tag" "$arch_name" ""
+			return 1
+		fi
+		if ! extract_release_asset "$asset_file" "$extracted_dir"; then
+			log_download "解压失败：${asset_file}"
+			write_download_state "$state_file" "failed" "解压发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
+			return 1
+		fi
 	fi
 
 	case "$scope" in
