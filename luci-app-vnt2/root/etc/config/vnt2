@@ -50,7 +50,7 @@ config vnts2
 	option enabled '0'
 	option auto_download '1'
 	option download_tag 'latest'
-	option download_repo 'lz-ycx/vnts'
+	option download_repo 'vnt-dev/vnts'
 	option vnts2_bin '/usr/bin/vnts2'
 	option tcp_bind '0.0.0.0:29872'
 	option quic_bind '0.0.0.0:29872'

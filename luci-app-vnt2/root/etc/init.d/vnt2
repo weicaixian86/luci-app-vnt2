@@ -303,7 +303,7 @@ get_release_api_url() {
 	if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
 		echo "https://api.github.com/repos/${repo}/releases/latest"
 	else
-		echo "https://api.github.com/repos/${repo}/releases/tags/v${resolved_tag}"
+		echo "https://api.github.com/repos/${repo}/releases/tags/${resolved_tag}"
 	fi
 }
 
