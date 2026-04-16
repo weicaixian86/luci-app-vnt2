@@ -236,12 +236,38 @@ local function get_mem_usage(pid)
 	return trim(sys.exec(cmd))
 end
 
+local function extract_semver(text)
+	text = trim(text)
+	if text == "" then
+		return ""
+	end
+
+	local version = text:match("(%d+%.%d+%.%d+[-%w%.]*)")
+	if version then
+		return version
+	end
+
+	return ""
+end
+
 local function get_local_tag(bin_path)
 	if not file_exists(bin_path) then
 		return ""
 	end
-	local cmd = string.format([=[ %s -h 2>&1 | sed -n 's/.*version[: ][[:space:]]*\([^ ,;)]*\).*/\1/p' | head -n1 ]=], shell_quote(bin_path))
-	return trim(sys.exec(cmd))
+
+	local output = trim(sys.exec(string.format("%s --version 2>&1", shell_quote(bin_path))))
+	local version = extract_semver(output)
+	if version ~= "" then
+		return version
+	end
+
+	output = trim(sys.exec(string.format("%s -V 2>&1", shell_quote(bin_path))))
+	version = extract_semver(output)
+	if version ~= "" then
+		return version
+	end
+
+	return ""
 end
 
 local function sanitize_cache_name(s)
@@ -564,6 +590,10 @@ end
 
 function act_status()
 	local e = {}
+	local cli_enabled = uci_first("vnt2_cli", "enabled", "0") == "1"
+	local web_enabled = uci_first("vnt2_web", "enabled", "0") == "1"
+	local server_enabled = uci_first("vnts2", "enabled", "0") == "1"
+
 	local cli_pid = get_cli_pid()
 	local web_pid = get_web_pid()
 	local server_pid = get_server_pid()
@@ -579,23 +609,23 @@ function act_status()
 	local web_dl = parse_state_file("/tmp/vnt2-download-web.state")
 	local server_dl = parse_state_file("/tmp/vnt2-download-server.state")
 
-	if cli_pid == nil then
+	if cli_enabled and cli_pid == nil then
 		cli_ctrl_ok = is_cli_reachable()
 	end
-	if web_pid == nil then
+	if web_enabled and web_pid == nil then
 		web_http_ok = is_web_reachable()
 	end
-	if server_pid == nil then
+	if server_enabled and server_pid == nil then
 		server_port_ok = is_server_reachable(server_cfg)
 	end
 
-	e.cli_running = (cli_pid ~= nil) or cli_ctrl_ok
-	e.web_running = (web_pid ~= nil) or web_http_ok
-	e.server_running = (server_pid ~= nil) or server_port_ok
+	e.cli_running = cli_enabled and ((cli_pid ~= nil) or cli_ctrl_ok)
+	e.web_running = web_enabled and ((web_pid ~= nil) or web_http_ok)
+	e.server_running = server_enabled and ((server_pid ~= nil) or server_port_ok)
 
-	e.cli_pid = cli_pid or (cli_ctrl_ok and "CTRL") or ""
-	e.web_pid = web_pid or (web_http_ok and "HTTP") or ""
-	e.server_pid = server_pid or (server_port_ok and "PORT") or ""
+	e.cli_pid = e.cli_running and (cli_pid or (cli_ctrl_ok and "CTRL") or "") or ""
+	e.web_pid = e.web_running and (web_pid or (web_http_ok and "HTTP") or "") or ""
+	e.server_pid = e.server_running and (server_pid or (server_port_ok and "PORT") or "") or ""
 
 	e.cli_runtime = format_runtime("/tmp/vnt2_cli_time")
 	e.web_runtime = format_runtime("/tmp/vnt2_web_time")

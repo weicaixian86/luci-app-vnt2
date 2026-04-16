@@ -476,9 +476,13 @@ local function bind_dynamiclist(option)
 	end
 end
 
-local cli_running = process_running("vnt2_cli")
-local web_running = process_running("vnt2_web")
-local server_running = process_running("vnts2") or process_running("vnts")
+local cli_enabled = m.uci:get_first("vnt2", "vnt2_cli", "enabled") == "1"
+local web_enabled_state = m.uci:get_first("vnt2", "vnt2_web", "enabled") == "1"
+local server_enabled_state = m.uci:get_first("vnt2", "vnts2", "enabled") == "1"
+
+local cli_running = cli_enabled and process_running("vnt2_cli")
+local web_running = web_enabled_state and process_running("vnt2_web")
+local server_running = server_enabled_state and (process_running("vnts2") or process_running("vnts"))
 
 -- ==================== vnt2_cli ====================
 local s = m:section(TypedSection, "vnt2_cli", translate("vnt2_cli 客户端设置"))
@@ -503,6 +507,7 @@ end
 
 local enabled = s:taboption("general", Flag, "enabled", translate("启用cli 客户端"))
 enabled.rmempty = false
+enabled.default = "0"
 enabled.write = function(self, section, value)
 	self.map.uci:set(self.map.config, section, self.option, value)
 	if value == "1" then
@@ -825,6 +830,7 @@ w:tab("upload", translate("上传程序"))
 
 local web_enabled = w:taboption("general", Flag, "enabled", translate("启用web 客户端"))
 web_enabled.rmempty = false
+web_enabled.default = "0"
 web_enabled.write = function(self, section, value)
 	self.map.uci:set(self.map.config, section, self.option, value)
 	if value == "1" then
@@ -954,6 +960,7 @@ v:tab("upload", translate("上传程序"))
 
 local server_enabled = v:taboption("general", Flag, "enabled", translate("启用vnts2 服务端"))
 server_enabled.rmempty = false
+server_enabled.default = "0"
 
 local server_restart = v:taboption("general", Button, "_restart_server", translate("重启服务端"))
 server_restart.inputtitle = translate("重启")

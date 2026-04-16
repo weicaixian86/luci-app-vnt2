@@ -17,6 +17,9 @@ SERVER_TIME="/tmp/vnts2_time"
 CLI_CONF_DEFAULT="/etc/config/vnt2.toml"
 SERVER_CONF_DEFAULT="/etc/config/vnts2.toml"
 
+LEGACY_DEFAULT_SERVER="tcp://8.163.89.234:29872"
+DEFAULT_CLIENT_SERVER="tcp://0.0.0.0:29872"
+
 CLI_CONF_FILE=""
 SERVER_CONF_FILE=""
 
@@ -91,6 +94,32 @@ resolve_server_conf_file() {
 	conf_path="$(trim_value "$conf_path")"
 	[ -n "$conf_path" ] || conf_path="$SERVER_CONF_DEFAULT"
 	echo "$conf_path"
+}
+
+migrate_legacy_client_server() {
+	local cfg="$1"
+	local server_list=""
+	local first_server=""
+	local changed="0"
+
+	[ -n "$cfg" ] || return 0
+
+	config_list_foreach "$cfg" server append_server_item
+	server_list="${VNT2_SERVER_LIST}"
+	VNT2_SERVER_LIST=""
+
+	first_server="${server_list%% *}"
+	first_server="$(trim_value "$first_server")"
+
+	if [ "$first_server" = "$LEGACY_DEFAULT_SERVER" ] && [ "$server_list" = "$LEGACY_DEFAULT_SERVER" ]; then
+		uci -q delete ${CONF}.${cfg}.server
+		uci -q add_list ${CONF}.${cfg}.server="${DEFAULT_CLIENT_SERVER}"
+		uci commit ${CONF} >/dev/null 2>&1
+		changed="1"
+		log_cli "检测到旧默认服务端地址，已自动迁移为 ${DEFAULT_CLIENT_SERVER}"
+	fi
+
+	return 0
 }
 
 sanitize_name() {
@@ -1367,6 +1396,17 @@ append_forward_item() {
 	fi
 }
 
+append_server_item() {
+	local value="$1"
+	value="$(trim_value "$value")"
+	[ -n "$value" ] || return 0
+	if [ -n "${VNT2_SERVER_LIST}" ]; then
+		VNT2_SERVER_LIST="${VNT2_SERVER_LIST} ${value}"
+	else
+		VNT2_SERVER_LIST="${value}"
+	fi
+}
+
 prepare_server_runtime() {
 	local cfg="${1:-vnts2}"
 
@@ -1538,6 +1578,12 @@ start_service() {
 	log_server "服务启动流程开始"
 	log_download "服务启动流程开始"
 
+	config_load "${CONF}"
+	cli_cfg="$(get_first_section_id "vnt2_cli")"
+	web_cfg="$(get_first_section_id "vnt2_web")"
+	server_cfg="$(get_first_section_id "vnts2")"
+
+	[ -n "$cli_cfg" ] && migrate_legacy_client_server "$cli_cfg"
 	config_load "${CONF}"
 	cli_cfg="$(get_first_section_id "vnt2_cli")"
 	web_cfg="$(get_first_section_id "vnt2_web")"
