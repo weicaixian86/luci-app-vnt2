@@ -15,8 +15,8 @@ function index()
 
 	entry({ "admin", "vpn", "vnt2" }, alias("admin", "vpn", "vnt2", "config"), _("VNT2"), 45).dependent = true
 	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("基本设置"), 10).leaf = true
-	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("客户端日志"), 20).leaf = true
-	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("Web 日志"), 30).leaf = true
+	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("cli客户端日志"), 20).leaf = true
+	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("web客户端日志"), 30).leaf = true
 	entry({ "admin", "vpn", "vnt2", "server_log" }, cbi("vnt2_server_log"), _("服务端日志"), 40).leaf = true
 	entry({ "admin", "vpn", "vnt2", "download_log" }, cbi("vnt2_download_log"), _("下载日志"), 50).leaf = true
 
@@ -118,7 +118,7 @@ local function get_web_port()
 end
 
 local function get_web_host()
-	return uci_first("vnt2_web", "web_host", "127.0.0.1")
+	return uci_first("vnt2_web", "web_host", "0.0.0.0")
 end
 
 local function get_client_conf()
@@ -554,7 +554,7 @@ local function summarize_web_config()
 	return {
 		host = get_web_host(),
 		port = get_web_port(),
-		wan = uci_first("vnt2_web", "web_wan", "0"),
+		wan = uci_first("vnt2_web", "web_wan", "1"),
 		log_level = uci_first("vnt2_web", "log_level", "info"),
 		auto_download = uci_first("vnt2_web", "auto_download", "1"),
 		download_repo = uci_first("vnt2_web", "download_repo", "vnt-dev/vnt"),
@@ -565,11 +565,11 @@ end
 local function summarize_server_config()
 	local cfg = toml.get_server_summary(uci)
 	return {
-		tcp_bind = cfg.tcp or "0.0.0.0:29872",
-		quic_bind = cfg.quic or "0.0.0.0:29872",
-		ws_bind = cfg.ws or "0.0.0.0:29872",
-		web_bind = cfg.web or "0.0.0.0:29871",
-		server_quic_bind = cfg.quic_proxy or "",
+		tcp_bind = cfg.tcp_bind or "0.0.0.0:29872",
+		quic_bind = cfg.quic_bind or "0.0.0.0:29872",
+		ws_bind = cfg.ws_bind or "0.0.0.0:29872",
+		web_bind = cfg.web_bind or "0.0.0.0:29871",
+		server_quic_bind = cfg.server_quic_bind or "",
 		network = cfg.network or "10.26.0.0/24",
 		lease_duration = cfg.lease_duration or "86400",
 		persistence = cfg.persistence or "1",
@@ -577,9 +577,9 @@ local function summarize_server_config()
 		auto_download = uci_first("vnts2", "auto_download", "1"),
 		download_repo = uci_first("vnts2", "download_repo", "vnt-dev/vnts"),
 		download_tag = uci_first("vnts2", "download_tag", "latest"),
-		white_list = cfg.white_token or {},
-		peer_servers = cfg.server_address or {},
-		custom_net = cfg.cidr or {},
+		white_list = cfg.white_list or {},
+		peer_servers = cfg.peer_servers or {},
+		custom_net = cfg.custom_nets or {},
 		open_wan_tcp = uci_first("vnts2", "open_wan_tcp", "0"),
 		open_wan_quic = uci_first("vnts2", "open_wan_quic", "0"),
 		open_wan_ws = uci_first("vnts2", "open_wan_ws", "0"),

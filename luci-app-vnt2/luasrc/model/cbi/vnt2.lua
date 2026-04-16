@@ -870,8 +870,9 @@ vnt2_web_bin.placeholder = "/usr/bin/vnt2_web"
 vnt2_web_bin.validate = validate_nonempty
 
 local web_host = w:taboption("general", Value, "web_host", translate("监听地址"),
-	translate("默认仅监听本地 127.0.0.1；若需外部访问，请改为 0.0.0.0 并按需开启 WAN 放行"))
-web_host.placeholder = "127.0.0.1"
+	translate("默认监听 0.0.0.0，允许局域网或其他外部设备访问；如需限制仅本机访问，可改为 127.0.0.1"))
+web_host.placeholder = "0.0.0.0"
+web_host.default = "0.0.0.0"
 web_host.datatype = "ipaddr"
 
 local web_port = w:taboption("general", Value, "web_port", translate("监听端口"))
@@ -879,11 +880,12 @@ web_port.placeholder = "19099"
 web_port.datatype = "port"
 
 local web_wan = w:taboption("general", Flag, "web_wan", translate("允许 WAN 访问"),
-	translate("仅当监听地址为 0.0.0.0 或 :: 时才会自动创建 WAN 放行规则"))
+	translate("默认启用；当监听地址为 0.0.0.0 或 :: 时会自动创建 WAN 放行规则"))
 web_wan.rmempty = false
+web_wan.default = "1"
 
 local open_web = w:taboption("general", Button, "_open_web", translate("打开页面"),
-	translate("打开当前配置对应的 Web 管理页面，默认地址通常为 http://127.0.0.1:19099/"))
+	translate("打开当前配置对应的 Web 管理页面，默认地址通常为 http://路由器IP:19099/"))
 open_web.inputtitle = translate("打开页面")
 open_web.inputstyle = "apply"
 open_web.write = function()

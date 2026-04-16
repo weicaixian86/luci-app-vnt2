@@ -96,8 +96,8 @@ local server_option_map = {
 	username = "username",
 	password = "password",
 	server_token = "server_token",
-	white_list = "white_token",
-	peer_servers = "server_address",
+	white_list = "white_list",
+	peer_servers = "peer_servers",
 	custom_nets = "custom_net"
 }
 
@@ -215,7 +215,7 @@ local function normalize_client_server_list(value)
 
 	if #out == 1 then
 		local first = out[1]
-		if first == LEGACY_DEFAULT_CLIENT_SERVER or first == DEPRECATED_DEFAULT_CLIENT_SERVER then
+		if first == LEGACY_DEFAULT_CLIENT_SERVER and LEGACY_DEFAULT_CLIENT_SERVER ~= DEPRECATED_DEFAULT_CLIENT_SERVER then
 			return {}
 		end
 	end
@@ -372,12 +372,10 @@ function M.write_toml(path, data, order)
 
 			if key == "custom_nets" then
 				value = normalize_list(value)
-				if #value > 0 then
-					if #lines > 0 and lines[#lines] ~= "" then
-						lines[#lines + 1] = ""
-					end
-					lines[#lines + 1] = encode_custom_nets(value)
+				if #lines > 0 and lines[#lines] ~= "" then
+					lines[#lines + 1] = ""
 				end
+				lines[#lines + 1] = encode_custom_nets(value)
 			else
 				if not is_list_key(key) and not is_bool_key(key) and not is_number_key(key) then
 					value = trim(value)

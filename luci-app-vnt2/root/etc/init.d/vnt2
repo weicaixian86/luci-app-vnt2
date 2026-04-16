@@ -1530,9 +1530,9 @@ start_web_instance() {
 		return 1
 	}
 
-	config_get web_host "$cfg" "web_host" "127.0.0.1"
+	config_get web_host "$cfg" "web_host" "0.0.0.0"
 	config_get web_port "$cfg" "web_port" "19099"
-	config_get_bool web_wan "$cfg" "web_wan" "0"
+	config_get_bool web_wan "$cfg" "web_wan" "1"
 	config_get log_level "$cfg" "log_level" "info"
 
 	configure_web_firewall "$web_host" "$web_port" "$web_wan"
