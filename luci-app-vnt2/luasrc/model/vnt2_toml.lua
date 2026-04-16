@@ -10,7 +10,7 @@ M.SERVER_TOML = M.DEFAULT_SERVER_TOML
 
 local client_defaults = {
 	network_code = "123456",
-	server = { "quic://101.35.230.139:6660" },
+	server = { "tcp://0.0.0.0:29872" },
 	ip = "",
 	device_id = "",
 	device_name = "",
@@ -138,6 +138,18 @@ local number_keys = {
 	cmd_port = true,
 	port = true,
 	lease_duration = true
+}
+
+local required_string_keys = {
+	network_code = true,
+	tun_name = true,
+	cert_mode = true,
+	tcp = true,
+	quic = true,
+	ws = true,
+	web = true,
+	network = true,
+	username = true
 }
 
 local function trim(v)
@@ -314,7 +326,18 @@ function M.write_toml(path, data, order)
 	for _, key in ipairs(order) do
 		local value = data[key]
 		if value ~= nil then
-			lines[#lines + 1] = string.format("%s = %s", key, encode_value(key, value))
+			local keep = true
+
+			if not is_list_key(key) and not is_bool_key(key) and not is_number_key(key) then
+				value = trim(value)
+				if value == "" and not required_string_keys[key] then
+					keep = false
+				end
+			end
+
+			if keep then
+				lines[#lines + 1] = string.format("%s = %s", key, encode_value(key, value))
+			end
 		end
 	end
 	lines[#lines + 1] = ""

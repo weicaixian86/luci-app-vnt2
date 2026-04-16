@@ -7,10 +7,6 @@ on:
         description: "Release tag"
         required: true
         default: "v2.0.0"
-      release_description:
-        description: "Release description"
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -35,12 +31,10 @@ jobs:
         shell: bash
         run: |
           BUILD_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')"
-          RELEASE_DESCRIPTION="${{ github.event.inputs.release_description }}"
           echo "BUILD_TIME=$BUILD_TIME" >> "$GITHUB_ENV"
           {
             echo "RELEASE_BODY<<EOF"
             printf '编译时间: %s\n' "$BUILD_TIME"
-            printf '发行说明: %s\n' "$RELEASE_DESCRIPTION"
             echo "EOF"
           } >> "$GITHUB_ENV"
 

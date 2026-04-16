@@ -137,6 +137,31 @@ local function get_pid_by_name(name)
 	return nil
 end
 
+local function get_procd_instance_pid(instance)
+	instance = trim(instance)
+	if instance == "" then
+		return nil
+	end
+
+	local data = sys.exec("ubus call service list '{\"name\":\"vnt2\"}' 2>/dev/null") or ""
+	if data == "" then
+		return nil
+	end
+
+	local pattern = '"' .. instance:gsub("([^%w_])", "%%%1") .. '"%s*:%s*%b{}'
+	local block = data:match(pattern)
+	if not block then
+		return nil
+	end
+
+	local pid = trim(block:match('"pid"%s*:%s*(%d+)') or "")
+	if pid ~= "" then
+		return pid
+	end
+
+	return nil
+end
+
 local function get_pid_by_path(path)
 	local base = tostring(path or ""):match("([^/]+)$")
 	if base and base ~= "" then
@@ -154,8 +179,16 @@ local function get_pid_by_path(path)
 	return nil
 end
 
+local function get_cli_pid()
+	return get_procd_instance_pid("vnt2_cli") or get_pid_by_path(get_cli_bin())
+end
+
+local function get_web_pid()
+	return get_procd_instance_pid("vnt2_web") or get_pid_by_path(get_web_bin())
+end
+
 local function get_server_pid()
-	return get_pid_by_name("vnts2") or get_pid_by_name("vnts") or get_pid_by_path(get_server_bin())
+	return get_procd_instance_pid("vnts2") or get_pid_by_name("vnts2") or get_pid_by_name("vnts") or get_pid_by_path(get_server_bin())
 end
 
 local function format_runtime(tag_file)
@@ -349,6 +382,91 @@ local function get_cmdline(pid)
 	return trim(sys.exec("tr '\\000' ' ' </proc/" .. tostring(pid) .. "/cmdline 2>/dev/null"))
 end
 
+local function normalize_probe_host(host)
+	host = trim(host)
+	if host == "" or host == "0.0.0.0" or host == "::" then
+		return "127.0.0.1"
+	end
+	if host == "::1" then
+		return "[::1]"
+	end
+	if host:find(":", 1, true) and not host:match("^%[.*%]$") then
+		return "[" .. host .. "]"
+	end
+	return host
+end
+
+local function probe_http_url(url)
+	url = trim(url)
+	if url == "" then
+		return false
+	end
+
+	local cmd
+	if sys.call("command -v uclient-fetch >/dev/null 2>&1") == 0 then
+		cmd = string.format([[uclient-fetch -q -T 2 -O - %s >/dev/null 2>&1]], shell_quote(url))
+	elseif sys.call("command -v curl >/dev/null 2>&1") == 0 then
+		cmd = string.format([[curl -fsSL --connect-timeout 2 --max-time 3 %s >/dev/null 2>&1]], shell_quote(url))
+	elseif sys.call("command -v wget >/dev/null 2>&1") == 0 then
+		cmd = string.format([[wget -q -T 3 -O - %s >/dev/null 2>&1]], shell_quote(url))
+	else
+		return false
+	end
+
+	return sys.call(cmd) == 0
+end
+
+local function is_web_reachable()
+	local host = normalize_probe_host(get_web_host())
+	local port = get_web_port()
+	local api_url = "http://" .. host .. ":" .. tostring(port) .. "/api/info"
+	local root_url = "http://" .. host .. ":" .. tostring(port) .. "/"
+	return probe_http_url(api_url) or probe_http_url(root_url)
+end
+
+local function has_listen_port(port)
+	port = tonumber(port)
+	if not port or port < 1 then
+		return false
+	end
+
+	local hex = string.format("%04X", port)
+	local cmd = string.format([[awk 'NR>1 {split($2,a,":"); if (toupper(a[2])=="%s") {found=1; exit}} END {exit(found?0:1)}' /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null]], hex)
+	return sys.call(cmd) == 0
+end
+
+local function parse_bind_port(bind)
+	bind = trim(bind)
+	if bind == "" then
+		return nil
+	end
+
+	local port = bind:match(":(%d+)$")
+	return tonumber(port or "")
+end
+
+local function is_cli_reachable()
+	local out = run_ctrl("info")
+	return out ~= "" and not out:match("错误") and not out:match("not found") and not out:match("unrecognized") and not out:match("refused") and not out:match("failed")
+end
+
+local function is_server_reachable(server_cfg)
+	local ports = {
+		parse_bind_port(server_cfg.tcp_bind),
+		parse_bind_port(server_cfg.quic_bind),
+		parse_bind_port(server_cfg.ws_bind),
+		parse_bind_port(server_cfg.web_bind)
+	}
+
+	for _, port in ipairs(ports) do
+		if has_listen_port(port) then
+			return true
+		end
+	end
+
+	return false
+end
+
 local function get_router_host()
 	local http_host = trim(http.getenv("HTTP_HOST") or "")
 	if http_host ~= "" then
@@ -446,9 +564,12 @@ end
 
 function act_status()
 	local e = {}
-	local cli_pid = get_pid_by_path(get_cli_bin())
-	local web_pid = get_pid_by_path(get_web_bin())
+	local cli_pid = get_cli_pid()
+	local web_pid = get_web_pid()
 	local server_pid = get_server_pid()
+	local cli_ctrl_ok = false
+	local web_http_ok = false
+	local server_port_ok = false
 
 	local cli_cfg = summarize_cli_config()
 	local web_cfg = summarize_web_config()
@@ -458,13 +579,23 @@ function act_status()
 	local web_dl = parse_state_file("/tmp/vnt2-download-web.state")
 	local server_dl = parse_state_file("/tmp/vnt2-download-server.state")
 
-	e.cli_running = (cli_pid ~= nil)
-	e.web_running = (web_pid ~= nil)
-	e.server_running = (server_pid ~= nil)
+	if cli_pid == nil then
+		cli_ctrl_ok = is_cli_reachable()
+	end
+	if web_pid == nil then
+		web_http_ok = is_web_reachable()
+	end
+	if server_pid == nil then
+		server_port_ok = is_server_reachable(server_cfg)
+	end
 
-	e.cli_pid = cli_pid or ""
-	e.web_pid = web_pid or ""
-	e.server_pid = server_pid or ""
+	e.cli_running = (cli_pid ~= nil) or cli_ctrl_ok
+	e.web_running = (web_pid ~= nil) or web_http_ok
+	e.server_running = (server_pid ~= nil) or server_port_ok
+
+	e.cli_pid = cli_pid or (cli_ctrl_ok and "CTRL") or ""
+	e.web_pid = web_pid or (web_http_ok and "HTTP") or ""
+	e.server_pid = server_pid or (server_port_ok and "PORT") or ""
 
 	e.cli_runtime = format_runtime("/tmp/vnt2_cli_time")
 	e.web_runtime = format_runtime("/tmp/vnt2_web_time")
