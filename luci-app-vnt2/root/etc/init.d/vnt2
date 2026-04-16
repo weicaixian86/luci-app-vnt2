@@ -1444,10 +1444,10 @@ prepare_server_runtime() {
 		return 1
 	fi
 
-	VNTS2_TCP_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "tcp")")"
-	VNTS2_QUIC_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "quic")")"
-	VNTS2_WS_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "ws")")"
-	VNTS2_WEB_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "web")")"
+	VNTS2_TCP_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "tcp_bind")")"
+	VNTS2_QUIC_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "quic_bind")")"
+	VNTS2_WS_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "ws_bind")")"
+	VNTS2_WEB_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "web_bind")")"
 
 	[ -n "${VNTS2_TCP_BIND}" ] || VNTS2_TCP_BIND="0.0.0.0:29872"
 	[ -n "${VNTS2_QUIC_BIND}" ] || VNTS2_QUIC_BIND="0.0.0.0:29872"

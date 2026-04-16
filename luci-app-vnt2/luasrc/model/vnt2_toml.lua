@@ -8,12 +8,12 @@ M.DEFAULT_SERVER_TOML = "/etc/config/vnts2.toml"
 M.CLIENT_TOML = M.DEFAULT_CLIENT_TOML
 M.SERVER_TOML = M.DEFAULT_SERVER_TOML
 
-local LEGACY_DEFAULT_CLIENT_SERVER = "tcp://8.163.89.234:29872"
+local LEGACY_DEFAULT_CLIENT_SERVER = "tcp://0.0.0.0:29872"
 local DEPRECATED_DEFAULT_CLIENT_SERVER = "tcp://0.0.0.0:29872"
 
 local client_defaults = {
 	network_code = "123456",
-	server = {},
+	server = { "tcp://0.0.0.0:29872" },
 	ip = "",
 	device_id = "",
 	device_name = "",
@@ -38,11 +38,11 @@ local client_defaults = {
 }
 
 local server_defaults = {
-	tcp = "0.0.0.0:29872",
-	quic = "0.0.0.0:29872",
-	ws = "0.0.0.0:29872",
-	web = "0.0.0.0:29871",
-	quic_proxy = "",
+	tcp_bind = "0.0.0.0:29872",
+	quic_bind = "0.0.0.0:29872",
+	ws_bind = "0.0.0.0:29872",
+	web_bind = "0.0.0.0:29871",
+	server_quic_bind = "",
 	cert = "",
 	key = "",
 	network = "10.26.0.0/24",
@@ -50,10 +50,10 @@ local server_defaults = {
 	persistence = "1",
 	username = "admin",
 	password = "admin",
-	token = "",
-	white_token = {},
-	server_address = {},
-	cidr = {}
+	server_token = "",
+	white_list = {},
+	peer_servers = {},
+	custom_nets = {}
 }
 
 local client_option_map = {
@@ -83,11 +83,11 @@ local client_option_map = {
 }
 
 local server_option_map = {
-	tcp = "tcp_bind",
-	quic = "quic_bind",
-	ws = "ws_bind",
-	web = "web_bind",
-	quic_proxy = "server_quic_bind",
+	tcp_bind = "tcp_bind",
+	quic_bind = "quic_bind",
+	ws_bind = "ws_bind",
+	web_bind = "web_bind",
+	server_quic_bind = "server_quic_bind",
 	cert = "cert",
 	key = "key",
 	network = "network",
@@ -95,10 +95,10 @@ local server_option_map = {
 	persistence = "persistence",
 	username = "username",
 	password = "password",
-	token = "server_token",
-	white_token = "white_list",
-	server_address = "peer_servers",
-	cidr = "custom_net"
+	server_token = "server_token",
+	white_list = "white_token",
+	peer_servers = "server_address",
+	custom_nets = "custom_net"
 }
 
 local client_order = {
@@ -109,8 +109,8 @@ local client_order = {
 }
 
 local server_order = {
-	"tcp", "quic", "ws", "web", "quic_proxy", "cert", "key", "network", "lease_duration",
-	"persistence", "username", "password", "token", "white_token", "server_address", "cidr"
+	"tcp_bind", "quic_bind", "ws_bind", "web_bind", "server_quic_bind", "cert", "key", "network", "lease_duration",
+	"persistence", "username", "password", "server_token", "white_list", "peer_servers", "custom_nets"
 }
 
 local list_keys = {
@@ -120,9 +120,9 @@ local list_keys = {
 	mapping = true,
 	stun_server = true,
 	stun_server_tcp = true,
-	white_token = true,
-	server_address = true,
-	cidr = true
+	white_list = true,
+	peer_servers = true,
+	custom_nets = true
 }
 
 local bool_keys = {
@@ -147,10 +147,10 @@ local required_string_keys = {
 	network_code = true,
 	tun_name = true,
 	cert_mode = true,
-	tcp = true,
-	quic = true,
-	ws = true,
-	web = true,
+	tcp_bind = true,
+	quic_bind = true,
+	ws_bind = true,
+	web_bind = true,
 	network = true,
 	username = true
 }
@@ -248,6 +248,17 @@ local function parse_array(inner)
 	return out
 end
 
+local function encode_custom_nets(value)
+	local vals = normalize_list(value)
+	local lines = { "[custom_nets]" }
+
+	for idx, item in ipairs(vals) do
+		lines[#lines + 1] = string.format('net%d = "%s"', idx, toml_escape(item))
+	end
+
+	return table.concat(lines, "\n")
+end
+
 local function encode_value(key, value)
 	if is_list_key(key) then
 		local vals = normalize_list(value)
@@ -318,6 +329,7 @@ end
 
 function M.read_toml(path, defaults)
 	local data = clone_defaults(defaults or {})
+	local current_section = ""
 
 	if not fs.access(path) then
 		return data
@@ -327,9 +339,23 @@ function M.read_toml(path, defaults)
 	for line in content:gmatch("[^\r\n]+") do
 		local clean = trim(line:gsub("#.*$", ""))
 		if clean ~= "" then
-			local key, raw = clean:match("^([%w_]+)%s*=%s*(.-)%s*$")
-			if key then
-				data[key] = parse_value(key, raw)
+			local section = clean:match("^%[([%w_]+)%]$")
+			if section then
+				current_section = section
+			else
+				local key, raw = clean:match("^([%w_]+)%s*=%s*(.-)%s*$")
+				if key then
+					if current_section == "custom_nets" then
+						data.custom_nets = data.custom_nets or {}
+						local value = parse_value("custom_nets", raw)
+						value = trim(value)
+						if value ~= "" then
+							data.custom_nets[#data.custom_nets + 1] = value
+						end
+					else
+						data[key] = parse_value(key, raw)
+					end
+				end
 			end
 		end
 	end
@@ -344,15 +370,25 @@ function M.write_toml(path, data, order)
 		if value ~= nil then
 			local keep = true
 
-			if not is_list_key(key) and not is_bool_key(key) and not is_number_key(key) then
-				value = trim(value)
-				if value == "" and not required_string_keys[key] then
-					keep = false
+			if key == "custom_nets" then
+				value = normalize_list(value)
+				if #value > 0 then
+					if #lines > 0 and lines[#lines] ~= "" then
+						lines[#lines + 1] = ""
+					end
+					lines[#lines + 1] = encode_custom_nets(value)
 				end
-			end
+			else
+				if not is_list_key(key) and not is_bool_key(key) and not is_number_key(key) then
+					value = trim(value)
+					if value == "" and not required_string_keys[key] then
+						keep = false
+					end
+				end
 
-			if keep then
-				lines[#lines + 1] = string.format("%s = %s", key, encode_value(key, value))
+				if keep then
+					lines[#lines + 1] = string.format("%s = %s", key, encode_value(key, value))
+				end
 			end
 		end
 	end
