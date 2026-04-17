@@ -187,6 +187,21 @@ ensure_exec() {
 	return 0
 }
 
+export_toml_from_uci() {
+	lua - <<'EOF' >/dev/null 2>&1
+package.path = package.path .. ";/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua"
+package.cpath = package.cpath .. ";/usr/lib/lua/?.so;/usr/lib/lua/loadall.so"
+local ok_uci, uci_mod = pcall(require, "luci.model.uci")
+local ok_toml, toml = pcall(require, "luci.model.vnt2_toml")
+if not ok_uci or not ok_toml then
+	os.exit(1)
+end
+local uci = uci_mod.cursor()
+toml.export_uci_to_toml(uci)
+uci:commit("vnt2")
+EOF
+}
+
 find_uploaded_bin() {
 	local name="$1"
 	for file in "/tmp/${name}" "/tmp/${name//_/-}" "/tmp/${name}.bin"; do
@@ -1643,6 +1658,16 @@ start_service() {
 	log_web "服务启动流程开始"
 	log_server "服务启动流程开始"
 	log_download "服务启动流程开始"
+
+	if export_toml_from_uci; then
+		log_cli "已从 UCI 重新导出 TOML 配置"
+		log_web "已从 UCI 重新导出 TOML 配置"
+		log_server "已从 UCI 重新导出 TOML 配置"
+	else
+		log_cli "从 UCI 导出 TOML 配置失败，继续使用现有配置文件"
+		log_web "从 UCI 导出 TOML 配置失败，继续使用现有配置文件"
+		log_server "从 UCI 导出 TOML 配置失败，继续使用现有配置文件"
+	fi
 
 	config_load "${CONF}"
 	cli_cfg="$(get_first_section_id "vnt2_cli")"
