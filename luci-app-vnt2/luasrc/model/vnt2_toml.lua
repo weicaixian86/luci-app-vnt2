@@ -3,8 +3,9 @@ local util = require "luci.util"
 
 local M = {}
 
-M.DEFAULT_CLIENT_TOML = "/etc/config/vnt2_cli.toml"
-M.DEFAULT_WEB_TOML = "/etc/config/vnt2_web.toml"
+M.DEFAULT_CLIENT_WEB_TOML = "/vnt_config/vnt2_cli_web.toml"
+M.DEFAULT_CLIENT_TOML = M.DEFAULT_CLIENT_WEB_TOML
+M.DEFAULT_WEB_TOML = M.DEFAULT_CLIENT_WEB_TOML
 M.DEFAULT_SERVER_TOML = "/etc/config/vnts2.toml"
 M.CLIENT_TOML = M.DEFAULT_CLIENT_TOML
 M.WEB_TOML = M.DEFAULT_WEB_TOML
@@ -193,22 +194,29 @@ local function trim(v)
 	return util.trim(tostring(v or ""))
 end
 
-local function resolve_client_toml_path(uci)
-	local path = trim(uci:get_first("vnt2", "vnt2_cli", "client_conf_file"))
+local function resolve_client_web_toml_path(uci)
+	local client_path = trim(uci:get_first("vnt2", "vnt2_cli", "client_conf_file"))
+	local web_path = trim(uci:get_first("vnt2", "vnt2_web", "web_conf_file"))
+	local path = client_path
+
 	if path == "" then
-		path = M.DEFAULT_CLIENT_TOML
+		path = web_path
 	end
+	if path == "" then
+		path = M.DEFAULT_CLIENT_WEB_TOML
+	end
+
 	M.CLIENT_TOML = path
+	M.WEB_TOML = path
 	return path
 end
 
+local function resolve_client_toml_path(uci)
+	return resolve_client_web_toml_path(uci)
+end
+
 local function resolve_web_toml_path(uci)
-	local path = trim(uci:get_first("vnt2", "vnt2_web", "web_conf_file"))
-	if path == "" then
-		path = M.DEFAULT_WEB_TOML
-	end
-	M.WEB_TOML = path
-	return path
+	return resolve_client_web_toml_path(uci)
 end
 
 local function resolve_server_toml_path(uci)
@@ -406,7 +414,17 @@ function M.read_toml(path, defaults)
 	return data
 end
 
+local function ensure_toml_parent(path)
+	local dir = path:match("^(.+)/[^/]+$")
+	if dir and dir ~= "" then
+		fs.mkdirr(dir)
+		fs.chmod(dir, 511)
+	end
+end
+
 function M.write_toml(path, data, order)
+	ensure_toml_parent(path)
+
 	local lines = {}
 	for _, key in ipairs(order) do
 		local value = data[key]
@@ -435,6 +453,9 @@ function M.write_toml(path, data, order)
 	end
 	lines[#lines + 1] = ""
 	fs.writefile(path, table.concat(lines, "\n"))
+	if fs.access(path) then
+		fs.chmod(path, 511)
+	end
 end
 
 local function ensure_section(uci, config, stype)
@@ -492,6 +513,12 @@ end
 
 function M.ensure_web_toml_from_uci(uci)
 	local web_toml = resolve_web_toml_path(uci)
+	local client_toml = resolve_client_toml_path(uci)
+
+	if web_toml == client_toml then
+		M.ensure_client_toml_from_uci(uci)
+		return
+	end
 
 	if fs.access(web_toml) then
 		return
@@ -602,7 +629,9 @@ function M.export_uci_to_toml(uci)
 	end
 
 	M.write_toml(client_toml, cli, client_order)
-	M.write_toml(web_toml, web, web_order)
+	if web_toml ~= client_toml then
+		M.write_toml(web_toml, web, web_order)
+	end
 	M.write_toml(server_toml, server, server_order)
 
 	return cli, web, server

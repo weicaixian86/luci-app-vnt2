@@ -82,7 +82,7 @@ VPN -> VNT2
 - 启用/禁用客户端
 - 指定 `vnt2_cli` 二进制路径
 - 指定 `vnt2_ctrl` 二进制路径
-- 使用 TOML 配置文件启动
+- 使用共享客户端 TOML 配置文件启动（与 `vnt2_web` 共用 `/vnt_config/vnt2_cli_web.toml`）
 - 校验客户端 TOML 配置是否合法
 - 启动失败时输出到客户端日志
 - 状态页显示客户端运行状态、PID、运行时间、CPU、内存
@@ -101,6 +101,7 @@ VPN -> VNT2
 
 - 启用/禁用 `vnt2_web`
 - 指定 `vnt2_web` 二进制路径
+- 与 `vnt2_cli` 共用客户端运行 TOML：`/vnt_config/vnt2_cli_web.toml`
 - 设置监听地址
 - 设置监听端口
 - 设置日志级别
@@ -173,15 +174,17 @@ LuCI 页面已提供 **下载日志** 查看入口。
 
 如果自动下载失败，插件还支持回退到本地上传的程序文件。
 
-当前脚本会尝试从 `/tmp` 中寻找上传的临时程序，并优先安装到：
+当前脚本会尝试识别上传后的有效程序文件，并优先安装到：
 
 ```text
 /usr/bin/
 ```
 
-如果安装失败，则继续回退到临时上传路径运行。
+同时自动赋予执行权限，并写回对应状态与路径信息。
 
-这使得在无法联网或 GitHub 下载失败的 OpenWrt 环境中，仍然可以通过网页上传程序来启动服务。
+当前文档与需求基线要求最终生效路径应以 `/usr/bin/` 为准，不应仅依赖 `/tmp` 临时文件长期运行。
+
+这使得在无法联网或 GitHub 下载失败的 OpenWrt 环境中，仍然可以通过网页上传程序来补齐并启动服务。
 
 ---
 
@@ -431,9 +434,13 @@ opkg install luci-app-vnt2_*.ipk
 
 ### 配置文件
 - `/etc/config/vnt2`
-- `/etc/config/vnt2_cli.toml`
-- `/etc/config/vnt2_web.toml`
+- `/vnt_config/vnt2_cli_web.toml`
 - `/etc/config/vnts2.toml`
+
+其中：
+- `vnt2_cli` 与 `vnt2_web` 共用 `/vnt_config/vnt2_cli_web.toml`
+- `vnts2` 独立使用 `/etc/config/vnts2.toml`
+- 若 `/vnt_config/` 不存在，init 脚本会自动创建该目录，并进行权限处理以尽量保证可写
 
 ### 二进制文件
 - `/usr/bin/vnt2_cli`

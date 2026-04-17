@@ -11,7 +11,7 @@ luci.model.uci.cursor():commit("vnt2")
 
 local m = Map("vnt2", translate("VNT2"))
 m.description = translate(
-	'VNT2 是一个简单、高效、可快速组建虚拟局域网的工具。<br>官网：<a href="https://rustvnt.com/" target="_blank">rustvnt.com</a>&nbsp;&nbsp;项目：<a href="https://github.com/vnt-dev/vnt" target="_blank">github.com/vnt-dev/vnt</a>&nbsp;&nbsp;当前 LuCI 适配同时覆盖 vnt2_cli / vnt2_ctrl / vnt2_web / vnts2，适用于 OpenWrt 24.10，并将 CLI / Web / 服务端配置分别持久化到 /etc/config/vnt2_cli.toml、/etc/config/vnt2_web.toml 与 /etc/config/vnts2.toml。'
+	'VNT2 是一个简单、高效、可快速组建虚拟局域网的工具。<br>官网：<a href="https://rustvnt.com/" target="_blank">rustvnt.com</a>&nbsp;&nbsp;项目：<a href="https://github.com/vnt-dev/vnt" target="_blank">github.com/vnt-dev/vnt</a>&nbsp;&nbsp;当前 LuCI 适配同时覆盖 vnt2_cli / vnt2_ctrl / vnt2_web / vnts2，适用于 OpenWrt 24.10，其中 CLI 与 Web 共用同一个配置文件 /vnt_config/vnt2_cli_web.toml，服务端配置文件为 /etc/config/vnts2.toml。'
 )
 
 m:section(SimpleSection).template = "vnt2/vnt2_status"
@@ -118,6 +118,156 @@ local function render_pre(path)
 		content = translate("暂无数据")
 	end
 	return "<pre style='white-space:pre-wrap;word-break:break-all;'>" .. util.pcdata(content) .. "</pre>"
+end
+
+local function cli_running_now()
+	return process_running("vnt2_cli")
+end
+
+local function get_cli_ctrl_port()
+	local port = trim(m.uci:get_first("vnt2", "vnt2_cli", "ctrl_port"))
+	if port == "" then
+		port = "11233"
+	end
+	return port
+end
+
+local function run_cli_info_command(subcmd, out_file)
+	local port = get_cli_ctrl_port()
+	local cmd = "(vnt2_ctrl " .. subcmd .. " --port " .. util.shellquote(port)
+		.. " || vnt2_ctrl " .. subcmd .. " " .. util.shellquote(port)
+		.. " || vnt2_cli " .. subcmd .. ") >" .. util.shellquote(out_file) .. " 2>&1"
+	sys.call(cmd)
+end
+
+local function translate_info_labels(content)
+	local mapping = {
+		["Connection status"] = "连接状态",
+		["Virtual ip"] = "虚拟IP",
+		["Virtual gateway"] = "虚拟网关",
+		["Virtual netmask"] = "虚拟网络掩码",
+		["NAT type"] = "NAT类型",
+		["Relay server"] = "服务器地址",
+		["Public ips"] = "外网IP",
+		["Public ip"] = "外网IP",
+		["Local addr"] = "本地地址",
+		["Local address"] = "本地地址",
+		["Device name"] = "设备名称",
+		["Device id"] = "设备ID",
+		["Server"] = "服务器",
+		["Connect server"] = "连接服务器",
+		["Current device"] = "当前设备",
+		["Peers"] = "对端设备",
+		["Node list"] = "节点列表",
+		["Protocol"] = "协议",
+		["Interface"] = "接口",
+		["Next Hop"] = "下一跳",
+		["Destination"] = "目标网段",
+		["Route"] = "路由",
+		["Status"] = "状态"
+	}
+
+	for en, zh in pairs(mapping) do
+		content = content:gsub(en, zh)
+	end
+
+	return content
+end
+
+local function html_escape_keep_br(value)
+	return util.pcdata(value or ""):gsub("\n", "<br />")
+end
+
+local function render_key_value_table(content, title)
+	content = trim(content)
+	if content == "" then
+		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
+	end
+
+	content = translate_info_labels(content)
+
+	local rows = {}
+	for line in content:gmatch("[^\r\n]+") do
+		local key, value = line:match("^%s*([^:：]+)%s*[:：]%s*(.-)%s*$")
+		if key and value then
+			rows[#rows + 1] = "<tr><td style='white-space:nowrap;font-weight:bold;width:180px;'>" .. util.pcdata(key)
+				.. "</td><td>" .. html_escape_keep_br(value) .. "</td></tr>"
+		elseif trim(line) ~= "" then
+			rows[#rows + 1] = "<tr><td colspan='2'>" .. html_escape_keep_br(line) .. "</td></tr>"
+		end
+	end
+
+	if #rows == 0 then
+		return "<pre style='white-space:pre-wrap;word-break:break-all;'>" .. util.pcdata(content) .. "</pre>"
+	end
+
+	local caption = ""
+	if title and title ~= "" then
+		caption = "<div class='cbi-value-title' style='margin-bottom:6px;'>" .. util.pcdata(title) .. "</div>"
+	end
+
+	return caption
+		.. "<table class='table cbi-section-table' style='width:100%;'><tbody>"
+		.. table.concat(rows)
+		.. "</tbody></table>"
+end
+
+local function render_whitespace_table(content, title)
+	content = trim(content)
+	if content == "" then
+		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
+	end
+
+	content = translate_info_labels(content)
+
+	local lines = {}
+	for line in content:gmatch("[^\r\n]+") do
+		if trim(line) ~= "" then
+			lines[#lines + 1] = line
+		end
+	end
+
+	if #lines == 0 then
+		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
+	end
+
+	local function split_cols(line)
+		local cols = {}
+		for col in line:gmatch("%S+") do
+			cols[#cols + 1] = col
+		end
+		return cols
+	end
+
+	local header = split_cols(lines[1])
+	if #header < 2 then
+		return "<pre style='white-space:pre-wrap;word-break:break-all;'>" .. util.pcdata(content) .. "</pre>"
+	end
+
+	local parts = {}
+	if title and title ~= "" then
+		parts[#parts + 1] = "<div class='cbi-value-title' style='margin-bottom:6px;'>" .. util.pcdata(title) .. "</div>"
+	end
+
+	parts[#parts + 1] = "<table class='table cbi-section-table' style='width:100%;'><thead><tr>"
+	for _, col in ipairs(header) do
+		parts[#parts + 1] = "<th>" .. util.pcdata(col) .. "</th>"
+	end
+	parts[#parts + 1] = "</tr></thead><tbody>"
+
+	for i = 2, #lines do
+		local row = split_cols(lines[i])
+		if #row > 0 then
+			parts[#parts + 1] = "<tr>"
+			for idx = 1, #header do
+				parts[#parts + 1] = "<td>" .. util.pcdata(row[idx] or "") .. "</td>"
+			end
+			parts[#parts + 1] = "</tr>"
+		end
+	end
+
+	parts[#parts + 1] = "</tbody></table>"
+	return table.concat(parts)
 end
 
 local function list_net_devices()
@@ -267,7 +417,7 @@ local function validate_file_path(self, value)
 		return nil, translate("路径不能为空")
 	end
 	if value:sub(1, 1) ~= "/" then
-		return nil, translate("请输入绝对路径，例如 /etc/config/vnt2_cli.toml")
+		return nil, translate("请输入绝对路径，例如 /vnt_config/vnt2_cli_web.toml")
 	end
 	return value
 end
@@ -669,15 +819,15 @@ vnt2_ctrl_bin.validate = validate_nonempty
 
 local cli_conf_path = s:taboption("advanced", Value, "client_conf_file", translate("CLI 配置文件路径"),
 	translate("vnt2_cli 使用的 TOML 配置文件绝对路径"))
-cli_conf_path.placeholder = "/etc/config/vnt2_cli.toml"
-cli_conf_path.default = "/etc/config/vnt2_cli.toml"
+cli_conf_path.placeholder = "/vnt_config/vnt2_cli_web.toml"
+cli_conf_path.default = "/vnt_config/vnt2_cli_web.toml"
 cli_conf_path.validate = validate_file_path
 
 local cli_conf_shared_tip = s:taboption("advanced", DummyValue, "_cli_conf_shared_tip")
 cli_conf_shared_tip.rawhtml = true
 cli_conf_shared_tip.cfgvalue = function()
 	return [[
-<div class="cbi-value-description">vnt2_cli 与 vnt2_web 为独立运行方式，分别使用独立的 TOML 配置文件。</div>
+<div class="cbi-value-description">vnt2_cli 与 vnt2_web 为互斥运行方式，但共用同一个 TOML 配置文件 /vnt_config/vnt2_cli_web.toml；若目录不存在，启动时会自动创建并尽量设置为 777 权限。</div>
 ]]
 end
 
@@ -718,11 +868,106 @@ panel_tip:depends("info_mode", "panel")
 panel_tip.cfgvalue = function()
 	return [[
 <div class="cbi-value-description">
-	<div>1. 页面顶部状态面板支持自动轮询显示客户端 / Web 服务 / VNTS2 服务端运行状态、版本、资源占用与配置摘要。</div>
-	<div>2. 当前页面下方可手动读取 vnt2_ctrl 输出，包括本机信息、节点列表、设备详情、路由信息和实际启动参数。</div>
-	<div>3. 服务端状态、日志和参数请结合“服务端设置”与“服务端日志”菜单查看。</div>
+	<div>1. 面板模式会把 vnt2_cli / vnt2_ctrl 的输出尽量转换为更适合 LuCI 阅读的结构化展示。</div>
+	<div>2. 原始输出模式保留命令行原文，适合排障或对照上游输出格式。</div>
+	<div>3. 如需最新数据，请先点击对应刷新按钮；服务端状态、日志和参数请结合“服务端设置”与“服务端日志”菜单查看。</div>
 </div>
 ]]
+end
+
+local panel_info_btn = s:taboption("infos", Button, "_info_panel_btn", translate("刷新本机设备信息（面板）"))
+panel_info_btn.inputtitle = translate("刷新本机设备信息")
+panel_info_btn.inputstyle = "apply"
+panel_info_btn:depends("info_mode", "panel")
+panel_info_btn.write = function()
+	if cli_running_now() then
+		run_cli_info_command("info", "/tmp/vnt2-cli_info")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_info")
+	end
+end
+
+local panel_info = s:taboption("infos", DummyValue, "_info_panel_view", translate("本机设备信息"))
+panel_info.rawhtml = true
+panel_info:depends("info_mode", "panel")
+panel_info.cfgvalue = function()
+	return render_key_value_table(fs.readfile("/tmp/vnt2-cli_info") or "", translate("本机设备信息"))
+end
+
+local panel_ips_btn = s:taboption("infos", Button, "_ips_panel_btn", translate("刷新所有节点列表（面板）"))
+panel_ips_btn.inputtitle = translate("刷新所有节点列表")
+panel_ips_btn.inputstyle = "apply"
+panel_ips_btn:depends("info_mode", "panel")
+panel_ips_btn.write = function()
+	if cli_running_now() then
+		run_cli_info_command("ips", "/tmp/vnt2-cli_ips")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_ips")
+	end
+end
+
+local panel_ips = s:taboption("infos", DummyValue, "_ips_panel_view", translate("所有节点列表"))
+panel_ips.rawhtml = true
+panel_ips:depends("info_mode", "panel")
+panel_ips.cfgvalue = function()
+	return render_whitespace_table(fs.readfile("/tmp/vnt2-cli_ips") or "", translate("所有节点列表"))
+end
+
+local panel_clients_btn = s:taboption("infos", Button, "_clients_panel_btn", translate("刷新所有设备详情（面板）"))
+panel_clients_btn.inputtitle = translate("刷新所有设备详情")
+panel_clients_btn.inputstyle = "apply"
+panel_clients_btn:depends("info_mode", "panel")
+panel_clients_btn.write = function()
+	if cli_running_now() then
+		run_cli_info_command("clients", "/tmp/vnt2-cli_clients")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_clients")
+	end
+end
+
+local panel_clients = s:taboption("infos", DummyValue, "_clients_panel_view", translate("所有设备详情"))
+panel_clients.rawhtml = true
+panel_clients:depends("info_mode", "panel")
+panel_clients.cfgvalue = function()
+	return render_key_value_table(fs.readfile("/tmp/vnt2-cli_clients") or "", translate("所有设备详情"))
+end
+
+local panel_route_btn = s:taboption("infos", Button, "_route_panel_btn", translate("刷新路由转发信息（面板）"))
+panel_route_btn.inputtitle = translate("刷新路由转发信息")
+panel_route_btn.inputstyle = "apply"
+panel_route_btn:depends("info_mode", "panel")
+panel_route_btn.write = function()
+	if cli_running_now() then
+		run_cli_info_command("route", "/tmp/vnt2-cli_route")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_route")
+	end
+end
+
+local panel_route = s:taboption("infos", DummyValue, "_route_panel_view", translate("路由转发信息"))
+panel_route.rawhtml = true
+panel_route:depends("info_mode", "panel")
+panel_route.cfgvalue = function()
+	return render_whitespace_table(fs.readfile("/tmp/vnt2-cli_route") or "", translate("路由转发信息"))
+end
+
+local panel_cmd_btn = s:taboption("infos", Button, "_cmd_panel_btn", translate("刷新本机启动参数（面板）"))
+panel_cmd_btn.inputtitle = translate("刷新本机启动参数")
+panel_cmd_btn.inputstyle = "apply"
+panel_cmd_btn:depends("info_mode", "panel")
+panel_cmd_btn.write = function()
+	if cli_running_now() then
+		sys.call("tr '\\000' ' ' </proc/$(pidof vnt2_cli | awk '{print $1}')/cmdline >/tmp/vnt2-cli_cmd 2>/dev/null")
+	else
+		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_cmd")
+	end
+end
+
+local panel_cmd = s:taboption("infos", DummyValue, "_cmd_panel_view", translate("本机启动参数"))
+panel_cmd.rawhtml = true
+panel_cmd:depends("info_mode", "panel")
+panel_cmd.cfgvalue = function()
+	return render_pre("/tmp/vnt2-cli_cmd")
 end
 
 local btn1 = s:taboption("infos", Button, "_info_raw", translate("本机设备信息"))
@@ -730,8 +975,8 @@ btn1.inputtitle = translate("刷新本机设备信息")
 btn1.inputstyle = "apply"
 btn1:depends("info_mode", "raw")
 btn1.write = function()
-	if cli_running then
-		sys.call("(vnt2_ctrl info --port $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_ctrl info $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_cli info) >/tmp/vnt2-cli_info 2>&1")
+	if cli_running_now() then
+		run_cli_info_command("info", "/tmp/vnt2-cli_info")
 	else
 		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_info")
 	end
@@ -749,8 +994,8 @@ btn2.inputtitle = translate("刷新所有节点列表")
 btn2.inputstyle = "apply"
 btn2:depends("info_mode", "raw")
 btn2.write = function()
-	if cli_running then
-		sys.call("(vnt2_ctrl ips --port $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_ctrl ips $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_cli ips) >/tmp/vnt2-cli_ips 2>&1")
+	if cli_running_now() then
+		run_cli_info_command("ips", "/tmp/vnt2-cli_ips")
 	else
 		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_ips")
 	end
@@ -768,8 +1013,8 @@ btn3.inputtitle = translate("刷新所有设备详情")
 btn3.inputstyle = "apply"
 btn3:depends("info_mode", "raw")
 btn3.write = function()
-	if cli_running then
-		sys.call("(vnt2_ctrl clients --port $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_ctrl clients $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_cli clients) >/tmp/vnt2-cli_clients 2>&1")
+	if cli_running_now() then
+		run_cli_info_command("clients", "/tmp/vnt2-cli_clients")
 	else
 		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_clients")
 	end
@@ -787,8 +1032,8 @@ btn4.inputtitle = translate("刷新路由转发信息")
 btn4.inputstyle = "apply"
 btn4:depends("info_mode", "raw")
 btn4.write = function()
-	if cli_running then
-		sys.call("(vnt2_ctrl route --port $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_ctrl route $(uci -q get vnt2.@vnt2_cli[0].ctrl_port 2>/dev/null || echo 11233) || vnt2_cli route) >/tmp/vnt2-cli_route 2>&1")
+	if cli_running_now() then
+		run_cli_info_command("route", "/tmp/vnt2-cli_route")
 	else
 		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_route")
 	end
@@ -806,7 +1051,7 @@ btn5.inputtitle = translate("刷新本机启动参数")
 btn5.inputstyle = "apply"
 btn5:depends("info_mode", "raw")
 btn5.write = function()
-	if cli_running then
+	if cli_running_now() then
 		sys.call("tr '\\000' ' ' </proc/$(pidof vnt2_cli | awk '{print $1}')/cmdline >/tmp/vnt2-cli_cmd 2>/dev/null")
 	else
 		sys.call("echo '错误：程序未运行！请先启动 vnt2_cli。' >/tmp/vnt2-cli_cmd")
@@ -905,8 +1150,8 @@ end
 
 local web_conf_path = w:taboption("advanced", Value, "web_conf_file", translate("Web 配置文件路径"),
 	translate("vnt2_web 使用的 TOML 配置文件绝对路径"))
-web_conf_path.placeholder = "/etc/config/vnt2_web.toml"
-web_conf_path.default = "/etc/config/vnt2_web.toml"
+web_conf_path.placeholder = "/vnt_config/vnt2_cli_web.toml"
+web_conf_path.default = "/vnt_config/vnt2_cli_web.toml"
 web_conf_path.validate = validate_file_path
 
 local web_user = w:taboption("advanced", Value, "web_user", translate("页面备注用户名"),
@@ -1098,7 +1343,7 @@ server_tip.rawhtml = true
 server_tip.cfgvalue = function()
 	return [[
 <div class="cbi-value-description">
-	<div>1. 当前 LuCI 会根据各自的“配置文件路径”字段，将 CLI、Web 与服务端配置分别持久化到对应 TOML 文件，并自动同步到 UCI 表单显示。</div>
+	<div>1. 当前 LuCI 会将 CLI 与 Web 配置共同持久化到同一个 TOML 文件（默认 /vnt_config/vnt2_cli_web.toml），服务端则单独持久化到其对应 TOML 文件，并自动同步到 UCI 表单显示。</div>
 	<div>2. TCP / QUIC / WS/WSS / Web 管理页均可独立监听，并可按需开放 WAN 防火墙规则。</div>
 	<div>3. 若启用自动下载，默认会从服务端仓库 Releases 中选择匹配当前架构的压缩包。</div>
 </div>
