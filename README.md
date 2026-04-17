@@ -68,7 +68,7 @@ VPN -> VNT2
 
 - `vnt2_cli`：VNT2 客户端主程序
 - `vnt2_ctrl`：客户端控制查询程序
-- `vnt2_web`：VNT2 Web 管理程序
+- `vnt2_web`：VNT2 Web 客户端管理主程序
 - `vnts2`：VNT2 服务端程序
 
 并通过 `/etc/init.d/vnt2` 进行统一启停和 `procd` 守护管理。
@@ -431,7 +431,8 @@ opkg install luci-app-vnt2_*.ipk
 
 ### 配置文件
 - `/etc/config/vnt2`
-- `/etc/config/vnt2.toml`
+- `/etc/config/vnt2_cli.toml`
+- `/etc/config/vnt2_web.toml`
 - `/etc/config/vnts2.toml`
 
 ### 二进制文件

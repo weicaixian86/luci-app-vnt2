@@ -3,9 +3,11 @@ local util = require "luci.util"
 
 local M = {}
 
-M.DEFAULT_CLIENT_TOML = "/etc/config/vnt2.toml"
+M.DEFAULT_CLIENT_TOML = "/etc/config/vnt2_cli.toml"
+M.DEFAULT_WEB_TOML = "/etc/config/vnt2_web.toml"
 M.DEFAULT_SERVER_TOML = "/etc/config/vnts2.toml"
 M.CLIENT_TOML = M.DEFAULT_CLIENT_TOML
+M.WEB_TOML = M.DEFAULT_WEB_TOML
 M.SERVER_TOML = M.DEFAULT_SERVER_TOML
 
 local LEGACY_DEFAULT_CLIENT_SERVER = "tcp://0.0.0.0:29872"
@@ -82,6 +84,31 @@ local client_option_map = {
 	stun_server_tcp = "tcp_stun"
 }
 
+local web_option_map = {
+	network_code = "network_code",
+	server = "server",
+	ip = "ip",
+	device_id = "device_id",
+	device_name = "device_name",
+	password = "password",
+	tun_name = "tun_name",
+	cert_mode = "cert_mode",
+	mtu = "mtu",
+	port = "tunnel_port",
+	no_punch = "no_punch",
+	use_channel_type = "rtx",
+	compressor = "compress",
+	use_fec = "fec",
+	no_proxy = "no_nat",
+	no_tun = "no_tun",
+	allow_wire_guard = "allow_mapping",
+	in_ips = "input",
+	out_ips = "output",
+	mapping = "port_mapping",
+	stun_server = "udp_stun",
+	stun_server_tcp = "tcp_stun"
+}
+
 local server_option_map = {
 	tcp_bind = "tcp_bind",
 	quic_bind = "quic_bind",
@@ -104,6 +131,13 @@ local server_option_map = {
 local client_order = {
 	"network_code", "server", "ip", "device_id", "device_name", "password", "tun_name",
 	"cert_mode", "mtu", "cmd_port", "port", "no_punch", "use_channel_type", "compressor",
+	"use_fec", "no_proxy", "no_tun", "allow_wire_guard", "in_ips", "out_ips", "mapping",
+	"stun_server", "stun_server_tcp"
+}
+
+local web_order = {
+	"network_code", "server", "ip", "device_id", "device_name", "password", "tun_name",
+	"cert_mode", "mtu", "port", "no_punch", "use_channel_type", "compressor",
 	"use_fec", "no_proxy", "no_tun", "allow_wire_guard", "in_ips", "out_ips", "mapping",
 	"stun_server", "stun_server_tcp"
 }
@@ -165,6 +199,15 @@ local function resolve_client_toml_path(uci)
 		path = M.DEFAULT_CLIENT_TOML
 	end
 	M.CLIENT_TOML = path
+	return path
+end
+
+local function resolve_web_toml_path(uci)
+	local path = trim(uci:get_first("vnt2", "vnt2_web", "web_conf_file"))
+	if path == "" then
+		path = M.DEFAULT_WEB_TOML
+	end
+	M.WEB_TOML = path
 	return path
 end
 
@@ -447,6 +490,34 @@ function M.ensure_client_toml_from_uci(uci)
 	M.write_toml(client_toml, data, client_order)
 end
 
+function M.ensure_web_toml_from_uci(uci)
+	local web_toml = resolve_web_toml_path(uci)
+
+	if fs.access(web_toml) then
+		return
+	end
+
+	local data = clone_defaults(client_defaults)
+	data.cmd_port = nil
+	for toml_key, uci_key in pairs(web_option_map) do
+		if is_list_key(toml_key) then
+			local val = uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key) or data[toml_key]
+			if toml_key == "server" then
+				data[toml_key] = normalize_client_server_list(val)
+			else
+				data[toml_key] = normalize_list(val)
+			end
+		else
+			local val = uci:get_first("vnt2", "vnt2_cli", uci_key)
+			if val ~= nil then
+				data[toml_key] = trim(val)
+			end
+		end
+	end
+
+	M.write_toml(web_toml, data, web_order)
+end
+
 function M.ensure_server_toml_from_uci(uci)
 	local server_toml = resolve_server_toml_path(uci)
 
@@ -472,13 +543,16 @@ end
 
 function M.ensure_toml_files(uci)
 	M.ensure_client_toml_from_uci(uci)
+	M.ensure_web_toml_from_uci(uci)
 	M.ensure_server_toml_from_uci(uci)
 end
 
 function M.export_uci_to_toml(uci)
 	local client_toml = resolve_client_toml_path(uci)
+	local web_toml = resolve_web_toml_path(uci)
 	local server_toml = resolve_server_toml_path(uci)
 	local cli = clone_defaults(client_defaults)
+	local web = clone_defaults(client_defaults)
 	local server = clone_defaults(server_defaults)
 
 	for toml_key, uci_key in pairs(client_option_map) do
@@ -498,6 +572,24 @@ function M.export_uci_to_toml(uci)
 		end
 	end
 
+	for toml_key, uci_key in pairs(web_option_map) do
+		if is_list_key(toml_key) then
+			if toml_key == "server" then
+				web[toml_key] = normalize_client_server_list(
+					uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key)
+				)
+			else
+				web[toml_key] = normalize_list(uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key))
+			end
+		else
+			local val = uci:get_first("vnt2", "vnt2_cli", uci_key)
+			if val ~= nil then
+				web[toml_key] = trim(val)
+			end
+		end
+	end
+	web.cmd_port = nil
+
 	for toml_key, uci_key in pairs(server_option_map) do
 		if is_list_key(toml_key) then
 			server[toml_key] = normalize_list(uci:get_list("vnt2", uci:get_first("vnt2", "vnts2"), uci_key))
@@ -510,9 +602,10 @@ function M.export_uci_to_toml(uci)
 	end
 
 	M.write_toml(client_toml, cli, client_order)
+	M.write_toml(web_toml, web, web_order)
 	M.write_toml(server_toml, server, server_order)
 
-	return cli, server
+	return cli, web, server
 end
 
 function M.sync_toml_to_uci(uci)
