@@ -5,6 +5,7 @@ local open_web_url = dsp.build_url("admin", "vpn", "vnt2", "open_web")
 local client_log_url = dsp.build_url("admin", "vpn", "vnt2", "client_log")
 local web_log_url = dsp.build_url("admin", "vpn", "vnt2", "web_log")
 local server_log_url = dsp.build_url("admin", "vpn", "vnt2", "server_log")
+local open_server_web_url = dsp.build_url("admin", "vpn", "vnt2", "open_server_web")
 local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 %>
 
@@ -137,8 +138,8 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 				<tr><td>下载状态</td><td id="web_download">-</td></tr>
 			</table>
 			<div class="vnt2-links">
-				<a href="<%=open_web_url%>" target="_blank">打开 vnt2_web 页面</a>
-				<a href="<%=web_log_url%>">查看 Web 日志</a>
+				<a href="<%=open_web_url%>" target="_blank">打开web客户端 页面</a>
+				<a href="<%=web_log_url%>">查看web日志</a>
 			</div>
 		</div>
 
@@ -161,6 +162,7 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 				<tr><td>下载状态</td><td id="server_download">-</td></tr>
 			</table>
 			<div class="vnt2-links">
+				<a href="<%=open_server_web_url%>" target="_blank" rel="noopener noreferrer">打开web页面</a>
 				<a href="<%=server_log_url%>">查看服务端日志</a>
 				<a href="<%=download_log_url%>">查看下载日志</a>
 			</div>

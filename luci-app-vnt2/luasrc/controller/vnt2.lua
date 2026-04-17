@@ -38,6 +38,7 @@ function index()
 	entry({ "admin", "vpn", "vnt2", "vnt2_web_cmdline" }, call("vnt2_web_cmdline")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "vnts2_cmdline" }, call("vnts2_cmdline")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "open_web" }, call("open_web")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "open_server_web" }, call("open_server_web")).leaf = true
 end
 
 local function trim(s)
@@ -119,6 +120,10 @@ end
 
 local function get_web_host()
 	return uci_first("vnt2_web", "web_host", "0.0.0.0")
+end
+
+local function get_server_web_bind()
+	return uci_first("vnts2", "web_bind", "0.0.0.0:29871")
 end
 
 local function get_client_conf()
@@ -616,6 +621,18 @@ local function build_web_url()
 	return "http://" .. host .. ":" .. tostring(port) .. "/"
 end
 
+local function build_server_web_url()
+	local host = get_router_host()
+	local bind = get_server_web_bind()
+	local port = parse_bind_port(bind) or 29871
+
+	if host:find(":", 1, true) and not host:match("^%[.*%]$") then
+		host = "[" .. host .. "]"
+	end
+
+	return "http://" .. host .. ":" .. tostring(port) .. "/"
+end
+
 local function summarize_cli_config()
 	local cfg = toml.get_client_summary(uci)
 	return {
@@ -897,4 +914,8 @@ end
 
 function open_web()
 	http.redirect(build_web_url())
+end
+
+function open_server_web()
+	http.redirect(build_server_web_url())
 end
