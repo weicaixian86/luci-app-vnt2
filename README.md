@@ -508,6 +508,6 @@ README 描述的是**当前已完成实现**，并不代表所有需求都已最
 
 ## 致谢
 
-- VNT2 上游客户端项目：`vnt-dev/vnt`
-- VNT2 上游服务端项目：`vnt-dev/vnts`
-- VNT1 LuCI 插件参考：`luci-app-vnt-main`
+- VNT2 上游客户端项目：一不小心 `vnt-dev/vnt`
+- VNT2 上游服务端项目：一不小心 `vnt-dev/vnts`
+- VNT1 LuCI 插件参考：lmq8267 `luci-app-vnt-main`
