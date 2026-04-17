@@ -1,137 +1,362 @@
 # luci-app-vnt2
 
 <p align="center">
-  <img alt="OpenWrt" src="https://img.shields.io/badge/OpenWrt-24.10-blue?logo=openwrt">
-  <img alt="LuCI" src="https://img.shields.io/badge/LuCI-VNT2-32c955">
-  <img alt="Architecture" src="https://img.shields.io/badge/SDK-x86__64-orange">
-  <img alt="Release" src="https://img.shields.io/badge/Release-Actions-success?logo=github">
+  <img alt="OpenWrt" src="https://img.shields.io/badge/OpenWrt-LuCI-blue?logo=openwrt">
+  <img alt="VNT2" src="https://img.shields.io/badge/VNT-2.x-32c955">
+  <img alt="Status" src="https://img.shields.io/badge/Status-In%20Progress-orange">
 </p>
 
-`luci-app-vnt2` 是基于 **VNT 2.x** 客户端能力开发的 OpenWrt LuCI 插件，用于在 OpenWrt 24.10 上通过 Web 界面管理 `vnt2_cli`、`vnt2_ctrl` 和 `vnt2_web`。
+`luci-app-vnt2` 是一个面向 **OpenWrt LuCI** 的 **VNT2 图形化管理插件**，用于在路由器后台统一管理：
 
-> 注意：  
-> `vnt-2` 是 **VNT V2** 版本源码，和 `vnt` 的 **V1** 版本不兼容，也没有直接关系。  
-> 本项目对应的是 **VNT2**，不是 VNT1。
+- `vnt2_cli`
+- `vnt2_ctrl`
+- `vnt2_web`
+- `vnts2`
+
+当前项目重点是把 **VNT2 客户端 / Web / 服务端** 的常用能力整合到 OpenWrt 后台中，提供更适合路由器场景的配置、启动、状态查看、日志查看、自动下载与网络联动能力。
 
 ---
 
-## 项目说明
+## 项目定位
 
-本仓库内相关目录说明：
+本仓库中包含多套相关代码，作用如下：
+
+- `需求书-项目说明.md`  
+  当前项目需求说明。
+
+- `luci-app-vnt-main/`  
+  VNT1 的 LuCI 插件实现，主要作为界面风格和交互参考。
+
+- `luci-app-vnt2/`  
+  当前正在开发的 **VNT2 LuCI 插件**。
 
 - `vnt-2/`  
-  VNT2 上游源码，用于确认 V2 功能、参数和行为。
-- `luci-app-vnt-main/`  
-  VNT1 的 LuCI 插件源码，仅作为界面风格与交互参考。
-- `luci-app-vnt2/`  
-  当前的 VNT2 LuCI 插件工程。
-- `luci-app-vnt2/.github/workflows/build.yml`  
-  GitHub Actions 在线编译工作流，用于手动编译 OpenWrt 24.10 x86_64 的 ipk 安装包并自动发布 Release。
+  VNT2 上游客户端相关源码，用于核对参数、行为和版本能力。
+
+- `vnts-2/`  
+  VNT2 上游服务端相关源码，用于核对服务端配置和启动方式。
+
+> 注意：  
+> **VNT1 与 VNT2 不是同一套协议与参数体系。**  
+> 本插件对应的是 **VNT2**，不要直接套用 VNT1 的配置。
 
 ---
 
-## 功能特性
+## 当前已完成功能
 
-当前 `luci-app-vnt2` 已围绕 VNT2 提供以下能力：
+### 1. LuCI 菜单与页面入口
 
-### 1. LuCI 图形化管理
-- 在 OpenWrt 后台提供 VNT2 管理菜单
-- 参考 V1 插件界面风格重新适配 V2
-- 支持基础配置、状态查看、日志查看
+安装后可在 OpenWrt 后台进入：
 
-### 2. vnt2_cli 管理
-- 支持启停 `vnt2_cli`
-- 支持通过 UCI 配置生成 TOML 配置文件
-- 支持以下常见参数管理：
-  - 服务器地址
-  - 网络编号
-  - 设备名称 / 设备 ID
-  - IP
-  - TUN 名称
-  - 控制端口
-  - Tunnel 端口
-  - 密码
-  - 绑定设备
-  - 无 TUN 模式
-  - 禁用打洞
-  - NAT 相关选项
-  - 压缩 / FEC / RTX
-  - 输入 / 输出规则
-  - 端口映射
-  - STUN 服务器配置
+```text
+VPN -> VNT2
+```
 
-### 3. vnt2_ctrl 集成
-- 获取连接状态
-- 获取本机信息
-- 获取路由信息
-- 获取客户端信息
-- 获取命令行信息
+当前菜单包含：
 
-### 4. vnt2_web 集成
-- 支持启停 `vnt2_web`
-- 支持设置监听地址和端口
-- 支持页面按钮直接打开原生 `vnt2_web` 管理界面
-- 支持按配置自动放行 Web 访问端口
-
-### 5. 状态与日志
-- 轮询显示 `vnt2_cli` / `vnt2_web` 运行状态
-- 显示 PID、运行时长、CPU、内存占用
-- 显示当前版本与 GitHub 最新版本
-- 客户端日志查看
-- Web 日志查看
-
-### 6. OpenWrt 联动
-- 自动处理 `network` / `firewall` 相关配置
-- 支持 TUN 模式与无 TUN 模式切换
-- 支持 init.d / procd 管理服务
+- **基本设置**
+- **cli客户端日志**
+- **web客户端日志**
+- **服务端日志**
+- **下载日志**
 
 ---
 
-## 适用环境
+### 2. 三类核心进程统一管理
 
-- OpenWrt `24.10`
-- LuCI（传统 Lua CBI 体系）
-- 目标工作流架构：`x86_64`
+当前插件已经支持统一管理以下进程：
 
-> 当前 GitHub Actions 工作流默认构建 `OpenWrt 24.10 x86_64` 的 `ipk` 包。
+- `vnt2_cli`：VNT2 客户端主程序
+- `vnt2_ctrl`：客户端控制查询程序
+- `vnt2_web`：VNT2 Web 管理程序
+- `vnts2`：VNT2 服务端程序
+
+并通过 `/etc/init.d/vnt2` 进行统一启停和 `procd` 守护管理。
+
+---
+
+### 3. 客户端（vnt2_cli）管理
+
+已支持的客户端能力包括：
+
+- 启用/禁用客户端
+- 指定 `vnt2_cli` 二进制路径
+- 指定 `vnt2_ctrl` 二进制路径
+- 使用 TOML 配置文件启动
+- 校验客户端 TOML 配置是否合法
+- 启动失败时输出到客户端日志
+- 状态页显示客户端运行状态、PID、运行时间、CPU、内存
+- 通过 `vnt2_ctrl`/CLI 查询：
+  - `info`
+  - `ips`
+  - `clients`
+  - `route`
+  - 当前启动命令行
+
+---
+
+### 4. Web（vnt2_web）管理
+
+已支持的 Web 能力包括：
+
+- 启用/禁用 `vnt2_web`
+- 指定 `vnt2_web` 二进制路径
+- 设置监听地址
+- 设置监听端口
+- 设置日志级别
+- 页面中跳转打开原生 `vnt2_web`
+- 状态页显示 Web 运行状态、PID、运行时间、CPU、内存
+- 当监听在 `0.0.0.0` / `::` 且允许 WAN 访问时，自动添加防火墙放行规则
+
+---
+
+### 5. 服务端（vnts2）管理
+
+已支持的服务端能力包括：
+
+- 启用/禁用 `vnts2`
+- 指定 `vnts2` 二进制路径
+- 使用服务端 TOML 配置文件启动
+- 校验服务端 TOML 配置文件是否存在
+- 状态页显示服务端运行状态、PID、运行时间、CPU、内存
+- 显示服务端命令行
+- 展示并预览服务端配置内容
+- 支持服务端端口对应的防火墙联动：
+  - TCP
+  - QUIC
+  - WebSocket
+  - Web 管理口
+
+---
+
+### 6. 自动下载二进制程序
+
+当前 init 脚本已经支持 **自动下载缺失程序**。
+
+#### 支持范围
+
+- 客户端包：`vnt2_cli` / `vnt2_ctrl` / `vnt2_web`
+- 服务端包：`vnts2`
+
+#### 自动下载特性
+
+- 支持按架构识别下载目标资源
+- 支持从 GitHub Releases 获取发行版元数据
+- 支持 `latest` 和指定版本 tag
+- 支持缓存下载结果
+- 支持 zip / tar.gz / tar.xz 等常见压缩包
+- 自动解压并安装到：
+
+```text
+/usr/bin/
+```
+
+#### 默认仓库
+
+- 客户端 / Web：`vnt-dev/vnt`
+- 服务端：`vnt-dev/vnts`
+
+#### 下载日志与状态
+
+相关信息会记录到：
+
+- `/tmp/vnt2-download.log`
+- `/tmp/vnt2-download-cli.state`
+- `/tmp/vnt2-download-web.state`
+- `/tmp/vnt2-download-server.state`
+
+LuCI 页面已提供 **下载日志** 查看入口。
+
+---
+
+### 7. 上传程序回退机制
+
+如果自动下载失败，插件还支持回退到本地上传的程序文件。
+
+当前脚本会尝试从 `/tmp` 中寻找上传的临时程序，并优先安装到：
+
+```text
+/usr/bin/
+```
+
+如果安装失败，则继续回退到临时上传路径运行。
+
+这使得在无法联网或 GitHub 下载失败的 OpenWrt 环境中，仍然可以通过网页上传程序来启动服务。
+
+---
+
+### 8. TUN / 网络 / 防火墙联动
+
+客户端启动时，当前实现已支持根据配置自动处理 OpenWrt 网络和防火墙。
+
+#### TUN 模式
+当客户端使用 TUN 模式时，会自动创建：
+
+- `network.VNT2`
+- `firewall.vnt2zone`
+
+并按配置生成转发规则，例如：
+
+- VNT2 -> LAN
+- VNT2 -> WAN
+- LAN -> VNT2
+- WAN -> VNT2
+
+同时自动开启：
+
+```text
+net.ipv4.ip_forward=1
+```
+
+#### 无 TUN 模式
+当 `no_tun=1` 时，会自动清理对应的网络和防火墙区配置。
+
+#### Web / 服务端端口放行
+- `vnt2_web` 可按配置开放 WAN 访问端口
+- `vnts2` 可分别开放 TCP / QUIC / WS / Web 端口
+
+---
+
+### 9. 状态页信息聚合
+
+当前状态接口已经能够聚合以下信息并提供给 LuCI 页面展示：
+
+#### 客户端
+- 是否运行
+- PID
+- 运行时长
+- CPU 占用
+- 内存占用
+- 当前版本
+- 最新版本
+- 控制端口
+- 配置文件路径
+- 配置内容预览
+- `info` / `ips` 信息预览
+
+#### Web
+- 是否运行
+- PID
+- 运行时长
+- CPU 占用
+- 内存占用
+- 当前版本
+- 监听地址
+- 监听端口
+- 自动拼接访问 URL
+
+#### 服务端
+- 是否运行
+- PID
+- 运行时长
+- CPU 占用
+- 内存占用
+- 当前版本
+- 最新版本
+- TCP / QUIC / WS / Web 绑定地址
+- 网络配置
+- 用户名
+- 白名单
+- Peer Server
+- 自定义网段
+- 服务端配置文件路径
+- 配置内容预览
+
+#### 下载状态
+- CLI 下载状态
+- Web 下载状态
+- 服务端下载状态
+- 下载日志大小
+
+---
+
+### 10. 多类日志查看
+
+当前插件已提供以下日志查看能力：
+
+- 客户端日志：`/tmp/vnt2-cli.log`
+- Web 日志：`/tmp/vnt2-web.log`
+- 服务端日志：`/tmp/vnts2.log`
+- 下载日志：`/tmp/vnt2-download.log`
+
+并支持在 LuCI 页面中读取与清空对应日志。
+
+---
+
+## 目录结构
+
+当前插件目录结构如下：
+
+```text
+luci-app-vnt2/
+├─ README.md
+└─ luci-app-vnt2/
+   ├─ Makefile
+   ├─ luasrc/
+   │  ├─ controller/
+   │  │  └─ vnt2.lua
+   │  ├─ model/
+   │  │  ├─ vnt2_toml.lua
+   │  │  └─ cbi/
+   │  │     ├─ vnt2.lua
+   │  │     ├─ vnt2_log.lua
+   │  │     ├─ vnt2_web_log.lua
+   │  │     ├─ vnt2_server_log.lua
+   │  │     └─ vnt2_download_log.lua
+   │  └─ view/
+   │     └─ vnt2/
+   │        ├─ vnt2_status.htm
+   │        ├─ vnt2-cli_log.htm
+   │        ├─ vnt2-web_log.htm
+   │        ├─ vnts2_log.htm
+   │        ├─ vnt2_download_log.htm
+   │        ├─ other_upload.htm
+   │        └─ other_dvalue.htm
+   └─ root/
+      └─ etc/
+         ├─ config/
+         │  └─ vnt2
+         └─ init.d/
+            └─ vnt2
+```
+
+> 说明：  
+> 当前目录中也存在一些命名相近的历史视图文件，例如 `vnt2-download_log.htm` / `vnt2-web_log.htm`。  
+> README 以上述实际使用的主文件为主说明。
 
 ---
 
 ## 依赖说明
 
-插件 Makefile 当前依赖：
+根据当前 `Makefile`，插件依赖如下：
 
 - `luci-compat`
-- `kmod-tun`
-- `libopenssl`
-- `libustream-openssl`
+- `curl`
+- `ca-bundle`
+- `unzip`
 
-如果你使用 `TUN` 模式，请确保系统已安装：
+即：
 
-```sh
-opkg update
-opkg install kmod-tun
+```makefile
+LUCI_DEPENDS:=+luci-compat +curl +ca-bundle +unzip
 ```
+
+### 依赖作用简述
+
+- `luci-compat`：兼容 LuCI 传统 Lua 体系
+- `curl`：用于访问 GitHub Releases / 下载程序
+- `ca-bundle`：HTTPS 证书支持
+- `unzip`：解压 zip 发行包
+
+> 如果你的系统缺少 `tar`、`busybox unzip` 等能力，自动下载解压成功率也会受到影响。
 
 ---
 
 ## 安装方式
 
-### 方式一：通过 GitHub Releases 安装 ipk
+### 1. 在 OpenWrt 源码中编译
 
-在你自己的 GitHub 仓库中运行 Actions 编译后，可在 Releases 中下载生成的 `ipk` 文件，然后在 OpenWrt 上安装：
-
-```sh
-opkg install luci-app-vnt2_*.ipk
-```
-
-如果你的 OpenWrt 固件使用的是 `apk` 包管理器，则请按系统实际方式安装。
-
----
-
-## 在 OpenWrt 源码中编译
-
-将本项目放到 OpenWrt/SDK 的 `package` 目录下，例如：
+将目录放到 OpenWrt 的 `package` 或自定义 feed 中，例如：
 
 ```sh
 git clone <your-repo-url> package/luci-app-vnt2
@@ -143,7 +368,7 @@ git clone <your-repo-url> package/luci-app-vnt2
 make menuconfig
 ```
 
-进入：
+在菜单中选择：
 
 ```text
 LuCI  --->
@@ -159,140 +384,122 @@ make package/luci-app-vnt2/compile V=s
 
 ---
 
-## GitHub Actions 在线编译
+### 2. 安装编译后的 ipk
 
-仓库已提供工作流文件：
+如果你已经编译出 ipk，可在 OpenWrt 中执行：
 
-```text
-luci-app-vnt2/.github/workflows/build.yml
+```sh
+opkg install luci-app-vnt2_*.ipk
 ```
 
-### 工作流特性
-- 手动触发
-- 使用 OpenWrt `24.10.0`
-- 使用 `x86/64` SDK
-- 自动编译 `luci-app-vnt2` 的 ipk 包
-- 自动上传 Actions Artifact
-- 自动发布 GitHub Releases
-- Release 内容仅保留：
-  - ipk 安装包
-  - 编译时间
+安装后脚本会自动：
 
-### 使用方法
-
-1. 将整个 `luci-app-vnt2` 目录上传到你的 GitHub 仓库
-2. 打开仓库的 **Actions**
-3. 选择工作流：`Build luci-app-vnt2 for OpenWrt 24.10 x86_64`
-4. 点击 **Run workflow**
-5. 输入 `release_tag`，例如：
-
-```text
-v1.0.0
-```
-
-6. 等待编译完成
-7. 在：
-   - **Actions Artifacts** 获取构建产物
-   - **Releases** 获取自动发布的 ipk 包
+- 给 `/etc/init.d/vnt2` 增加执行权限
+- 启用 `vnt2` 服务
 
 ---
 
-## LuCI 页面说明
+## 卸载与配置保留
 
-安装完成后，在 OpenWrt 后台中进入：
+当前 `Makefile` 中已实现卸载前配置备份和重装恢复逻辑：
+
+### 卸载前
+会把配置文件：
 
 ```text
-VPN -> VNT2
+/etc/config/vnt2
 ```
 
-页面主要包括：
+移动到：
 
-- **基本设置**
-  - 配置 `vnt2_cli`
-  - 配置 `vnt2_web`
-  - 启停服务
-  - 上传二进制文件
-- **客户端日志**
-  - 查看 `/tmp/vnt2-cli.log`
-- **Web 日志**
-  - 查看 `/tmp/vnt2-web.log`
+```text
+/tmp/vnt2_backup
+```
 
-状态页可查看：
-- CLI / Web 运行状态
-- 控制端口
-- 监听地址
-- 版本信息
-- 本机信息预览
+### 重新安装后
+如果检测到 `/tmp/vnt2_backup`，会自动恢复为：
+
+```text
+/etc/config/vnt2
+```
+
+因此在 **不重启设备** 的前提下，重新安装插件通常可以保留原有配置。
 
 ---
 
-## 二进制文件说明
+## 运行后涉及的主要文件
 
-本 LuCI 插件负责管理 VNT2 服务，但不直接内置所有二进制程序。
+### 配置文件
+- `/etc/config/vnt2`
+- `/etc/config/vnt2.toml`
+- `/etc/config/vnts2.toml`
 
-通常你需要在 OpenWrt 上准备以下文件：
-
+### 二进制文件
 - `/usr/bin/vnt2_cli`
 - `/usr/bin/vnt2_ctrl`
 - `/usr/bin/vnt2_web`
+- `/usr/bin/vnts2`
 
-如果目标文件不存在，插件的服务脚本会尝试使用上传方式提供的临时程序，并回写到对应配置项中。
+### 日志文件
+- `/tmp/vnt2-cli.log`
+- `/tmp/vnt2-web.log`
+- `/tmp/vnts2.log`
+- `/tmp/vnt2-download.log`
 
----
-
-## 注意事项
-
-### 1. VNT1 与 VNT2 不兼容
-请不要把 V1 参数、V1 服务端、V1 客户端配置直接套用到 V2。
-
-### 2. TUN 模式需要内核支持
-如果设备缺少 `kmod-tun`，请改用无 TUN 模式或先安装相关模块。
-
-### 3. Web 监听暴露
-如果 `vnt2_web` 监听在 `0.0.0.0` 且允许 WAN 访问，请注意安全风险。
-
-### 4. Release 说明为精简模式
-当前工作流按要求只在 Release 中展示编译时间，不生成额外发布说明。
+### 运行标记
+- `/tmp/vnt2_cli_time`
+- `/tmp/vnt2_web_time`
+- `/tmp/vnts2_time`
 
 ---
 
-## 目录结构
+## 当前适用场景
 
-```text
-luci-app-vnt2/
-├─ .github/
-│  └─ workflows/
-│     └─ build.yml
-├─ README.md
-└─ luci-app-vnt2/
-   ├─ Makefile
-   ├─ luasrc/
-   │  ├─ controller/
-   │  │  └─ vnt2.lua
-   │  ├─ model/cbi/
-   │  │  ├─ vnt2.lua
-   │  │  ├─ vnt2_log.lua
-   │  │  └─ vnt2_web_log.lua
-   │  └─ view/vnt2/
-   │     ├─ vnt2_status.htm
-   │     ├─ vnt2-cli_log.htm
-   │     └─ vnt2-web_log.htm
-   └─ root/
-      └─ etc/
-         ├─ config/
-         │  └─ vnt2
-         └─ init.d/
-            └─ vnt2
-```
+当前版本更适合以下场景：
+
+- 在 OpenWrt 上图形化管理 VNT2 客户端
+- 在路由器上托管 `vnt2_web`
+- 在 OpenWrt 上直接运行 `vnts2`
+- 设备没有预装二进制程序，希望通过自动下载补齐
+- 设备无法自动下载，希望通过网页上传程序回退运行
+- 需要查看 VNT2 客户端 / 服务端运行状态与日志
+
+---
+
+## 当前限制与说明
+
+### 1. 项目仍处于持续完善阶段
+README 描述的是**当前已完成实现**，并不代表所有需求都已最终收尾。
+
+### 2. 自动下载依赖外网访问
+如果 OpenWrt 设备无法访问 GitHub Releases，则自动下载会失败，此时可改用上传方式。
+
+### 3. TUN 模式依赖内核与系统环境
+若设备不支持 TUN，建议改用 `no_tun` 模式。
+
+### 4. Web / 服务端开放 WAN 需谨慎
+如果你将 `vnt2_web` 或 `vnts2` 的端口暴露到 WAN，请自行评估安全风险。
+
+### 5. 版本号与上游资源命名可能变化
+当前下载逻辑已尽量兼容多种命名方式，但上游 Release 资源命名规则变化时，仍可能需要同步调整脚本。
+
+---
+
+## 后续可继续补充的方向
+
+以下内容适合后续继续完善：
+
+- README 增加页面截图
+- 增加 OpenWrt 版本适配说明
+- 增加常见问题 FAQ
+- 增加从 UCI 到 TOML 的字段映射说明
+- 增加完整的客户端 / 服务端配置示例
+- 增加更细化的编译与打包说明
 
 ---
 
 ## 致谢
 
-- VNT2 上游项目：`vnt-dev/vnt`
-- V1 LuCI 插件界面参考：`luci-app-vnt-main`
-
-如果后续你还需要，我可以继续补一版：
-- 带截图占位说明的 README
-- 更适合 GitHub 展示的徽章版 README
-- 中英双语 README
+- VNT2 上游客户端项目：`vnt-dev/vnt`
+- VNT2 上游服务端项目：`vnt-dev/vnts`
+- VNT1 LuCI 插件参考：`luci-app-vnt-main`
