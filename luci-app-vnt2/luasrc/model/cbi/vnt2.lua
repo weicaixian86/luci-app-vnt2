@@ -134,10 +134,19 @@ end
 
 local function run_cli_info_command(subcmd, out_file)
 	local port = get_cli_ctrl_port()
-	local cmd = "(vnt2_ctrl " .. subcmd .. " --port " .. util.shellquote(port)
-		.. " || vnt2_ctrl " .. subcmd .. " " .. util.shellquote(port)
-		.. " || vnt2_cli " .. subcmd .. ") >" .. util.shellquote(out_file) .. " 2>&1"
-	sys.call(cmd)
+	local ctrl_bin = trim(m.uci:get_first("vnt2", "vnt2_cli", "vnt2_ctrl_bin"))
+	if ctrl_bin == "" then
+		ctrl_bin = "/usr/bin/vnt2_ctrl"
+	end
+
+	local cmd
+	if port == "" or port == "0" then
+		cmd = util.shellquote(ctrl_bin) .. " " .. subcmd
+	else
+		cmd = util.shellquote(ctrl_bin) .. " --port " .. util.shellquote(port) .. " " .. subcmd
+	end
+
+	sys.call(cmd .. " >" .. util.shellquote(out_file) .. " 2>&1")
 end
 
 local function translate_info_labels(content)
