@@ -1,4 +1,4 @@
-name: Build luci-app-vnt2 for OpenWrt 24.10 x86_64
+name: Build luci-app-vnt2 for OpenWrt x86_64
 
 on:
   workflow_dispatch:
@@ -17,35 +17,27 @@ permissions:
 
 env:
   TZ: Asia/Shanghai
-  OPENWRT_VERSION: "24.10.0"
-  OPENWRT_TARGET: "x86/64"
-  SDK_URL: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
   PACKAGE_NAME: "luci-app-vnt2"
+  OPENWRT_TARGET: "x86/64"
 
 jobs:
   build:
-    name: Build and Release IPK
+    name: Build ${{ matrix.package_format }} for OpenWrt ${{ matrix.openwrt_version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - openwrt_version: "24.10.0"
+            sdk_url: "https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+            package_format: "ipk"
+          - openwrt_version: "25.12.0"
+            sdk_url: "https://downloads.openwrt.org/releases/25.12.0/targets/x86/64/openwrt-sdk-25.12.0-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+            package_format: "apk"
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Set build metadata
-        shell: bash
-        run: |
-          BUILD_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')"
-          RELEASE_DESCRIPTION="${{ github.event.inputs.release_description }}"
-          echo "BUILD_TIME=$BUILD_TIME" >> "$GITHUB_ENV"
-          {
-            echo "RELEASE_BODY<<EOF"
-            printf '%s\n' "$RELEASE_DESCRIPTION"
-            if [ -n "$RELEASE_DESCRIPTION" ]; then
-              printf '\n'
-            fi
-            printf '编译时间: %s\n' "$BUILD_TIME"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         shell: bash
@@ -60,20 +52,6 @@ jobs:
             lrzsz mkisofs msmtp nano ninja-build p7zip-full patch pkgconf python3 python3-pip \
             python3-ply python3-docutils qemu-utils rsync scons squashfs-tools subversion swig \
             texinfo uglifyjs unzip vim wget xmlto xxd zlib1g-dev zstd
-
-      - name: Download OpenWrt SDK
-        shell: bash
-        run: |
-          wget -q -O openwrt-sdk.tar.zst "$SDK_URL"
-          mkdir -p sdk
-          tar --zstd -xf openwrt-sdk.tar.zst -C sdk --strip-components=1
-
-      - name: Prepare feeds
-        shell: bash
-        run: |
-          cd sdk
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
 
       - name: Detect package source dir
         shell: bash
@@ -107,6 +85,20 @@ jobs:
           sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
           grep -E "^PKG_NAME:=|^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
 
+      - name: Download OpenWrt SDK
+        shell: bash
+        run: |
+          wget -q -O openwrt-sdk.tar.zst "${{ matrix.sdk_url }}"
+          mkdir -p sdk
+          tar --zstd -xf openwrt-sdk.tar.zst -C sdk --strip-components=1
+
+      - name: Prepare feeds
+        shell: bash
+        run: |
+          cd sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
       - name: Link package into SDK
         shell: bash
         run: |
@@ -114,10 +106,9 @@ jobs:
           test -d "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}"
           test -f "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
           cd sdk
-          mkdir -p package/custom
-          rm -rf "package/custom/${PACKAGE_NAME}"
-          cp -a "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}" "package/custom/${PACKAGE_NAME}"
-          test -f "package/custom/${PACKAGE_NAME}/Makefile"
+          rm -rf "package/${PACKAGE_NAME}"
+          cp -a "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}" "package/${PACKAGE_NAME}"
+          test -f "package/${PACKAGE_NAME}/Makefile"
 
       - name: Generate defconfig
         shell: bash
@@ -130,38 +121,60 @@ jobs:
         run: |
           set -o pipefail
           cd sdk
-          make package/${PACKAGE_NAME}/compile V=sc -j"$(nproc)" 2>&1 | tee build-${PACKAGE_NAME}.log
+          make package/${PACKAGE_NAME}/compile V=sc -j"$(nproc)" 2>&1 | tee "build-${PACKAGE_NAME}-${{ matrix.package_format }}.log"
 
       - name: Dump package build logs on failure
         if: failure()
         shell: bash
         run: |
-          echo "===== build-${PACKAGE_NAME}.log ====="
-          test -f "sdk/build-${PACKAGE_NAME}.log" && tail -n 500 "sdk/build-${PACKAGE_NAME}.log" || true
+          echo "===== build-${PACKAGE_NAME}-${{ matrix.package_format }}.log ====="
+          test -f "sdk/build-${PACKAGE_NAME}-${{ matrix.package_format }}.log" && tail -n 500 "sdk/build-${PACKAGE_NAME}-${{ matrix.package_format }}.log" || true
           echo "===== possible package logs ====="
           find sdk/build_dir -type f \( -name "*.log" -o -name "config.err" -o -name "CMakeError.log" -o -name "CMakeOutput.log" \) | sort || true
 
-      - name: Collect IPK files
+      - name: Collect package file
         shell: bash
         run: |
           mkdir -p output
-          find sdk/bin/packages -type f -name "${PACKAGE_NAME}_*.ipk" -exec cp -f {} output/ \;
-          test -n "$(find output -maxdepth 1 -type f -name '*.ipk')"
-          for file in output/*.ipk; do
-            base="$(basename "$file")"
-            new_name="$(echo "$base" | sed -E "s/^${PACKAGE_NAME}_[^-]+-r([0-9]+)_all\.ipk$/${PACKAGE_NAME}_${RAW_TAG}-r\1_all.ipk/")"
-            if [ "$new_name" != "$base" ]; then
-              mv -f "$file" "output/$new_name"
-            fi
-          done
+          mapfile -t package_files < <(find sdk/bin/packages -type f \( -name "${PACKAGE_NAME}_*.${{ matrix.package_format }}" -o -name "${PACKAGE_NAME}-*.${{ matrix.package_format }}" \) | sort)
+          test "${#package_files[@]}" -eq 1
+          cp -f "${package_files[0]}" "output/${PACKAGE_NAME}_${RAW_TAG}.${{ matrix.package_format }}"
           ls -lah output
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-24.10-x86_64-ipk
-          path: output/*.ipk
+          name: openwrt-${{ matrix.openwrt_version }}-x86_64-${{ matrix.package_format }}
+          path: output/*.${{ matrix.package_format }}
           if-no-files-found: error
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Set release metadata
+        shell: bash
+        run: |
+          BUILD_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+          RELEASE_DESCRIPTION="${{ github.event.inputs.release_description }}"
+          echo "BUILD_TIME=$BUILD_TIME" >> "$GITHUB_ENV"
+          {
+            echo "RELEASE_BODY<<EOF"
+            printf '编译时间: %s\n' "$BUILD_TIME"
+            if [ -n "$RELEASE_DESCRIPTION" ]; then
+              printf '\n%s\n' "$RELEASE_DESCRIPTION"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+          ls -lah release-assets
 
       - name: Remove existing release
         uses: dev-drprasad/delete-tag-and-release@v1.1
@@ -178,7 +191,9 @@ jobs:
           tag_name: ${{ github.event.inputs.release_tag }}
           name: ${{ github.event.inputs.release_tag }}
           body: ${{ env.RELEASE_BODY }}
-          files: output/*.ipk
+          files: |
+            release-assets/*.ipk
+            release-assets/*.apk
           draft: false
           prerelease: false
           generate_release_notes: false
