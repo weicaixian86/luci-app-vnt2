@@ -54,3 +54,21 @@ VPN -> VNT2
 ```
 
 首次启用客户端或服务端后，插件会按当前配置自动下载或使用已上传的 `vnt2_cli`、`vnt2_ctrl`、`vnt2_web`、`vnts2` 程序。
+
+## 界面截图
+
+### 状态总览
+
+![状态总览](jpg/1.jpg)
+
+### `vnt2_cli` 客户端设置
+
+![vnt2_cli 客户端设置](jpg/2.jpg)
+
+### `vnt2_web` 客户端设置
+
+![vnt2_web 客户端设置](jpg/3.jpg)
+
+### `vnts2` 服务端设置
+
+![vnts2 服务端设置](jpg/4.jpg)
