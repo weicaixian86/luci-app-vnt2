@@ -15,11 +15,11 @@ function index()
 	toml.ensure_toml_files(uci)
 
 	entry({ "admin", "vpn", "vnt2" }, alias("admin", "vpn", "vnt2", "config"), _("VNT2"), 45).dependent = true
-	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("鍩烘湰璁剧疆"), 10).leaf = true
-	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("cli瀹㈡埛绔棩蹇?), 20).leaf = true
-	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("web瀹㈡埛绔棩蹇?), 30).leaf = true
-	entry({ "admin", "vpn", "vnt2", "server_log" }, cbi("vnt2_server_log"), _("鏈嶅姟绔棩蹇?), 40).leaf = true
-	entry({ "admin", "vpn", "vnt2", "download_log" }, cbi("vnt2_download_log"), _("涓嬭浇鏃ュ織"), 50).leaf = true
+	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("基本设置"), 10).leaf = true
+	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("CLI 日志"), 20).leaf = true
+	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("Web 日志"), 30).leaf = true
+	entry({ "admin", "vpn", "vnt2", "server_log" }, cbi("vnt2_server_log"), _("服务端日志"), 40).leaf = true
+	entry({ "admin", "vpn", "vnt2", "download_log" }, cbi("vnt2_download_log"), _("下载日志"), 50).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "status" }, call("act_status")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_client_log" }, call("get_client_log")).leaf = true
@@ -220,10 +220,10 @@ local function format_runtime(tag_file)
 	local sec = delta % 60
 
 	if day > 0 then
-		return string.format("%d澶?%02d灏忔椂%02d鍒?02d绉?, day, hour, min, sec)
+		return string.format("%dd %02dh %02dm %02ds", day, hour, min, sec)
 	end
 
-	return string.format("%02d灏忔椂%02d鍒?02d绉?, hour, min, sec)
+	return string.format("%02dh %02dm %02ds", hour, min, sec)
 end
 
 local function get_clk_tck()
@@ -644,7 +644,7 @@ end
 
 local function is_cli_reachable()
 	local out = run_ctrl("info")
-	return out ~= "" and not out:match("閿欒") and not out:match("not found") and not out:match("unrecognized") and not out:match("refused") and not out:match("failed")
+	return out ~= "" and not out:match("error") and not out:match("not found") and not out:match("unrecognized") and not out:match("refused") and not out:match("failed")
 end
 
 local function is_server_reachable(server_cfg)
@@ -972,7 +972,7 @@ function vnt2_cmdline()
 	local cmdline = get_cmdline(pid)
 
 	if cmdline == "" then
-		cmdline = "閿欒锛氱▼搴忔湭杩愯锛佽鍏堝惎鍔?vnt2_cli銆?
+		cmdline = "错误：vnt2_cli 未运行。"
 	end
 
 	json_write({ cmdline = cmdline })
@@ -983,7 +983,7 @@ function vnt2_web_cmdline()
 	local cmdline = get_cmdline(pid)
 
 	if cmdline == "" then
-		cmdline = "閿欒锛氱▼搴忔湭杩愯锛佽鍏堝惎鍔?vnt2_web銆?
+		cmdline = "错误：vnt2_web 未运行。"
 	end
 
 	json_write({ cmdline = cmdline })
@@ -994,7 +994,7 @@ function vnts2_cmdline()
 	local cmdline = get_cmdline(pid)
 
 	if cmdline == "" then
-		cmdline = "閿欒锛氱▼搴忔湭杩愯锛佽鍏堝惎鍔?vnts2銆?
+		cmdline = "错误：vnts2 未运行。"
 	end
 
 	json_write({ cmdline = cmdline })

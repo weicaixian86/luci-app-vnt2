@@ -716,7 +716,7 @@ local function render_cli_info_panel(content)
 	if #server_rows > 0 then
 		parts[#parts + 1] = "<div style='height:12px;'></div>"
 		parts[#parts + 1] = render_html_table(
-			{ "服务端", "连接状态", "上次连接时间" },
+			{ "服务器", "连接状态", "上次连接时间" },
 			server_rows,
 			translate("服务端列表")
 		)
@@ -1862,7 +1862,7 @@ server_tip.rawhtml = true
 server_tip.cfgvalue = function()
 	return [[
 <div class="cbi-value-description">
-	<div>1. 当前 LuCI 会将 CLI 与 Web 配置共同持久化到同一个 TOML 文件（默认 /vnt_config/vnt2_cli_web.toml），服务端则单独持久化到其对应 TOML 文件，并自动同步到 UCI 表单显示。</div>
+	<div>1. 当前 LuCI 会将 CLI 与 Web 配置共同持久化到同一个 TOML 文件（默认 /vnt_config/vnt2_cli_web.toml），服务端则单独持久化到对应的 TOML 文件，并自动同步到 UCI 表单显示。</div>
 	<div>2. TCP / QUIC / WS/WSS / Web 管理页均可独立监听，并可按需开放 WAN 防火墙规则。</div>
 	<div>3. 若启用自动下载，默认会从服务端仓库 Releases 中选择匹配当前架构的压缩包。</div>
 </div>
