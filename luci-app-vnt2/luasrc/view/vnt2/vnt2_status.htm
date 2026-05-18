@@ -238,7 +238,9 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 		setHtml("cli_device_name", text(data.cli_device_name));
 		setHtml("cli_device_id", text(data.cli_device_id));
 		setHtml("cli_servers", joinList(data.cli_servers));
-		setHtml("cli_tun_nat", "TUN：" + (String(data.cli_no_tun) === "1" ? "关闭" : text(data.cli_tun_name)) + " / NAT：" + (String(data.cli_no_nat) === "1" ? "关闭" : "开启"));
+		setHtml("cli_tun_nat", "TUN：" + (String(data.cli_no_tun) === "1" ? "关闭" : text(data.cli_tun_name))
+			+ " / 内置NAT：" + (String(data.cli_no_nat) === "1" ? "关闭" : "开启")
+			+ " / 转发：" + (String(data.cli_no_nat) === "1" ? "OpenWrt系统" : "VNT2内置"));
 		setHtml("ctrl_port", text(data.ctrl_port));
 		setHtml("cli_download", stateText(data.cli_download));
 

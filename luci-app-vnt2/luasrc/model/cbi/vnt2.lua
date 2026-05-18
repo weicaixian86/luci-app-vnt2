@@ -112,12 +112,16 @@ local function render_mutual_exclusion_script()
 ]]
 end
 
-local function render_pre(path)
-	local content = fs.readfile(path) or ""
+local function render_pre_content(content)
+	content = trim(content)
 	if content == "" then
 		content = translate("暂无数据")
 	end
 	return "<pre style='white-space:pre-wrap;word-break:break-all;'>" .. util.pcdata(content) .. "</pre>"
+end
+
+local function render_pre(path)
+	return render_pre_content(fs.readfile(path) or "")
 end
 
 local function cli_running_now()
@@ -156,13 +160,25 @@ local function translate_info_labels(content)
 		["Virtual gateway"] = "虚拟网关",
 		["Virtual netmask"] = "虚拟网络掩码",
 		["NAT type"] = "NAT类型",
+		["Nat Type"] = "NAT类型",
 		["Relay server"] = "服务器地址",
 		["Public ips"] = "外网IP",
 		["Public ip"] = "外网IP",
+		["Public Ipv4"] = "公网IPv4",
+		["Ipv6"] = "公网IPv6",
 		["Local addr"] = "本地地址",
 		["Local address"] = "本地地址",
 		["Device name"] = "设备名称",
 		["Device id"] = "设备ID",
+		["Name"] = "名称",
+		["Id"] = "设备ID",
+		["Version"] = "版本",
+		["IP"] = "虚拟IP",
+		["Total Clients"] = "总节点",
+		["Online Clients"] = "在线节点",
+		["Offline Clients"] = "离线节点",
+		["P2P Clients"] = "P2P节点",
+		["Last Connected Time"] = "上次连接时间",
 		["Server"] = "服务器",
 		["Connect server"] = "连接服务器",
 		["Current device"] = "当前设备",
@@ -172,6 +188,13 @@ local function translate_info_labels(content)
 		["Interface"] = "接口",
 		["Next Hop"] = "下一跳",
 		["Destination"] = "目标网段",
+		["Destination IP"] = "目标IP",
+		["Metric"] = "跃点",
+		["Remote Address"] = "远端地址",
+		["RTT (ms)"] = "RTT(ms)",
+		["RTT"] = "RTT(ms)",
+		["Online"] = "在线",
+		["P2P"] = "直连",
 		["Route"] = "路由",
 		["Status"] = "状态"
 	}
@@ -183,12 +206,23 @@ local function translate_info_labels(content)
 	return content
 end
 
+local function strip_ansi_sequences(content)
+	content = tostring(content or "")
+	content = content:gsub("\27%[[%d;?]*[%a]", "")
+	content = content:gsub("\27%][^\7]*\7", "")
+	return content
+end
+
+local function normalize_cli_output(content)
+	return strip_ansi_sequences(content):gsub("\r", "")
+end
+
 local function html_escape_keep_br(value)
 	return util.pcdata(value or ""):gsub("\n", "<br />")
 end
 
 local function render_key_value_table(content, title)
-	content = trim(content)
+	content = trim(normalize_cli_output(content))
 	if content == "" then
 		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
 	end
@@ -222,7 +256,7 @@ local function render_key_value_table(content, title)
 end
 
 local function render_whitespace_table(content, title)
-	content = trim(content)
+	content = trim(normalize_cli_output(content))
 	if content == "" then
 		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
 	end
@@ -277,6 +311,446 @@ local function render_whitespace_table(content, title)
 
 	parts[#parts + 1] = "</tbody></table>"
 	return table.concat(parts)
+end
+
+local function first_nonempty(...)
+	for i = 1, select("#", ...) do
+		local value = trim(select(i, ...))
+		if value ~= "" and value ~= "N/A" then
+			return value
+		end
+	end
+	return ""
+end
+
+local function parse_positive_int(value)
+	local num = tonumber(trim(value))
+	if num and num >= 0 then
+		return math.floor(num)
+	end
+	return nil
+end
+
+local function get_first_uci_section(config, stype)
+	local found
+	m.uci:foreach(config, stype, function(section)
+		found = section
+		return false
+	end)
+	return found or {}
+end
+
+local function as_list(value)
+	if type(value) == "table" then
+		return value
+	end
+
+	value = trim(value)
+	if value == "" then
+		return {}
+	end
+
+	return { value }
+end
+
+local function humanize_cli_value(value)
+	value = trim(value)
+	if value == "" or value == "N/A" then
+		return "-"
+	end
+	if value == "Never" then
+		return "从未"
+	end
+	if value == "Unknown" then
+		return "未知"
+	end
+	if value == "true" then
+		return "是"
+	end
+	if value == "false" then
+		return "否"
+	end
+	if value == "Online" then
+		return "在线"
+	end
+	if value == "Offline" then
+		return "离线"
+	end
+	if value == "Connected" then
+		return "已连接"
+	end
+	if value == "Disconnected" then
+		return "未连接"
+	end
+	value = value:gsub("^Online%s+", "在线 ")
+	value = value:gsub("^Offline%s+", "离线 ")
+	value = value:gsub("%(Key Mismatch%)", "（密钥不一致）")
+	return value
+end
+
+local function get_cli_info_context()
+	local cfg = get_first_uci_section("vnt2", "vnt2_cli")
+	local features = {}
+
+	if trim(cfg.compress) == "1" then
+		features[#features + 1] = "压缩"
+	end
+	if trim(cfg.fec) == "1" then
+		features[#features + 1] = "FEC"
+	end
+	if trim(cfg.rtx) == "1" then
+		features[#features + 1] = "RTX"
+	end
+
+	return {
+		device_name = trim(cfg.device_name),
+		device_id = trim(cfg.device_id),
+		network_code = trim(cfg.network_code),
+		mtu = trim(cfg.mtu),
+		tun_name = trim(cfg.tun_name),
+		no_tun = trim(cfg.no_tun),
+		no_nat = trim(cfg.no_nat) ~= "" and trim(cfg.no_nat) or "0",
+		servers = as_list(cfg.server),
+		features = features
+	}
+end
+
+local function render_two_column_table(rows, title)
+	if #rows == 0 then
+		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
+	end
+
+	local parts = {}
+	if title and title ~= "" then
+		parts[#parts + 1] = "<div class='cbi-value-title' style='margin-bottom:6px;'>" .. util.pcdata(title) .. "</div>"
+	end
+
+	parts[#parts + 1] = "<table class='table cbi-section-table' style='width:100%;'><tbody>"
+	for _, row in ipairs(rows) do
+		parts[#parts + 1] = "<tr><td style='white-space:nowrap;font-weight:bold;width:180px;'>"
+			.. util.pcdata(row[1] or "")
+			.. "</td><td>"
+			.. html_escape_keep_br(humanize_cli_value(row[2] or ""))
+			.. "</td></tr>"
+	end
+	parts[#parts + 1] = "</tbody></table>"
+	return table.concat(parts)
+end
+
+local function render_html_table(headers, rows, title, note)
+	if #rows == 0 then
+		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
+	end
+
+	local parts = {}
+	if title and title ~= "" then
+		parts[#parts + 1] = "<div class='cbi-value-title' style='margin-bottom:6px;'>" .. util.pcdata(title) .. "</div>"
+	end
+	if note and note ~= "" then
+		parts[#parts + 1] = "<div class='cbi-value-description' style='margin-bottom:6px;'>" .. util.pcdata(note) .. "</div>"
+	end
+
+	parts[#parts + 1] = "<table class='table cbi-section-table' style='width:100%;'><thead><tr>"
+	for _, header in ipairs(headers) do
+		parts[#parts + 1] = "<th>" .. util.pcdata(header) .. "</th>"
+	end
+	parts[#parts + 1] = "</tr></thead><tbody>"
+
+	for _, row in ipairs(rows) do
+		parts[#parts + 1] = "<tr>"
+		for i = 1, #headers do
+			parts[#parts + 1] = "<td>" .. html_escape_keep_br(humanize_cli_value(row[i] or "")) .. "</td>"
+		end
+		parts[#parts + 1] = "</tr>"
+	end
+
+	parts[#parts + 1] = "</tbody></table>"
+	return table.concat(parts)
+end
+
+local function cleanup_table_border_chars(line)
+	return (line or "")
+		:gsub("┌", "")
+		:gsub("┐", "")
+		:gsub("└", "")
+		:gsub("┘", "")
+		:gsub("├", "")
+		:gsub("┤", "")
+		:gsub("┬", "")
+		:gsub("┴", "")
+		:gsub("┼", "")
+		:gsub("─", "")
+		:gsub("│", "")
+		:gsub("╔", "")
+		:gsub("╗", "")
+		:gsub("╚", "")
+		:gsub("╝", "")
+		:gsub("╠", "")
+		:gsub("╣", "")
+		:gsub("╦", "")
+		:gsub("╩", "")
+		:gsub("╬", "")
+		:gsub("═", "")
+		:gsub("║", "")
+end
+
+local function is_table_border_line(line)
+	local simplified = cleanup_table_border_chars(line)
+	simplified = simplified:gsub("[%s%+%-=]", "")
+	return simplified == ""
+end
+
+local function split_render_table_line(line)
+	local sep
+	if line:find("│", 1, true) then
+		sep = "│"
+	elseif line:find("|", 1, true) then
+		sep = "|"
+	else
+		return nil
+	end
+
+	local cells = {}
+	local text = line
+	if text:sub(1, #sep) == sep then
+		text = text:sub(#sep + 1)
+	end
+
+	for cell in (text .. sep):gmatch("(.-)" .. sep) do
+		cells[#cells + 1] = trim(cell)
+	end
+
+	while #cells > 0 and cells[1] == "" do
+		table.remove(cells, 1)
+	end
+	while #cells > 0 and cells[#cells] == "" do
+		table.remove(cells, #cells)
+	end
+
+	return #cells > 0 and cells or nil
+end
+
+local function parse_cli_box_table(content)
+	local headers
+	local rows = {}
+
+	for line in normalize_cli_output(content):gmatch("[^\n]+") do
+		local text = trim(line)
+		if text ~= "" and not text:match("^%-%-%-") and not is_table_border_line(text) then
+			local cells = split_render_table_line(text)
+			if cells and #cells > 1 then
+				if not headers then
+					headers = cells
+				else
+					rows[#rows + 1] = cells
+				end
+			end
+		end
+	end
+
+	return headers, rows
+end
+
+local function translate_table_header(header)
+	local mapping = {
+		["IP"] = "虚拟IP",
+		["Online"] = "在线",
+		["P2P"] = "直连",
+		["RTT"] = "RTT(ms)",
+		["RTT (ms)"] = "RTT(ms)",
+		["Name"] = "名称",
+		["Version"] = "版本",
+		["Loss"] = "丢包率",
+		["Last Connected Time"] = "上次连接时间",
+		["Destination IP"] = "目标IP",
+		["Metric"] = "跃点",
+		["Remote Address"] = "远端地址"
+	}
+
+	return mapping[header] or translate_info_labels(header)
+end
+
+local function normalize_table_cell(header, value)
+	local raw = trim(value)
+	local lower = raw:lower()
+
+	if header == "Online" then
+		if lower == "true" then
+			return "在线"
+		elseif lower == "false" then
+			return "离线"
+		end
+	elseif header == "P2P" then
+		if lower == "true" then
+			return "是"
+		elseif lower == "false" then
+			return "否"
+		end
+	end
+
+	return humanize_cli_value(raw)
+end
+
+local function extract_table_note(kind, content, rows)
+	if kind == "route" then
+		local total = content:match("%-%-%-%s*All Routes List%s*%(%s*Total:%s*(%d+)%s*%)")
+		if total then
+			return "共 " .. total .. " 条路由"
+		end
+	elseif kind == "clients" then
+		local count = content:match("%-%-%-%s*Client List%s*%((%d+)%)")
+		if count then
+			return "共 " .. count .. " 个设备"
+		end
+	elseif kind == "ips" then
+		local count = content:match("%-%-%-%s*Client List%s*%((%d+)%)")
+		if count then
+			return "共 " .. count .. " 个节点"
+		end
+	end
+
+	if rows and #rows > 0 then
+		return "共 " .. #rows .. " 条记录"
+	end
+
+	return ""
+end
+
+local function render_cli_info_panel(content)
+	local normalized = trim(normalize_cli_output(content))
+	if normalized == "" then
+		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
+	end
+
+	local fields = {}
+	local servers = {}
+
+	for line in normalized:gmatch("[^\n]+") do
+		local text = trim(line)
+		if text ~= "" and not text:match("^%-%-%-") and not text:match("^[-=]+$") then
+			local key, value = text:match("^([^:]+):%s*(.*)$")
+			if key then
+				key = trim(key)
+				value = trim(value)
+				if key == "Server" or key == "Connect server" or key == "Relay server" then
+					local server_name, status = value:match("^(.-)%s*%((.-)%)$")
+					servers[#servers + 1] = {
+						server = first_nonempty(server_name, value),
+						status = trim(status)
+					}
+				elseif key == "Last Connected Time" then
+					if #servers > 0 then
+						servers[#servers].last_connected = value
+					else
+						fields[key] = value
+					end
+				else
+					fields[key] = value
+				end
+			end
+		end
+	end
+
+	local ctx = get_cli_info_context()
+	local total_clients = parse_positive_int(first_nonempty(fields["Total Clients"]))
+	local online_clients = parse_positive_int(first_nonempty(fields["Online Clients"]))
+	local offline_clients = first_nonempty(fields["Offline Clients"])
+	if offline_clients == "" and total_clients and online_clients and total_clients >= online_clients then
+		offline_clients = tostring(total_clients - online_clients)
+	end
+
+	local features = (#ctx.features > 0) and table.concat(ctx.features, " / ") or ""
+	local rows = {}
+	local function add_row(label, value)
+		value = humanize_cli_value(value)
+		if value ~= "" and value ~= "-" then
+			rows[#rows + 1] = { label, value }
+		end
+	end
+
+	add_row("名称", first_nonempty(fields["Name"], fields["Device name"], fields["Current device"], ctx.device_name))
+	add_row("虚拟IP", first_nonempty(fields["IP"], fields["Virtual ip"]))
+	add_row("虚拟网关", first_nonempty(fields["Virtual gateway"]))
+	add_row("连接状态", first_nonempty(fields["Connection status"]))
+	add_row("NAT类型", first_nonempty(fields["Nat Type"], fields["NAT type"]))
+	add_row("MTU", ctx.mtu)
+	add_row("网络代码", ctx.network_code)
+	add_row("公网IPv4", first_nonempty(fields["Public Ipv4"], fields["Public ips"], fields["Public ip"]))
+	add_row("公网IPv6", first_nonempty(fields["Ipv6"]))
+	add_row("版本", first_nonempty(fields["Version"]))
+	add_row("在线节点", first_nonempty(fields["Online Clients"]))
+	add_row("离线节点", offline_clients)
+	add_row("P2P节点", first_nonempty(fields["P2P Clients"]))
+	add_row("设备ID", first_nonempty(fields["Id"], fields["Device id"], ctx.device_id))
+	add_row("本地地址", first_nonempty(fields["Local addr"], fields["Local address"]))
+	add_row("TUN", ctx.no_tun == "1" and "关闭" or first_nonempty(ctx.tun_name, "启用"))
+	add_row("内置子网 NAT", ctx.no_nat == "1" and "关闭" or "开启")
+	add_row("IP转发模式", ctx.no_nat == "1" and "OpenWrt 系统转发" or "VNT2 内置 IP 转发")
+	add_row("功能", features)
+
+	if #rows == 0 then
+		return render_pre_content(normalized)
+	end
+
+	local server_rows = {}
+	for _, item in ipairs(servers) do
+		server_rows[#server_rows + 1] = {
+			item.server or "-",
+			humanize_cli_value(item.status or ""),
+			humanize_cli_value(item.last_connected or "")
+		}
+	end
+	if #server_rows == 0 then
+		for _, server in ipairs(ctx.servers) do
+			server_rows[#server_rows + 1] = {
+				server,
+				"-",
+				"-"
+			}
+		end
+	end
+
+	local parts = {
+		render_two_column_table(rows, translate("本机设备信息"))
+	}
+	if #server_rows > 0 then
+		parts[#parts + 1] = "<div style='height:12px;'></div>"
+		parts[#parts + 1] = render_html_table(
+			{ "服务端", "连接状态", "上次连接时间" },
+			server_rows,
+			translate("服务端列表")
+		)
+	end
+
+	return table.concat(parts)
+end
+
+local function render_cli_table_panel(content, title, kind)
+	local normalized = trim(normalize_cli_output(content))
+	if normalized == "" then
+		return "<div class='cbi-value-description'>" .. translate("暂无数据") .. "</div>"
+	end
+
+	local headers, rows = parse_cli_box_table(normalized)
+	if not headers or #headers == 0 then
+		return render_pre_content(normalized)
+	end
+
+	local translated_headers = {}
+	for i, header in ipairs(headers) do
+		translated_headers[i] = translate_table_header(header)
+	end
+
+	local normalized_rows = {}
+	for _, row in ipairs(rows) do
+		local current = {}
+		for i, header in ipairs(headers) do
+			current[i] = normalize_table_cell(header, row[i] or "")
+		end
+		normalized_rows[#normalized_rows + 1] = current
+	end
+
+	return render_html_table(translated_headers, normalized_rows, title, extract_table_note(kind, normalized, normalized_rows))
 end
 
 local function list_net_devices()
@@ -645,6 +1119,15 @@ local function bind_dynamiclist(option)
 	end
 end
 
+local function bind_download_mirror(option)
+	option:value("github", "GitHub")
+	option:value("gitee", "Gitee")
+	option:value("gitlab", "GitLab")
+	option:value("cloudflare", "Cloudflare R2")
+	option.default = "github"
+	option.rmempty = false
+end
+
 local cli_enabled = m.uci:get_first("vnt2", "vnt2_cli", "enabled") == "1"
 local web_enabled_state = m.uci:get_first("vnt2", "vnt2_web", "enabled") == "1"
 local server_enabled_state = m.uci:get_first("vnt2", "vnts2", "enabled") == "1"
@@ -774,8 +1257,9 @@ local allow_mapping = s:taboption("network", Flag, "allow_mapping", translate("�
 allow_mapping.rmempty = false
 
 local no_nat = s:taboption("network", Flag, "no_nat", translate("关闭内置子网 NAT"),
-	translate("关闭后若需跨网段访问，请自行配置 OpenWrt 转发/NAT"))
+	translate("勾选后关闭 VNT2 内置 IP 转发，改用 OpenWrt 系统转发/NAT；不勾选则继续使用 VNT2 内置 IP 转发"))
 no_nat.rmempty = false
+no_nat.default = no_nat.disabled
 
 local no_tun = s:taboption("network", Flag, "no_tun", translate("无 TUN 模式"),
 	translate("启用后不创建虚拟网卡，仅适用于端口映射或流量出口类场景"))
@@ -800,9 +1284,13 @@ tcp_stun.placeholder = "stun.nextcloud.com:443"
 bind_dynamiclist(tcp_stun)
 
 local auto_download_cli = s:taboption("advanced", Flag, "auto_download", translate("自动下载程序"),
-	translate("当本地缺少 vnt2_cli / vnt2_ctrl 时，自动从 GitHub Releases 下载匹配当前架构的发行包"))
+	translate("当本地缺少 vnt2_cli / vnt2_ctrl 时，自动从所选镜像源的 Releases 下载匹配当前架构的发行包"))
 auto_download_cli.rmempty = false
 auto_download_cli.default = auto_download_cli.enabled
+
+local download_mirror_cli = s:taboption("advanced", ListValue, "download_mirror", translate("客户端下载镜像源"),
+	translate("默认 GitHub；国内网络可尝试 Gitee、GitLab 或 Cloudflare。非 GitHub 镜像通常仅适用于默认仓库 vnt-dev/vnt"))
+bind_download_mirror(download_mirror_cli)
 
 local download_tag_cli = s:taboption("advanced", Value, "download_tag", translate("客户端下载版本"),
 	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签，如 v2.0.18"))
@@ -811,7 +1299,7 @@ download_tag_cli.default = "latest"
 download_tag_cli.validate = validate_nonempty
 
 local download_repo_cli = s:taboption("advanced", Value, "download_repo", translate("客户端下载仓库"),
-	translate("默认 vnt-dev/vnt，通常无需修改"))
+	translate("默认 vnt-dev/vnt；如需使用 Gitee、GitLab、Cloudflare 等镜像，建议保持默认仓库"))
 download_repo_cli.placeholder = "vnt-dev/vnt"
 download_repo_cli.default = "vnt-dev/vnt"
 download_repo_cli.validate = validate_nonempty
@@ -900,7 +1388,7 @@ local panel_info = s:taboption("infos", DummyValue, "_info_panel_view", translat
 panel_info.rawhtml = true
 panel_info:depends("info_mode", "panel")
 panel_info.cfgvalue = function()
-	return render_key_value_table(fs.readfile("/tmp/vnt2-cli_info") or "", translate("本机设备信息"))
+	return render_cli_info_panel(fs.readfile("/tmp/vnt2-cli_info") or "")
 end
 
 local panel_ips_btn = s:taboption("infos", Button, "_ips_panel_btn", translate("刷新所有节点列表（面板）"))
@@ -919,7 +1407,7 @@ local panel_ips = s:taboption("infos", DummyValue, "_ips_panel_view", translate(
 panel_ips.rawhtml = true
 panel_ips:depends("info_mode", "panel")
 panel_ips.cfgvalue = function()
-	return render_whitespace_table(fs.readfile("/tmp/vnt2-cli_ips") or "", translate("所有节点列表"))
+	return render_cli_table_panel(fs.readfile("/tmp/vnt2-cli_ips") or "", translate("所有节点列表"), "ips")
 end
 
 local panel_clients_btn = s:taboption("infos", Button, "_clients_panel_btn", translate("刷新所有设备详情（面板）"))
@@ -938,7 +1426,7 @@ local panel_clients = s:taboption("infos", DummyValue, "_clients_panel_view", tr
 panel_clients.rawhtml = true
 panel_clients:depends("info_mode", "panel")
 panel_clients.cfgvalue = function()
-	return render_key_value_table(fs.readfile("/tmp/vnt2-cli_clients") or "", translate("所有设备详情"))
+	return render_cli_table_panel(fs.readfile("/tmp/vnt2-cli_clients") or "", translate("所有设备详情"), "clients")
 end
 
 local panel_route_btn = s:taboption("infos", Button, "_route_panel_btn", translate("刷新路由转发信息（面板）"))
@@ -957,7 +1445,7 @@ local panel_route = s:taboption("infos", DummyValue, "_route_panel_view", transl
 panel_route.rawhtml = true
 panel_route:depends("info_mode", "panel")
 panel_route.cfgvalue = function()
-	return render_whitespace_table(fs.readfile("/tmp/vnt2-cli_route") or "", translate("路由转发信息"))
+	return render_cli_table_panel(fs.readfile("/tmp/vnt2-cli_route") or "", translate("路由转发信息"), "route")
 end
 
 local panel_cmd_btn = s:taboption("infos", Button, "_cmd_panel_btn", translate("刷新本机启动参数（面板）"))
@@ -1113,9 +1601,13 @@ web_restart.write = function()
 end
 
 local auto_download_web = w:taboption("general", Flag, "auto_download", translate("自动下载程序"),
-	translate("当本地缺少 vnt2_web 时，自动从 GitHub Releases 下载匹配当前架构的发行包"))
+	translate("当本地缺少 vnt2_web 时，自动从所选镜像源的 Releases 下载匹配当前架构的发行包"))
 auto_download_web.rmempty = false
 auto_download_web.default = auto_download_web.enabled
+
+local download_mirror_web = w:taboption("general", ListValue, "download_mirror", translate("Web 下载镜像源"),
+	translate("默认 GitHub；国内网络可尝试 Gitee、GitLab 或 Cloudflare。非 GitHub 镜像通常仅适用于默认仓库 vnt-dev/vnt"))
+bind_download_mirror(download_mirror_web)
 
 local download_tag_web = w:taboption("general", Value, "download_tag", translate("Web 下载版本"),
 	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签，如 v2.0.18"))
@@ -1124,7 +1616,7 @@ download_tag_web.default = "latest"
 download_tag_web.validate = validate_nonempty
 
 local download_repo_web = w:taboption("general", Value, "download_repo", translate("Web 下载仓库"),
-	translate("默认 vnt-dev/vnt，通常无需修改"))
+	translate("默认 vnt-dev/vnt；如需使用 Gitee、GitLab、Cloudflare 等镜像，建议保持默认仓库"))
 download_repo_web.placeholder = "vnt-dev/vnt"
 download_repo_web.default = "vnt-dev/vnt"
 download_repo_web.validate = validate_nonempty
@@ -1234,9 +1726,13 @@ server_restart.write = function()
 end
 
 local auto_download_server = v:taboption("general", Flag, "auto_download", translate("自动下载程序"),
-	translate("当本地缺少 vnts2 时，自动从 GitHub Releases 下载匹配当前架构的发行包"))
+	translate("当本地缺少 vnts2 时，自动从所选镜像源的 Releases 下载匹配当前架构的发行包"))
 auto_download_server.rmempty = false
 auto_download_server.default = auto_download_server.enabled
+
+local download_mirror_server = v:taboption("general", ListValue, "download_mirror", translate("服务端下载镜像源"),
+	translate("默认 GitHub；国内网络可尝试 Gitee、GitLab 或 Cloudflare。非 GitHub 镜像通常仅适用于默认仓库 vnt-dev/vnts"))
+bind_download_mirror(download_mirror_server)
 
 local download_tag_server = v:taboption("general", Value, "download_tag", translate("服务端下载版本"),
 	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签"))
@@ -1245,7 +1741,7 @@ download_tag_server.default = "latest"
 download_tag_server.validate = validate_nonempty
 
 local download_repo_server = v:taboption("general", Value, "download_repo", translate("服务端下载仓库"),
-	translate("默认 vnt-dev/vnts，通常无需修改"))
+	translate("默认 vnt-dev/vnts；如需使用 Gitee、GitLab、Cloudflare 等镜像，建议保持默认仓库"))
 download_repo_server.placeholder = "vnt-dev/vnts"
 download_repo_server.default = "vnt-dev/vnts"
 download_repo_server.validate = validate_nonempty

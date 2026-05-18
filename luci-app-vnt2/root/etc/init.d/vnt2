@@ -77,6 +77,65 @@ trim_value() {
 	echo "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
+find_firewall_zone_name() {
+	local wanted_network="$1"
+	local idx=0
+	local fallback=""
+	local zone_name network_list net
+
+	while uci -q show "firewall.@zone[$idx]" >/dev/null 2>&1; do
+		zone_name="$(trim_value "$(uci -q get "firewall.@zone[$idx].name" 2>/dev/null)")"
+		network_list="$(trim_value "$(uci -q get "firewall.@zone[$idx].network" 2>/dev/null)")"
+
+		if [ -n "$zone_name" ]; then
+			[ "$zone_name" = "$wanted_network" ] && fallback="$zone_name"
+			for net in $network_list; do
+				[ "$net" = "$wanted_network" ] && {
+					echo "$zone_name"
+					return 0
+				}
+			done
+		fi
+
+		idx=$((idx + 1))
+	done
+
+	[ -n "$fallback" ] && {
+		echo "$fallback"
+		return 0
+	}
+
+	return 1
+}
+
+host_allows_external_access() {
+	local host
+	host="$(trim_value "$1")"
+
+	case "$host" in
+		""|"127.0.0.1"|"::1"|"localhost")
+			return 1
+		;;
+	esac
+
+	return 0
+}
+
+extract_bind_host() {
+	local bind host
+	bind="$(trim_value "$1")"
+	host="${bind%:*}"
+	host="${host#\[}"
+	host="${host%\]}"
+	echo "$host"
+}
+
+bind_allows_external_access() {
+	local bind_host
+	bind_host="$(extract_bind_host "$1")"
+	host_allows_external_access "$bind_host"
+}
+
 ensure_conf_path_ready() {
 	local conf_path="$1"
 	local conf_dir
@@ -149,7 +208,7 @@ migrate_legacy_client_server() {
 		uci -q delete ${CONF}.${cfg}.server
 		uci commit ${CONF} >/dev/null 2>&1
 		changed="1"
-		log_cli "检测到历史默认服务端地址，已自动清空客户端服务端配置，等待用户手动填写"
+		log_cli 'legacy default server detected, cleared client server list'
 	fi
 
 	return 0
@@ -416,12 +475,99 @@ resolve_v2_release_tag() {
 	esac
 }
 
+normalize_download_mirror() {
+	local mirror="$1"
+
+	mirror="$(trim_value "$mirror" | tr 'A-Z' 'a-z')"
+	case "$mirror" in
+		github|gitee|gitlab|cloudflare)
+			echo "$mirror"
+		;;
+		*)
+			echo "github"
+		;;
+	esac
+}
+
+repo_to_mirror_project() {
+	local repo="$1"
+
+	repo="$(trim_value "$repo")"
+	case "$repo" in
+		vnt-dev/vnt)
+			echo "vnt"
+			return 0
+		;;
+		vnt-dev/vnts)
+			echo "vnts"
+			return 0
+		;;
+	esac
+
+	return 1
+}
+
+select_download_mirror() {
+	local repo="$1"
+	local mirror="$2"
+
+	mirror="$(normalize_download_mirror "$mirror")"
+	[ "$mirror" = "github" ] && {
+		echo "github"
+		return 0
+	}
+
+	if repo_to_mirror_project "$repo" >/dev/null 2>&1; then
+		echo "$mirror"
+	else
+		echo "github"
+	fi
+}
+
+get_release_list_url() {
+	local repo="$1"
+	local mirror="$2"
+	local effective_mirror proj
+
+	[ -n "$repo" ] || repo="vnt-dev/vnt"
+	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
+
+	if [ "$effective_mirror" = "github" ]; then
+		echo "https://api.github.com/repos/${repo}/releases"
+		return 0
+	fi
+
+	proj="$(repo_to_mirror_project "$repo")" || return 1
+	case "$effective_mirror" in
+		gitee)
+			echo "https://gitee.com/api/v5/repos/whzhni/${proj}/releases"
+		;;
+		gitlab)
+			echo "https://gitlab.com/api/v4/projects/whzhni%2F${proj}/releases"
+		;;
+		cloudflare)
+			echo "https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev/${proj}/releases"
+		;;
+		*)
+			echo "https://api.github.com/repos/${repo}/releases"
+		;;
+	esac
+}
+
 get_release_api_url() {
 	local repo="$1"
 	local tag="$2"
-	local resolved_tag
+	local mirror="$3"
+	local resolved_tag effective_mirror
 
 	[ -n "$repo" ] || repo="vnt-dev/vnt"
+	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
+
+	if [ "$effective_mirror" != "github" ]; then
+		get_release_list_url "$repo" "$effective_mirror"
+		return 0
+	fi
+
 	resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
 
 	if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
@@ -434,9 +580,17 @@ get_release_api_url() {
 get_release_api_candidates() {
 	local repo="$1"
 	local tag="$2"
-	local resolved_tag normalized_tag
+	local mirror="$3"
+	local resolved_tag normalized_tag effective_mirror
 
 	[ -n "$repo" ] || repo="vnt-dev/vnt"
+	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
+
+	if [ "$effective_mirror" != "github" ]; then
+		get_release_list_url "$repo" "$effective_mirror"
+		return 0
+	fi
+
 	resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
 	normalized_tag="$(normalize_release_tag "$resolved_tag")"
 
@@ -452,6 +606,13 @@ get_release_api_candidates() {
 	fi
 
 	echo "https://api.github.com/repos/${repo}/releases/latest"
+}
+
+extract_release_urls() {
+	local json_file="$1"
+
+	grep -o 'https://[^"]*' "$json_file" 2>/dev/null | \
+		sed 's#\\/#/#g' | awk 'NF && !seen[$0]++'
 }
 
 extract_first_release_object() {
@@ -559,10 +720,45 @@ fetch_release_metadata() {
 	local repo="$1"
 	local tag="$2"
 	local json_file="$3"
-	local api_url response_tag candidate list_file resolved_tag normalized_tag
+	local mirror="$4"
+	local api_url response_tag candidate list_file resolved_tag normalized_tag effective_mirror
 
-	for candidate in $(get_release_api_candidates "$repo" "$tag"); do
-		log_download "尝试查询 GitHub Releases：${candidate}"
+	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
+
+	if [ "$effective_mirror" != "github" ]; then
+		list_file="${json_file}.list"
+		api_url="$(get_release_list_url "$repo" "$effective_mirror")"
+		log_download "checking ${effective_mirror} releases list: ${api_url}"
+		if download_file "$api_url" "$list_file" "api"; then
+			resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
+			normalized_tag="$(normalize_release_tag "$resolved_tag")"
+
+			if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
+				if extract_first_release_object "$list_file" "$json_file"; then
+					echo "${api_url}#latest-from-list"
+					return 0
+				fi
+			else
+				if extract_release_object_by_tag "$list_file" "$json_file" "$resolved_tag"; then
+					echo "${api_url}#tag-from-list:${resolved_tag}"
+					return 0
+				fi
+				if [ -n "$normalized_tag" ] && extract_release_object_by_tag "$list_file" "$json_file" "v${normalized_tag}"; then
+					echo "${api_url}#tag-from-list:v${normalized_tag}"
+					return 0
+				fi
+				if extract_first_release_object "$list_file" "$json_file"; then
+					echo "${api_url}#fallback-first"
+					return 0
+				fi
+			fi
+		fi
+
+		return 1
+	fi
+
+	for candidate in $(get_release_api_candidates "$repo" "$tag" "$effective_mirror"); do
+		log_download "checking release endpoint: ${candidate}"
 		if download_file "$candidate" "$json_file" "api"; then
 			response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
 			if [ -n "$response_tag" ]; then
@@ -573,8 +769,8 @@ fetch_release_metadata() {
 	done
 
 	list_file="${json_file}.list"
-	api_url="https://api.github.com/repos/${repo}/releases"
-	log_download "尝试查询 GitHub Releases 列表：${api_url}"
+	api_url="$(get_release_list_url "$repo" "$effective_mirror")"
+	log_download "checking releases list: ${api_url}"
 	if download_file "$api_url" "$list_file" "api"; then
 		resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
 		normalized_tag="$(normalize_release_tag "$resolved_tag")"
@@ -609,7 +805,7 @@ select_release_asset() {
 	local scope="$3"
 	local urls asset pattern primary_arch
 
-	urls="$(sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" 2>/dev/null | sed 's#\\/#/#g')"
+	urls="$(extract_release_urls "$json_file")"
 	[ -n "$urls" ] || return 1
 	primary_arch="$(printf '%s\n' "$arch_patterns" | awk '{print $1}')"
 
@@ -722,13 +918,7 @@ select_release_asset() {
 		;;
 	esac
 
-	asset="$(printf '%s\n' "$urls" | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
-	[ -n "$asset" ] && {
-		echo "$asset"
-		return 0
-	}
-
-	asset="$(printf '%s\n' "$urls" | head -n1)"
+	asset="$(printf '%s\n' "$urls" | grep -iE '/[^/]*(vnt2|vnt|vnts2|vnts)[^/]*(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)?$' | head -n1)"
 	[ -n "$asset" ] && {
 		echo "$asset"
 		return 0
@@ -898,19 +1088,19 @@ install_binary_to_usrbin() {
 	target_path="${INSTALL_BIN_DIR}/${target_name}"
 
 	mkdir -p "${INSTALL_BIN_DIR}" >/dev/null 2>&1 || {
-		log_download "创建安装目录失败：${INSTALL_BIN_DIR}"
+		log_download "鍒涘缓瀹夎鐩綍澶辫触锛?{INSTALL_BIN_DIR}"
 		return 1
 	}
 	cp -f "$src" "$target_path" >/dev/null 2>&1 || {
-		log_download "复制程序到 ${target_path} 失败，源文件：${src}"
+		log_download "澶嶅埗绋嬪簭鍒?${target_path} 澶辫触锛屾簮鏂囦欢锛?{src}"
 		return 1
 	}
 	chmod 755 "$target_path" >/dev/null 2>&1 || {
-		log_download "设置执行权限失败：${target_path}"
+		log_download "璁剧疆鎵ц鏉冮檺澶辫触锛?{target_path}"
 		return 1
 	}
 	[ -f "$target_path" ] || {
-		log_download "安装后未找到目标文件：${target_path}"
+		log_download "瀹夎鍚庢湭鎵惧埌鐩爣鏂囦欢锛?{target_path}"
 		return 1
 	}
 	echo "$target_path"
@@ -978,13 +1168,13 @@ auto_download_bundle() {
 	local scope="$2"
 	local state_file="$3"
 
-	local auto_download download_tag download_repo api_url arch_name arch_patterns
+	local auto_download download_tag download_repo download_mirror effective_mirror api_url arch_name arch_patterns
 	local cache_key cache_dir json_file release_tag asset_url asset_name asset_file extracted_dir
 	local cli_bin ctrl_bin web_bin server_bin server_name
 
 	config_get_bool auto_download "$cfg" "auto_download" "1"
 	[ "$auto_download" = "1" ] || {
-		write_download_state "$state_file" "disabled" "已关闭自动下载" "" "" "" ""
+        write_download_state "$state_file" "disabled" "auto download disabled" "" "" "" ""
 		return 1
 	}
 
@@ -992,20 +1182,26 @@ auto_download_bundle() {
 		server)
 			config_get download_tag "$cfg" "download_tag" "latest"
 			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnts"
+			config_get download_mirror "$cfg" "download_mirror" "github"
 		;;
 		*)
 			config_get download_tag "$cfg" "download_tag" "latest"
 			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
+			config_get download_mirror "$cfg" "download_mirror" "github"
 		;;
 	esac
 	[ -n "$download_tag" ] || download_tag="latest"
 	[ -n "$download_repo" ] || download_repo="vnt-dev/vnt"
+	download_mirror="$(normalize_download_mirror "$download_mirror")"
+	effective_mirror="$(select_download_mirror "$download_repo" "$download_mirror")"
+	[ "$download_mirror" = "$effective_mirror" ] || \
+		log_download "mirror ${download_mirror} not supported for repo ${download_repo}, fallback to ${effective_mirror}"
 	download_tag="$(resolve_v2_release_tag "$download_repo" "$download_tag")"
 	[ -n "$download_tag" ] || download_tag="latest"
 
 	arch_name="$(detect_arch_name)"
 	arch_patterns="$(detect_arch_patterns "$arch_name")"
-	cache_key="$(sanitize_name "${download_repo}_${download_tag}_${arch_name}_${scope}")"
+	cache_key="$(sanitize_name "${effective_mirror}_${download_repo}_${download_tag}_${arch_name}_${scope}")"
 	cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
 	json_file="${cache_dir}/release.json"
 	extracted_dir="${cache_dir}/extracted"
@@ -1013,8 +1209,8 @@ auto_download_bundle() {
 	mkdir -p "$cache_dir"
 
 	if cache_bundle_ready "$extracted_dir" "$scope"; then
-		log_download "检测到 ${scope} 已有缓存包，直接复用 ${extracted_dir}"
-		write_download_state "$state_file" "cached" "已复用本地缓存程序" "$(basename "$cache_dir")" "$download_tag" "$arch_name" "$extracted_dir"
+		log_download "妫€娴嬪埌 ${scope} 宸叉湁缂撳瓨鍖咃紝鐩存帴澶嶇敤 ${extracted_dir}"
+        write_download_state "$state_file" "cached" "reusing local cached bundle" "$(basename "$cache_dir")" "$download_tag" "$arch_name" "$extracted_dir"
 
 		if install_bundle_to_usrbin "$extracted_dir" "$scope"; then
 			case "$scope" in
@@ -1034,73 +1230,74 @@ auto_download_bundle() {
 		fi
 	fi
 
-	api_url="$(get_release_api_url "$download_repo" "$download_tag")"
-	write_download_state "$state_file" "querying" "正在查询 GitHub Releases" "" "$download_tag" "$arch_name" ""
-	log_download "开始查询 ${scope} 对应发行版：repo=${download_repo} tag=${download_tag} arch=${arch_name}"
+	api_url="$(get_release_api_url "$download_repo" "$download_tag" "$effective_mirror")"
+	log_download "寮€濮嬫煡璇?${scope} 瀵瑰簲鍙戣鐗堬細repo=${download_repo} tag=${download_tag} arch=${arch_name}"
 
-	api_url="$(fetch_release_metadata "$download_repo" "$download_tag" "$json_file")"
+	write_download_state "$state_file" "querying" "querying releases (${effective_mirror})" "" "$download_tag" "$arch_name" ""
+	log_download "querying ${scope} release repo=${download_repo} tag=${download_tag} mirror=${effective_mirror} arch=${arch_name}"
+	api_url="$(fetch_release_metadata "$download_repo" "$download_tag" "$json_file" "$effective_mirror")"
 	if [ -z "$api_url" ]; then
-		log_download "查询 GitHub Releases 失败：repo=${download_repo} tag=${download_tag}，已尝试 tags/${download_tag}、tags/v${download_tag}、latest、releases 列表接口"
-		write_download_state "$state_file" "failed" "查询 GitHub Releases 失败" "" "$download_tag" "$arch_name" ""
+		log_download "release query failed repo=${download_repo} tag=${download_tag} mirror=${effective_mirror}"
+		write_download_state "$state_file" "failed" "release query failed (${effective_mirror})" "" "$download_tag" "$arch_name" ""
 		return 1
 	fi
 
-	log_download "GitHub Releases 查询成功：${api_url}"
+	log_download "release query ok: ${api_url}"
 	release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
 	release_tag="$(normalize_release_tag "$release_tag")"
 	[ -n "$release_tag" ] || release_tag="$download_tag"
 	asset_url="$(select_release_asset "$json_file" "$arch_patterns" "$scope")" || {
-		log_download "未找到匹配 ${arch_name} 的 ${scope} 发行资源"
-		write_download_state "$state_file" "failed" "未找到匹配当前架构的发行资源" "" "$release_tag" "$arch_name" ""
+		log_download "鏈壘鍒板尮閰?${arch_name} 鐨?${scope} 鍙戣璧勬簮"
+		write_download_state "$state_file" "failed" "鏈壘鍒板尮閰嶅綋鍓嶆灦鏋勭殑鍙戣璧勬簮" "" "$release_tag" "$arch_name" ""
 		return 1
 	}
 
 	asset_name="$(basename "$asset_url")"
 	asset_file="${cache_dir}/${asset_name}"
-	write_download_state "$state_file" "downloading" "正在下载发行资源" "$asset_name" "$release_tag" "$arch_name" ""
-	log_download "选中资源 ${asset_name}"
+	write_download_state "$state_file" "downloading" "姝ｅ湪涓嬭浇鍙戣璧勬簮" "$asset_name" "$release_tag" "$arch_name" ""
+	log_download "閫変腑璧勬簮 ${asset_name}"
 
 	if [ -s "$asset_file" ]; then
 		if validate_asset_file "$asset_file"; then
-			log_download "复用已下载资源 ${asset_file}"
+			log_download "澶嶇敤宸蹭笅杞借祫婧?${asset_file}"
 		else
-			log_download "检测到缓存资源无效，删除后重新下载：${asset_file}"
+			log_download "妫€娴嬪埌缂撳瓨璧勬簮鏃犳晥锛屽垹闄ゅ悗閲嶆柊涓嬭浇锛?{asset_file}"
 			rm -f "$asset_file"
 		fi
 	fi
 
 	if [ ! -s "$asset_file" ]; then
 		if ! download_file "$asset_url" "$asset_file" "asset"; then
-			log_download "下载发行资源失败：tool=${DOWNLOAD_LAST_TOOL:-unknown} url=${asset_url}"
-			write_download_state "$state_file" "failed" "下载发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
+			log_download "涓嬭浇鍙戣璧勬簮澶辫触锛歵ool=${DOWNLOAD_LAST_TOOL:-unknown} url=${asset_url}"
+			write_download_state "$state_file" "failed" "涓嬭浇鍙戣璧勬簮澶辫触" "$asset_name" "$release_tag" "$arch_name" ""
 			return 1
 		fi
 		if ! validate_asset_file "$asset_file"; then
-			log_download "下载后的发行资源无效或已损坏：${asset_file}"
+			log_download "涓嬭浇鍚庣殑鍙戣璧勬簮鏃犳晥鎴栧凡鎹熷潖锛?{asset_file}"
 			rm -f "$asset_file"
-			write_download_state "$state_file" "failed" "下载的发行资源无效或已损坏" "$asset_name" "$release_tag" "$arch_name" ""
+            write_download_state "$state_file" "failed" "downloaded asset is invalid or corrupted" "$asset_name" "$release_tag" "$arch_name" ""
 			return 1
 		fi
 	fi
 
-	write_download_state "$state_file" "extracting" "正在解压或整理程序文件" "$asset_name" "$release_tag" "$arch_name" ""
+    write_download_state "$state_file" "extracting" "extracting program files" "$asset_name" "$release_tag" "$arch_name" ""
 	if ! extract_release_asset "$asset_file" "$extracted_dir"; then
-		log_download "首次解压失败，删除缓存后重新下载重试：${asset_file}"
+		log_download "棣栨瑙ｅ帇澶辫触锛屽垹闄ょ紦瀛樺悗閲嶆柊涓嬭浇閲嶈瘯锛?{asset_file}"
 		rm -f "$asset_file"
 		if ! download_file "$asset_url" "$asset_file" "asset"; then
-			log_download "重试下载发行资源失败：tool=${DOWNLOAD_LAST_TOOL:-unknown} url=${asset_url}"
-			write_download_state "$state_file" "failed" "重试下载发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
+			log_download "閲嶈瘯涓嬭浇鍙戣璧勬簮澶辫触锛歵ool=${DOWNLOAD_LAST_TOOL:-unknown} url=${asset_url}"
+			write_download_state "$state_file" "failed" "閲嶈瘯涓嬭浇鍙戣璧勬簮澶辫触" "$asset_name" "$release_tag" "$arch_name" ""
 			return 1
 		fi
 		if ! validate_asset_file "$asset_file"; then
-			log_download "重试下载后的发行资源仍然无效：${asset_file}"
+			log_download "閲嶈瘯涓嬭浇鍚庣殑鍙戣璧勬簮浠嶇劧鏃犳晥锛?{asset_file}"
 			rm -f "$asset_file"
-			write_download_state "$state_file" "failed" "重试下载后的发行资源无效" "$asset_name" "$release_tag" "$arch_name" ""
+			write_download_state "$state_file" "failed" "閲嶈瘯涓嬭浇鍚庣殑鍙戣璧勬簮鏃犳晥" "$asset_name" "$release_tag" "$arch_name" ""
 			return 1
 		fi
 		if ! extract_release_asset "$asset_file" "$extracted_dir"; then
-			log_download "解压失败：${asset_file}"
-			write_download_state "$state_file" "failed" "解压发行资源失败" "$asset_name" "$release_tag" "$arch_name" ""
+			log_download "瑙ｅ帇澶辫触锛?{asset_file}"
+			write_download_state "$state_file" "failed" "瑙ｅ帇鍙戣璧勬簮澶辫触" "$asset_name" "$release_tag" "$arch_name" ""
 			return 1
 		fi
 	fi
@@ -1110,62 +1307,62 @@ auto_download_bundle() {
 			cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
 			ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
 			if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin"; then
-				log_download "下载包中未找到完整的 vnt2_cli / vnt2_ctrl"
-				write_download_state "$state_file" "failed" "下载包中未找到完整的 vnt2_cli / vnt2_ctrl" "$asset_name" "$release_tag" "$arch_name" ""
+				log_download "涓嬭浇鍖呬腑鏈壘鍒板畬鏁寸殑 vnt2_cli / vnt2_ctrl"
+				write_download_state "$state_file" "failed" "涓嬭浇鍖呬腑鏈壘鍒板畬鏁寸殑 vnt2_cli / vnt2_ctrl" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
 			if ! install_bundle_to_usrbin "$extracted_dir" "cli"; then
-				log_download "已下载客户端程序，但安装到 /usr/bin 失败"
-				write_download_state "$state_file" "failed" "已下载客户端程序，但安装到 /usr/bin 失败" "$asset_name" "$release_tag" "$arch_name" ""
+				log_download "宸蹭笅杞藉鎴风绋嬪簭锛屼絾瀹夎鍒?/usr/bin 澶辫触"
+				write_download_state "$state_file" "failed" "宸蹭笅杞藉鎴风绋嬪簭锛屼絾瀹夎鍒?/usr/bin 澶辫触" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
 			uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
 			uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
 			uci commit ${CONF} >/dev/null 2>&1
-			log_download "CLI 程序已安装完成：cli=${INSTALL_BIN_DIR}/vnt2_cli ctrl=${INSTALL_BIN_DIR}/vnt2_ctrl"
-			write_download_state "$state_file" "success" "已自动下载并安装 vnt2_cli / vnt2_ctrl 到 /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_cli"
+			log_download "CLI 绋嬪簭宸插畨瑁呭畬鎴愶細cli=${INSTALL_BIN_DIR}/vnt2_cli ctrl=${INSTALL_BIN_DIR}/vnt2_ctrl"
+			write_download_state "$state_file" "success" "宸茶嚜鍔ㄤ笅杞藉苟瀹夎 vnt2_cli / vnt2_ctrl 鍒?/usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_cli"
 			return 0
 		;;
 		web)
 			web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
 			if ! ensure_exec "$web_bin"; then
-				log_download "下载包中未找到 vnt2_web"
-				write_download_state "$state_file" "failed" "下载包中未找到 vnt2_web" "$asset_name" "$release_tag" "$arch_name" ""
+				log_download "涓嬭浇鍖呬腑鏈壘鍒?vnt2_web"
+				write_download_state "$state_file" "failed" "涓嬭浇鍖呬腑鏈壘鍒?vnt2_web" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
 			if ! install_bundle_to_usrbin "$extracted_dir" "web"; then
-				log_download "已下载 Web 程序，但安装到 /usr/bin 失败"
-				write_download_state "$state_file" "failed" "已下载 Web 程序，但安装到 /usr/bin 失败" "$asset_name" "$release_tag" "$arch_name" ""
+				log_download "宸蹭笅杞?Web 绋嬪簭锛屼絾瀹夎鍒?/usr/bin 澶辫触"
+				write_download_state "$state_file" "failed" "宸蹭笅杞?Web 绋嬪簭锛屼絾瀹夎鍒?/usr/bin 澶辫触" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
 			uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
 			uci commit ${CONF} >/dev/null 2>&1
-			log_download "Web 程序已安装完成：web=${INSTALL_BIN_DIR}/vnt2_web"
-			write_download_state "$state_file" "success" "已自动下载并安装 vnt2_web 到 /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_web"
+			log_download "Web 绋嬪簭宸插畨瑁呭畬鎴愶細web=${INSTALL_BIN_DIR}/vnt2_web"
+			write_download_state "$state_file" "success" "宸茶嚜鍔ㄤ笅杞藉苟瀹夎 vnt2_web 鍒?/usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_web"
 			return 0
 		;;
 		server)
 			server_name="vnts2"
 			server_bin="$(normalize_server_binary_name "$extracted_dir")"
 			if ! ensure_exec "$server_bin"; then
-				log_download "下载包中未找到可用的 vnts2 / vnts，或重命名为 vnts2 失败"
-				write_download_state "$state_file" "failed" "下载包中未找到可用的 vnts2 / vnts，或重命名为 vnts2 失败" "$asset_name" "$release_tag" "$arch_name" ""
+				log_download "涓嬭浇鍖呬腑鏈壘鍒板彲鐢ㄧ殑 vnts2 / vnts锛屾垨閲嶅懡鍚嶄负 vnts2 澶辫触"
+				write_download_state "$state_file" "failed" "涓嬭浇鍖呬腑鏈壘鍒板彲鐢ㄧ殑 vnts2 / vnts锛屾垨閲嶅懡鍚嶄负 vnts2 澶辫触" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
 			if ! install_bundle_to_usrbin "$extracted_dir" "server"; then
-				log_download "已下载服务端程序，但安装到 /usr/bin 失败"
-				write_download_state "$state_file" "failed" "已下载服务端程序，但安装到 /usr/bin 失败" "$asset_name" "$release_tag" "$arch_name" ""
+				log_download "宸蹭笅杞芥湇鍔＄绋嬪簭锛屼絾瀹夎鍒?/usr/bin 澶辫触"
+				write_download_state "$state_file" "failed" "宸蹭笅杞芥湇鍔＄绋嬪簭锛屼絾瀹夎鍒?/usr/bin 澶辫触" "$asset_name" "$release_tag" "$arch_name" ""
 				return 1
 			fi
 			uci -q set ${CONF}.${cfg}.vnts2_bin="${INSTALL_BIN_DIR}/vnts2"
 			uci commit ${CONF} >/dev/null 2>&1
-			log_download "服务端程序已安装完成：server=${INSTALL_BIN_DIR}/vnts2"
-			write_download_state "$state_file" "success" "已自动下载并安装 vnts2 到 /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnts2"
+			log_download "鏈嶅姟绔▼搴忓凡瀹夎瀹屾垚锛歴erver=${INSTALL_BIN_DIR}/vnts2"
+			write_download_state "$state_file" "success" "宸茶嚜鍔ㄤ笅杞藉苟瀹夎 vnts2 鍒?/usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnts2"
 			return 0
 		;;
 	esac
 
-	write_download_state "$state_file" "failed" "未知下载范围" "$asset_name" "$release_tag" "$arch_name" ""
+	write_download_state "$state_file" "failed" "鏈煡涓嬭浇鑼冨洿" "$asset_name" "$release_tag" "$arch_name" ""
 	return 1
 }
 
@@ -1195,15 +1392,15 @@ prepare_binary() {
 
 	uploaded="$(find_uploaded_bin "$upload_name")"
 	if [ -n "$uploaded" ]; then
-		log_download "${scope} 自动下载失败，回退到本地上传程序 ${uploaded}"
+		log_download "${scope} 鑷姩涓嬭浇澶辫触锛屽洖閫€鍒版湰鍦颁笂浼犵▼搴?${uploaded}"
 		target_name="${option%_bin}"
 		installed_bin="$(install_binary_to_usrbin "$uploaded" "$target_name" 2>/dev/null)"
 		if ensure_exec "$installed_bin"; then
 			bin="$installed_bin"
-			write_download_state "$state_file" "fallback" "自动下载失败，已改用上传程序并安装到 /usr/bin" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$installed_bin"
+            write_download_state "$state_file" "fallback" "auto download failed, using uploaded binary installed to /usr/bin" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$installed_bin"
 		else
 			bin="$uploaded"
-			write_download_state "$state_file" "fallback" "自动下载失败，已回退到本地上传程序" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$uploaded"
+            write_download_state "$state_file" "fallback" "auto download failed, using uploaded binary without install promotion" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$uploaded"
 		fi
 		uci -q set ${CONF}.${cfg}.${option}="$bin"
 		uci commit ${CONF} >/dev/null 2>&1
@@ -1253,7 +1450,7 @@ toml_validate_client_config() {
 	local network_code server_line
 
 	[ -f "$file" ] || {
-		log_cli "客户端配置文件不存在：$file"
+		log_cli "瀹㈡埛绔厤缃枃浠朵笉瀛樺湪锛?file"
 		return 1
 	}
 
@@ -1261,7 +1458,7 @@ toml_validate_client_config() {
 	server_line="$(trim_value "$(toml_get_raw "$file" "server")")"
 
 	[ -n "$network_code" ] || {
-		log_cli "客户端配置校验失败：network_code 不能为空"
+		log_cli "瀹㈡埛绔厤缃牎楠屽け璐ワ細network_code 涓嶈兘涓虹┖"
 		return 1
 	}
 
@@ -1270,7 +1467,7 @@ toml_validate_client_config() {
 			:
 		;;
 		*)
-			log_cli "客户端配置校验失败：server 列表不能为空"
+			log_cli "瀹㈡埛绔厤缃牎楠屽け璐ワ細server 鍒楄〃涓嶈兘涓虹┖"
 			return 1
 		;;
 	esac
@@ -1281,7 +1478,7 @@ toml_validate_client_config() {
 toml_validate_server_config() {
 	local file="$1"
 	[ -f "$file" ] || {
-		log_server "服务端配置文件不存在：$file"
+		log_server "鏈嶅姟绔厤缃枃浠朵笉瀛樺湪锛?file"
 		return 1
 	}
 	return 0
@@ -1290,8 +1487,12 @@ toml_validate_server_config() {
 configure_network() {
 	local tun_name="$1"
 	local forward_list="$2"
+	local no_nat="$3"
+	local lan_zone wan_zone enable_ip_forward="${no_nat:-0}"
 
 	[ -n "$tun_name" ] || tun_name="vnt-tun"
+	lan_zone="$(find_firewall_zone_name "lan" 2>/dev/null || true)"
+	wan_zone="$(find_firewall_zone_name "wan" 2>/dev/null || true)"
 
 	uci -q delete network.VNT2
 	uci set network.VNT2='interface'
@@ -1311,9 +1512,13 @@ configure_network() {
 
 	case " $forward_list " in
 		*" vnt2fwlan "*)
-			uci set firewall.vnt2fwlan='forwarding'
-			uci set firewall.vnt2fwlan.src='VNT2'
-			uci set firewall.vnt2fwlan.dest='lan'
+			if [ -n "$lan_zone" ]; then
+				uci set firewall.vnt2fwlan='forwarding'
+				uci set firewall.vnt2fwlan.src='VNT2'
+				uci set firewall.vnt2fwlan.dest="${lan_zone}"
+			else
+				uci -q delete firewall.vnt2fwlan
+			fi
 		;;
 		*)
 			uci -q delete firewall.vnt2fwlan
@@ -1322,9 +1527,13 @@ configure_network() {
 
 	case " $forward_list " in
 		*" vnt2fwwan "*)
-			uci set firewall.vnt2fwwan='forwarding'
-			uci set firewall.vnt2fwwan.src='VNT2'
-			uci set firewall.vnt2fwwan.dest='wan'
+			if [ -n "$wan_zone" ]; then
+				uci set firewall.vnt2fwwan='forwarding'
+				uci set firewall.vnt2fwwan.src='VNT2'
+				uci set firewall.vnt2fwwan.dest="${wan_zone}"
+			else
+				uci -q delete firewall.vnt2fwwan
+			fi
 		;;
 		*)
 			uci -q delete firewall.vnt2fwwan
@@ -1333,9 +1542,13 @@ configure_network() {
 
 	case " $forward_list " in
 		*" lanfwvnt2 "*)
-			uci set firewall.lanfwvnt2='forwarding'
-			uci set firewall.lanfwvnt2.src='lan'
-			uci set firewall.lanfwvnt2.dest='VNT2'
+			if [ -n "$lan_zone" ]; then
+				uci set firewall.lanfwvnt2='forwarding'
+				uci set firewall.lanfwvnt2.src="${lan_zone}"
+				uci set firewall.lanfwvnt2.dest='VNT2'
+			else
+				uci -q delete firewall.lanfwvnt2
+			fi
 		;;
 		*)
 			uci -q delete firewall.lanfwvnt2
@@ -1344,9 +1557,13 @@ configure_network() {
 
 	case " $forward_list " in
 		*" wanfwvnt2 "*)
-			uci set firewall.wanfwvnt2='forwarding'
-			uci set firewall.wanfwvnt2.src='wan'
-			uci set firewall.wanfwvnt2.dest='VNT2'
+			if [ -n "$wan_zone" ]; then
+				uci set firewall.wanfwvnt2='forwarding'
+				uci set firewall.wanfwvnt2.src="${wan_zone}"
+				uci set firewall.wanfwvnt2.dest='VNT2'
+			else
+				uci -q delete firewall.wanfwvnt2
+			fi
 		;;
 		*)
 			uci -q delete firewall.wanfwvnt2
@@ -1355,7 +1572,7 @@ configure_network() {
 
 	[ -n "$(uci changes network)" ] && uci commit network && /etc/init.d/network reload >/dev/null 2>&1
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
-	sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+	[ "$enable_ip_forward" = "0" ] || sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
 }
 
 cleanup_network() {
@@ -1374,23 +1591,28 @@ ensure_firewall_rule() {
 	local name="$2"
 	local proto="$3"
 	local port="$4"
+	local src_zone="${5:-wan}"
 
 	uci set firewall.${rule}='rule'
 	uci set firewall.${rule}.name="${name}"
-	uci set firewall.${rule}.src='wan'
+	uci set firewall.${rule}.src="${src_zone}"
 	uci set firewall.${rule}.target='ACCEPT'
 	uci set firewall.${rule}.proto="${proto}"
 	uci set firewall.${rule}.dest_port="${port}"
+	uci set firewall.${rule}.enabled='1'
 }
 
 configure_web_firewall() {
 	local host="$1"
 	local port="$2"
 	local wan="$3"
+	local wan_zone
+
+	wan_zone="$(find_firewall_zone_name "wan" 2>/dev/null || true)"
 
 	uci -q delete firewall.vnt2web
-	if [ "$wan" = "1" ] && [ -n "$port" ] && [ "$host" = "0.0.0.0" -o "$host" = "::" ]; then
-		ensure_firewall_rule "vnt2web" "vnt2_web" "tcp" "$port"
+	if [ "$wan" = "1" ] && [ -n "$port" ] && [ -n "$wan_zone" ] && host_allows_external_access "$host"; then
+		ensure_firewall_rule "vnt2web" "vnt2_web" "tcp" "$port" "$wan_zone"
 	fi
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
@@ -1409,22 +1631,24 @@ configure_server_firewall() {
 	local open_quic="$6"
 	local open_ws="$7"
 	local open_web="$8"
+	local wan_zone
 
 	local tcp_port quic_port ws_port web_port
 	tcp_port="${tcp_bind##*:}"
 	quic_port="${quic_bind##*:}"
 	ws_port="${ws_bind##*:}"
 	web_port="${web_bind##*:}"
+	wan_zone="$(find_firewall_zone_name "wan" 2>/dev/null || true)"
 
 	uci -q delete firewall.vnts2_tcp
 	uci -q delete firewall.vnts2_quic
 	uci -q delete firewall.vnts2_ws
 	uci -q delete firewall.vnts2_web
 
-	[ "$open_tcp" = "1" ] && [ -n "$tcp_port" ] && ensure_firewall_rule "vnts2_tcp" "vnts2_tcp" "tcp" "$tcp_port"
-	[ "$open_quic" = "1" ] && [ -n "$quic_port" ] && ensure_firewall_rule "vnts2_quic" "vnts2_quic" "udp" "$quic_port"
-	[ "$open_ws" = "1" ] && [ -n "$ws_port" ] && ensure_firewall_rule "vnts2_ws" "vnts2_ws" "tcp" "$ws_port"
-	[ "$open_web" = "1" ] && [ -n "$web_port" ] && ensure_firewall_rule "vnts2_web" "vnts2_web" "tcp" "$web_port"
+	[ "$open_tcp" = "1" ] && [ -n "$tcp_port" ] && [ -n "$wan_zone" ] && bind_allows_external_access "$tcp_bind" && ensure_firewall_rule "vnts2_tcp" "vnts2_tcp" "tcp" "$tcp_port" "$wan_zone"
+	[ "$open_quic" = "1" ] && [ -n "$quic_port" ] && [ -n "$wan_zone" ] && bind_allows_external_access "$quic_bind" && ensure_firewall_rule "vnts2_quic" "vnts2_quic" "udp" "$quic_port" "$wan_zone"
+	[ "$open_ws" = "1" ] && [ -n "$ws_port" ] && [ -n "$wan_zone" ] && bind_allows_external_access "$ws_bind" && ensure_firewall_rule "vnts2_ws" "vnts2_ws" "tcp" "$ws_port" "$wan_zone"
+	[ "$open_web" = "1" ] && [ -n "$web_port" ] && [ -n "$wan_zone" ] && bind_allows_external_access "$web_bind" && ensure_firewall_rule "vnts2_web" "vnts2_web" "tcp" "$web_port" "$wan_zone"
 
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
@@ -1439,7 +1663,6 @@ cleanup_server_firewall() {
 
 prepare_cli_runtime() {
 	local cfg="$1"
-	local forward_list bind_dev tun_name no_tun
 
 	CLI_CONF_FILE="$(resolve_client_conf_file "$cfg")"
 	ensure_conf_path_ready "${CLI_CONF_FILE}"
@@ -1448,17 +1671,31 @@ prepare_cli_runtime() {
 		return 1
 	fi
 
-	config_get bind_dev "$cfg" "bind_dev"
-	config_list_foreach "$cfg" vnt2_forward append_forward_item
-	forward_list="${VNT2_FORWARD_LIST}"
+	prepare_client_network_runtime "$cfg" "${CLI_CONF_FILE}"
+}
 
-	tun_name="$(trim_value "$(toml_get_string "${CLI_CONF_FILE}" "tun_name")")"
+prepare_client_network_runtime() {
+	local cfg="$1"
+	local conf_file="$2"
+	local bind_dev="" forward_list="" tun_name no_tun no_nat
+
+	VNT2_FORWARD_LIST=""
+	if [ -n "$cfg" ]; then
+		config_get bind_dev "$cfg" "bind_dev"
+		config_list_foreach "$cfg" vnt2_forward append_forward_item
+		forward_list="${VNT2_FORWARD_LIST}"
+	fi
+
+	tun_name="$(trim_value "$(toml_get_string "${conf_file}" "tun_name")")"
 	[ -n "$tun_name" ] || tun_name="vnt-tun"
-	no_tun="$(toml_get_bool "${CLI_CONF_FILE}" "no_tun")"
+	no_tun="$(toml_get_bool "${conf_file}" "no_tun")"
+	no_nat="$(toml_get_bool "${conf_file}" "no_proxy")"
+	[ -n "$no_nat" ] || no_nat="0"
 
 	VNT2_BIND_DEV="${bind_dev}"
 	VNT2_TUN_NAME="${tun_name}"
 	VNT2_NO_TUN="${no_tun}"
+	VNT2_NO_NAT="${no_nat}"
 	VNT2_FORWARD_LIST="${forward_list}"
 	return 0
 }
@@ -1514,42 +1751,42 @@ start_cli_instance() {
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
-		log_cli "未启用，跳过启动"
+		log_cli "鏈惎鐢紝璺宠繃鍚姩"
 		return 0
 	fi
 
-	log_cli "开始启动"
+	log_cli 'start requested'
 	config_get cli_bin "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli"
 	config_get ctrl_bin "$cfg" "vnt2_ctrl_bin" "/usr/bin/vnt2_ctrl"
 
 	if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin"; then
-		log_cli "检测到 CLI/CTRL 程序不完整，尝试自动下载或回退到上传程序"
+		log_cli 'existing CLI/CTRL incomplete, trying auto-download or uploaded fallback'
 		cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" "$DOWNLOAD_CLI_STATE" "cli")" || {
-			log_cli "启动失败：未找到完整的 vnt2_cli / vnt2_ctrl，请上传或安装程序"
+			log_cli 'start failed: missing vnt2_cli or vnt2_ctrl'
 			return 1
 		}
 		ctrl_bin="$(uci -q get ${CONF}.${cfg}.vnt2_ctrl_bin)"
 		if ! ensure_exec "$ctrl_bin"; then
-			log_cli "启动失败：vnt2_ctrl 缺失，自动下载或上传回退未准备完整"
+			log_cli 'start failed: vnt2_ctrl missing after recovery'
 			return 1
 		fi
 	else
-		log_cli "检测到现有 CLI/CTRL 程序完整：cli=${cli_bin} ctrl=${ctrl_bin}"
+		log_cli "妫€娴嬪埌鐜版湁 CLI/CTRL 绋嬪簭瀹屾暣锛歝li=${cli_bin} ctrl=${ctrl_bin}"
 	fi
 
 	VNT2_FORWARD_LIST=""
 	if ! prepare_cli_runtime "$cfg"; then
-		log_cli "启动失败：客户端 TOML 配置校验失败"
+		log_cli "鍚姩澶辫触锛氬鎴风 TOML 閰嶇疆鏍￠獙澶辫触"
 		return 1
 	fi
 
 	if [ "${VNT2_NO_TUN}" != "1" ]; then
-		configure_network "${VNT2_TUN_NAME}" "${VNT2_FORWARD_LIST}"
+		configure_network "${VNT2_TUN_NAME}" "${VNT2_FORWARD_LIST}" "${VNT2_NO_NAT}"
 	else
 		cleanup_network
 	fi
 
-	log_cli "使用 ${cli_bin} 启动，配置文件 ${CLI_CONF_FILE}"
+	log_cli "浣跨敤 ${cli_bin} 鍚姩锛岄厤缃枃浠?${CLI_CONF_FILE}"
 	procd_open_instance "vnt2_cli"
 	[ -n "${VNT2_BIND_DEV}" ] && procd_set_param env VNT_BIND_DEV="${VNT2_BIND_DEV}"
 	procd_set_param command /bin/sh -c "exec \"${cli_bin}\" --conf \"${CLI_CONF_FILE}\" >>\"${CLI_LOG}\" 2>&1"
@@ -1562,22 +1799,22 @@ start_cli_instance() {
 	procd_set_param term_timeout 10
 	procd_close_instance
 	date +%s >"${CLI_TIME}"
-	log_cli "启动命令已提交"
+	log_cli 'start command submitted'
 }
 
 start_web_instance() {
 	local cfg="$1"
-	local enabled web_bin web_host web_port web_wan log_level
+	local enabled web_bin web_host web_port web_wan log_level cli_cfg
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
-		log_web "未启用，跳过启动"
+		log_web 'not enabled, skip start'
 		return 0
 	fi
 
-	log_web "开始启动"
+	log_web 'start requested'
 	web_bin="$(prepare_binary "$cfg" "vnt2_web_bin" "/usr/bin/vnt2_web" "vnt2_web" "$DOWNLOAD_WEB_STATE" "web")" || {
-		log_web "启动失败：未找到可执行文件，请上传或安装 vnt2_web"
+		log_web 'start failed: missing executable vnt2_web'
 		return 1
 	}
 
@@ -1586,11 +1823,27 @@ start_web_instance() {
 	config_get_bool web_wan "$cfg" "web_wan" "1"
 	config_get log_level "$cfg" "log_level" "info"
 
-	configure_web_firewall "$web_host" "$web_port" "$web_wan"
-
 	WEB_CONF_FILE="$(resolve_web_conf_file "$cfg")"
 	ensure_conf_path_ready "${WEB_CONF_FILE}"
-	log_web "使用 ${web_bin} 监听 ${web_host}:${web_port}，配置文件 ${WEB_CONF_FILE}"
+	if ! toml_validate_client_config "${WEB_CONF_FILE}"; then
+		log_web 'start failed: client TOML validation failed'
+		return 1
+	fi
+
+	cli_cfg="$(get_first_section_id "vnt2_cli")"
+	if ! prepare_client_network_runtime "$cli_cfg" "${WEB_CONF_FILE}"; then
+		log_web 'start failed: client network runtime preparation failed'
+		return 1
+	fi
+
+	if [ "${VNT2_NO_TUN}" != "1" ]; then
+		configure_network "${VNT2_TUN_NAME}" "${VNT2_FORWARD_LIST}" "${VNT2_NO_NAT}"
+	else
+		cleanup_network
+	fi
+
+	configure_web_firewall "$web_host" "$web_port" "$web_wan"
+    log_web "using ${web_bin} on ${web_host}:${web_port}, conf=${WEB_CONF_FILE}"
 	procd_open_instance "vnt2_web"
 	procd_set_param env RUST_LOG="$log_level"
 	procd_set_param command /bin/sh -c "exec \"${web_bin}\" --addr \"${web_host}:${web_port}\" --conf \"${WEB_CONF_FILE}\" >>\"${WEB_LOG}\" 2>&1"
@@ -1603,7 +1856,7 @@ start_web_instance() {
 	procd_set_param term_timeout 10
 	procd_close_instance
 	date +%s >"${WEB_TIME}"
-	log_web "启动命令已提交"
+	log_web 'start command submitted'
 }
 
 start_server_instance() {
@@ -1613,18 +1866,18 @@ start_server_instance() {
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
-		log_server "未启用，跳过启动"
+		log_server "鏈惎鐢紝璺宠繃鍚姩"
 		return 0
 	fi
 
-	log_server "开始启动"
+	log_server 'start requested'
 	server_bin="$(prepare_binary "$cfg" "vnts2_bin" "/usr/bin/vnts2" "vnts2" "$DOWNLOAD_SERVER_STATE" "server")" || {
-		log_server "启动失败：未找到可执行文件，请上传或安装 vnts2"
+		log_server "鍚姩澶辫触锛氭湭鎵惧埌鍙墽琛屾枃浠讹紝璇蜂笂浼犳垨瀹夎 vnts2"
 		return 1
 	}
 
 	if ! prepare_server_runtime "$cfg"; then
-		log_server "启动失败：服务端 TOML 配置校验失败"
+		log_server "鍚姩澶辫触锛氭湇鍔＄ TOML 閰嶇疆鏍￠獙澶辫触"
 		return 1
 	fi
 
@@ -1635,7 +1888,7 @@ start_server_instance() {
 
 	configure_server_firewall "${VNTS2_TCP_BIND}" "${VNTS2_QUIC_BIND}" "${VNTS2_WS_BIND}" "${VNTS2_WEB_BIND}" "$open_tcp" "$open_quic" "$open_ws" "$open_web"
 
-	log_server "使用 ${server_bin} 启动，配置文件 ${SERVER_CONF_FILE}"
+	log_server "浣跨敤 ${server_bin} 鍚姩锛岄厤缃枃浠?${SERVER_CONF_FILE}"
 	procd_open_instance "vnts2"
 	procd_set_param command /bin/sh -c "exec \"${server_bin}\" --conf \"${SERVER_CONF_FILE}\" >>\"${SERVER_LOG}\" 2>&1"
 	procd_set_param stdout 0
@@ -1647,26 +1900,26 @@ start_server_instance() {
 	procd_set_param term_timeout 10
 	procd_close_instance
 	date +%s >"${SERVER_TIME}"
-	log_server "启动命令已提交"
+	log_server 'start command submitted'
 }
 
 start_service() {
 	local cli_cfg web_cfg server_cfg
 
 	ensure_log_files
-	log_cli "服务启动流程开始"
-	log_web "服务启动流程开始"
-	log_server "服务启动流程开始"
-	log_download "服务启动流程开始"
+	log_cli 'service start flow begin'
+	log_web 'service start flow begin'
+	log_server 'service start flow begin'
+	log_download 'service start flow begin'
 
 	if export_toml_from_uci; then
-		log_cli "已从 UCI 重新导出 TOML 配置"
-		log_web "已从 UCI 重新导出 TOML 配置"
-		log_server "已从 UCI 重新导出 TOML 配置"
+		log_cli "宸蹭粠 UCI 閲嶆柊瀵煎嚭 TOML 閰嶇疆"
+		log_web "宸蹭粠 UCI 閲嶆柊瀵煎嚭 TOML 閰嶇疆"
+		log_server "宸蹭粠 UCI 閲嶆柊瀵煎嚭 TOML 閰嶇疆"
 	else
-		log_cli "从 UCI 导出 TOML 配置失败，继续使用现有配置文件"
-		log_web "从 UCI 导出 TOML 配置失败，继续使用现有配置文件"
-		log_server "从 UCI 导出 TOML 配置失败，继续使用现有配置文件"
+		log_cli 'UCI to TOML export failed, continue with existing config'
+		log_web 'UCI to TOML export failed, continue with existing config'
+		log_server 'UCI to TOML export failed, continue with existing config'
 	fi
 
 	config_load "${CONF}"
@@ -1680,29 +1933,29 @@ start_service() {
 	web_cfg="$(get_first_section_id "vnt2_web")"
 	server_cfg="$(get_first_section_id "vnts2")"
 
-	[ -n "$cli_cfg" ] && start_cli_instance "$cli_cfg" || log_cli "未找到 vnt2_cli 配置段"
-	[ -n "$web_cfg" ] && start_web_instance "$web_cfg" || log_web "未找到 vnt2_web 配置段"
-	[ -n "$server_cfg" ] && start_server_instance "$server_cfg" || log_server "未找到 vnts2 配置段"
+    [ -n "$cli_cfg" ] && start_cli_instance "$cli_cfg" || log_cli 'vnt2_cli config section not found'
+    [ -n "$web_cfg" ] && start_web_instance "$web_cfg" || log_web 'vnt2_web config section not found'
+    [ -n "$server_cfg" ] && start_server_instance "$server_cfg" || log_server 'vnts2 config section not found'
 
-	log_download "服务启动流程结束"
+	log_download "鏈嶅姟鍚姩娴佺▼缁撴潫"
 }
 
 stop_service() {
 	ensure_log_files
-	log_cli "服务停止流程开始"
-	log_web "服务停止流程开始"
-	log_server "服务停止流程开始"
-	log_download "服务停止流程开始"
+	log_cli 'service stop flow begin'
+	log_web 'service stop flow begin'
+	log_server 'service stop flow begin'
+	log_download 'service stop flow begin'
 
 	rm -f "${CLI_TIME}" "${WEB_TIME}" "${SERVER_TIME}"
 	cleanup_network
 	cleanup_web_firewall
 	cleanup_server_firewall
 
-	log_cli "服务已停止"
-	log_web "服务已停止"
-	log_server "服务已停止"
-	log_download "服务停止流程结束"
+	log_cli 'service stopped'
+	log_web 'service stopped'
+	log_server 'service stopped'
+	log_download "鏈嶅姟鍋滄娴佺▼缁撴潫"
 }
 
 reload_service() {
