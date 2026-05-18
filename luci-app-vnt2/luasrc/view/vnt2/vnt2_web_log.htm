@@ -1,11 +1,7 @@
 <%
-local fs = require "nixio.fs"
+local textutil = require "luci.model.vnt2_text"
 local log_file = "/tmp/vnt2-web.log"
-local log_content = ""
-
-if fs.access(log_file) then
-	log_content = fs.readfile(log_file) or ""
-end
+local log_content = textutil.read_text_file(log_file)
 -%>
 
 <script type="text/javascript">

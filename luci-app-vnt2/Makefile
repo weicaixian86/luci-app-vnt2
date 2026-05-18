@@ -10,8 +10,8 @@ PKG_NAME:=luci-app-vnt2
 PKG_VERSION:=2.0.0
 PKG_RELEASE:=1
 
-LUCI_TITLE:=LuCI support for VNT2
-LUCI_DESCRIPTION:=OpenWrt LuCI application for managing VNT2 CLI/CTRL/Web services
+LUCI_TITLE:=luci-app-vnt2 - LuCI support for VNT2
+LUCI_DESCRIPTION:=luci-app-vnt2 OpenWrt LuCI application for managing VNT2 CLI/CTRL/Web services
 LUCI_DEPENDS:=+luci-compat +curl +ca-bundle +unzip
 LUCI_PKGARCH:=all
 

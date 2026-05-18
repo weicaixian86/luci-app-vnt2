@@ -138,7 +138,7 @@ jobs:
           mkdir -p output
           mapfile -t package_files < <(find sdk/bin/packages -type f \( -name "${PACKAGE_NAME}_*.${{ matrix.package_format }}" -o -name "${PACKAGE_NAME}-*.${{ matrix.package_format }}" \) | sort)
           test "${#package_files[@]}" -eq 1
-          cp -f "${package_files[0]}" "output/${PACKAGE_NAME}_${RAW_TAG}.${{ matrix.package_format }}"
+          cp -f "${package_files[0]}" output/
           ls -lah output
 
       - name: Upload artifact

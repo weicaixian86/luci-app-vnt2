@@ -5,6 +5,7 @@ local sys = require "luci.sys"
 local http = require "luci.http"
 local uci = require "luci.model.uci".cursor()
 local toml = require "luci.model.vnt2_toml"
+local textutil = require "luci.model.vnt2_text"
 
 function index()
 	if not fs.access("/etc/config/vnt2") and not fs.access(toml.CLIENT_TOML) and not fs.access(toml.SERVER_TOML) then
@@ -14,11 +15,11 @@ function index()
 	toml.ensure_toml_files(uci)
 
 	entry({ "admin", "vpn", "vnt2" }, alias("admin", "vpn", "vnt2", "config"), _("VNT2"), 45).dependent = true
-	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("基本设置"), 10).leaf = true
-	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("cli客户端日志"), 20).leaf = true
-	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("web客户端日志"), 30).leaf = true
-	entry({ "admin", "vpn", "vnt2", "server_log" }, cbi("vnt2_server_log"), _("服务端日志"), 40).leaf = true
-	entry({ "admin", "vpn", "vnt2", "download_log" }, cbi("vnt2_download_log"), _("下载日志"), 50).leaf = true
+	entry({ "admin", "vpn", "vnt2", "config" }, cbi("vnt2"), _("鍩烘湰璁剧疆"), 10).leaf = true
+	entry({ "admin", "vpn", "vnt2", "client_log" }, cbi("vnt2_log"), _("cli瀹㈡埛绔棩蹇?), 20).leaf = true
+	entry({ "admin", "vpn", "vnt2", "web_log" }, cbi("vnt2_web_log"), _("web瀹㈡埛绔棩蹇?), 30).leaf = true
+	entry({ "admin", "vpn", "vnt2", "server_log" }, cbi("vnt2_server_log"), _("鏈嶅姟绔棩蹇?), 40).leaf = true
+	entry({ "admin", "vpn", "vnt2", "download_log" }, cbi("vnt2_download_log"), _("涓嬭浇鏃ュ織"), 50).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "status" }, call("act_status")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_client_log" }, call("get_client_log")).leaf = true
@@ -111,7 +112,7 @@ end
 
 local function get_ctrl_port()
 	local cfg = toml.get_client_summary(uci)
-	return tonumber(cfg.cmd_port or "11233") or 11233
+	return tonumber(cfg.ctrl_port or "11233") or 11233
 end
 
 local function get_web_port()
@@ -219,10 +220,10 @@ local function format_runtime(tag_file)
 	local sec = delta % 60
 
 	if day > 0 then
-		return string.format("%d天 %02d小时%02d分%02d秒", day, hour, min, sec)
+		return string.format("%d澶?%02d灏忔椂%02d鍒?02d绉?, day, hour, min, sec)
 	end
 
-	return string.format("%02d小时%02d分%02d秒", hour, min, sec)
+	return string.format("%02d灏忔椂%02d鍒?02d绉?, hour, min, sec)
 end
 
 local function get_clk_tck()
@@ -464,8 +465,38 @@ local function get_vnt2_latest_tag(repo, configured_tag, mirror)
 	return normalize_display_tag(get_cached_latest_tag(repo, mirror))
 end
 
+local function sanitize_text_content(content)
+	content = tostring(content or "")
+	content = content:gsub("\27%[[%d;?]*[%a]", "")
+	content = content:gsub("\27%][^\7]*\7", "")
+	content = content:gsub("%z", "")
+	content = content:gsub("\r", "")
+	return content
+end
+
+local function looks_like_mojibake(content)
+	content = tostring(content or "")
+	return false
+end
+
+local function maybe_repair_mojibake(path, content)
+	if not path or path == "" or not looks_like_mojibake(content) then
+		return content
+	end
+	if sys.call("command -v iconv >/dev/null 2>&1") ~= 0 then
+		return content
+	end
+
+	local repaired = sys.exec(string.format("iconv -f UTF-8 -t GB18030 %s 2>/dev/null", shell_quote(path)))
+	if repaired and repaired ~= "" then
+		return repaired
+	end
+
+	return content
+end
+
 local function get_log_content(path)
-	return fs.readfile(path) or ""
+	return textutil.read_text_file(path)
 end
 
 local function parse_state_file(path)
@@ -490,6 +521,14 @@ local function parse_state_file(path)
 			out[k] = trim(v)
 		end
 	end
+
+	out.state = textutil.sanitize_text(out.state)
+	out.message = textutil.normalize_text(out.message)
+	out.asset = textutil.sanitize_text(out.asset)
+	out.tag = textutil.sanitize_text(out.tag)
+	out.arch = textutil.sanitize_text(out.arch)
+	out.path = textutil.sanitize_text(out.path)
+	out.time = textutil.sanitize_text(out.time)
 
 	return out
 end
@@ -605,7 +644,7 @@ end
 
 local function is_cli_reachable()
 	local out = run_ctrl("info")
-	return out ~= "" and not out:match("错误") and not out:match("not found") and not out:match("unrecognized") and not out:match("refused") and not out:match("failed")
+	return out ~= "" and not out:match("閿欒") and not out:match("not found") and not out:match("unrecognized") and not out:match("refused") and not out:match("failed")
 end
 
 local function is_server_reachable(server_cfg)
@@ -686,8 +725,8 @@ local function summarize_cli_config()
 		device_id = cfg.device_id or "",
 		tun_name = cfg.tun_name or "vnt-tun",
 		no_tun = cfg.no_tun or "0",
-		no_nat = trim(cfg.no_proxy) ~= "" and cfg.no_proxy or "0",
-		ctrl_port = tonumber(cfg.cmd_port or "11233") or 11233,
+		no_nat = trim(cfg.no_nat) ~= "" and cfg.no_nat or "0",
+		ctrl_port = tonumber(cfg.ctrl_port or "11233") or 11233,
 		auto_download = uci_first("vnt2_cli", "auto_download", "1"),
 		download_repo = uci_first("vnt2_cli", "download_repo", "vnt-dev/vnt"),
 		download_tag = uci_first("vnt2_cli", "download_tag", "latest"),
@@ -933,7 +972,7 @@ function vnt2_cmdline()
 	local cmdline = get_cmdline(pid)
 
 	if cmdline == "" then
-		cmdline = "错误：程序未运行！请先启动 vnt2_cli。"
+		cmdline = "閿欒锛氱▼搴忔湭杩愯锛佽鍏堝惎鍔?vnt2_cli銆?
 	end
 
 	json_write({ cmdline = cmdline })
@@ -944,7 +983,7 @@ function vnt2_web_cmdline()
 	local cmdline = get_cmdline(pid)
 
 	if cmdline == "" then
-		cmdline = "错误：程序未运行！请先启动 vnt2_web。"
+		cmdline = "閿欒锛氱▼搴忔湭杩愯锛佽鍏堝惎鍔?vnt2_web銆?
 	end
 
 	json_write({ cmdline = cmdline })
@@ -955,7 +994,7 @@ function vnts2_cmdline()
 	local cmdline = get_cmdline(pid)
 
 	if cmdline == "" then
-		cmdline = "错误：程序未运行！请先启动 vnts2。"
+		cmdline = "閿欒锛氱▼搴忔湭杩愯锛佽鍏堝惎鍔?vnts2銆?
 	end
 
 	json_write({ cmdline = cmdline })

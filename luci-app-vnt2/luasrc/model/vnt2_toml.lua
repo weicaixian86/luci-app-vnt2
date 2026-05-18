@@ -24,20 +24,20 @@ local client_defaults = {
 	tun_name = "vnt-tun",
 	cert_mode = "skip",
 	mtu = "1400",
-	cmd_port = "11233",
-	port = "0",
+	ctrl_port = "11233",
+	tunnel_port = "0",
 	no_punch = "0",
-	use_channel_type = "0",
-	compressor = "0",
-	use_fec = "0",
-	no_proxy = "0",
+	rtx = "0",
+	compress = "0",
+	fec = "0",
+	no_nat = "0",
 	no_tun = "0",
-	allow_wire_guard = "0",
-	in_ips = {},
-	out_ips = {},
-	mapping = {},
-	stun_server = {},
-	stun_server_tcp = {}
+	allow_mapping = "0",
+	input = {},
+	output = {},
+	port_mapping = {},
+	udp_stun = {},
+	tcp_stun = {}
 }
 
 local server_defaults = {
@@ -69,20 +69,20 @@ local client_option_map = {
 	tun_name = "tun_name",
 	cert_mode = "cert_mode",
 	mtu = "mtu",
-	cmd_port = "ctrl_port",
-	port = "tunnel_port",
+	ctrl_port = "ctrl_port",
+	tunnel_port = "tunnel_port",
 	no_punch = "no_punch",
-	use_channel_type = "rtx",
-	compressor = "compress",
-	use_fec = "fec",
-	no_proxy = "no_nat",
+	rtx = "rtx",
+	compress = "compress",
+	fec = "fec",
+	no_nat = "no_nat",
 	no_tun = "no_tun",
-	allow_wire_guard = "allow_mapping",
-	in_ips = "input",
-	out_ips = "output",
-	mapping = "port_mapping",
-	stun_server = "udp_stun",
-	stun_server_tcp = "tcp_stun"
+	allow_mapping = "allow_mapping",
+	input = "input",
+	output = "output",
+	port_mapping = "port_mapping",
+	udp_stun = "udp_stun",
+	tcp_stun = "tcp_stun"
 }
 
 local web_option_map = {
@@ -95,19 +95,19 @@ local web_option_map = {
 	tun_name = "tun_name",
 	cert_mode = "cert_mode",
 	mtu = "mtu",
-	port = "tunnel_port",
+	tunnel_port = "tunnel_port",
 	no_punch = "no_punch",
-	use_channel_type = "rtx",
-	compressor = "compress",
-	use_fec = "fec",
-	no_proxy = "no_nat",
+	rtx = "rtx",
+	compress = "compress",
+	fec = "fec",
+	no_nat = "no_nat",
 	no_tun = "no_tun",
-	allow_wire_guard = "allow_mapping",
-	in_ips = "input",
-	out_ips = "output",
-	mapping = "port_mapping",
-	stun_server = "udp_stun",
-	stun_server_tcp = "tcp_stun"
+	allow_mapping = "allow_mapping",
+	input = "input",
+	output = "output",
+	port_mapping = "port_mapping",
+	udp_stun = "udp_stun",
+	tcp_stun = "tcp_stun"
 }
 
 local server_option_map = {
@@ -131,16 +131,16 @@ local server_option_map = {
 
 local client_order = {
 	"network_code", "server", "ip", "device_id", "device_name", "password", "tun_name",
-	"cert_mode", "mtu", "cmd_port", "port", "no_punch", "use_channel_type", "compressor",
-	"use_fec", "no_proxy", "no_tun", "allow_wire_guard", "in_ips", "out_ips", "mapping",
-	"stun_server", "stun_server_tcp"
+	"cert_mode", "mtu", "ctrl_port", "tunnel_port", "no_punch", "rtx", "compress",
+	"fec", "no_nat", "no_tun", "allow_mapping", "input", "output", "port_mapping",
+	"udp_stun", "tcp_stun"
 }
 
 local web_order = {
 	"network_code", "server", "ip", "device_id", "device_name", "password", "tun_name",
-	"cert_mode", "mtu", "port", "no_punch", "use_channel_type", "compressor",
-	"use_fec", "no_proxy", "no_tun", "allow_wire_guard", "in_ips", "out_ips", "mapping",
-	"stun_server", "stun_server_tcp"
+	"cert_mode", "mtu", "tunnel_port", "no_punch", "rtx", "compress",
+	"fec", "no_nat", "no_tun", "allow_mapping", "input", "output", "port_mapping",
+	"udp_stun", "tcp_stun"
 }
 
 local server_order = {
@@ -150,11 +150,11 @@ local server_order = {
 
 local list_keys = {
 	server = true,
-	in_ips = true,
-	out_ips = true,
-	mapping = true,
-	stun_server = true,
-	stun_server_tcp = true,
+	input = true,
+	output = true,
+	port_mapping = true,
+	udp_stun = true,
+	tcp_stun = true,
 	white_list = true,
 	peer_servers = true,
 	custom_nets = true
@@ -162,19 +162,19 @@ local list_keys = {
 
 local bool_keys = {
 	no_punch = true,
-	use_channel_type = true,
-	compressor = true,
-	use_fec = true,
-	no_proxy = true,
+	rtx = true,
+	compress = true,
+	fec = true,
+	no_nat = true,
 	no_tun = true,
-	allow_wire_guard = true,
+	allow_mapping = true,
 	persistence = true
 }
 
 local number_keys = {
 	mtu = true,
-	cmd_port = true,
-	port = true,
+	ctrl_port = true,
+	tunnel_port = true,
 	lease_duration = true
 }
 
@@ -188,6 +188,21 @@ local required_string_keys = {
 	web_bind = true,
 	network = true,
 	username = true
+}
+
+local legacy_key_aliases = {
+	cmd_port = "ctrl_port",
+	port = "tunnel_port",
+	use_channel_type = "rtx",
+	compressor = "compress",
+	use_fec = "fec",
+	no_proxy = "no_nat",
+	allow_wire_guard = "allow_mapping",
+	in_ips = "input",
+	out_ips = "output",
+	mapping = "port_mapping",
+	stun_server = "udp_stun",
+	stun_server_tcp = "tcp_stun"
 }
 
 local function trim(v)
@@ -381,6 +396,7 @@ end
 function M.read_toml(path, defaults)
 	local data = clone_defaults(defaults or {})
 	local current_section = ""
+	local canonical_seen = {}
 
 	if not fs.access(path) then
 		return data
@@ -404,7 +420,14 @@ function M.read_toml(path, defaults)
 							data.custom_nets[#data.custom_nets + 1] = value
 						end
 					else
-						data[key] = parse_value(key, raw)
+						local target_key = legacy_key_aliases[key] or key
+						local is_legacy = target_key ~= key
+						if not (is_legacy and canonical_seen[target_key]) then
+							data[target_key] = parse_value(target_key, raw)
+							if not is_legacy then
+								canonical_seen[target_key] = true
+							end
+						end
 					end
 				end
 			end
@@ -525,7 +548,7 @@ function M.ensure_web_toml_from_uci(uci)
 	end
 
 	local data = clone_defaults(client_defaults)
-	data.cmd_port = nil
+	data.ctrl_port = nil
 	for toml_key, uci_key in pairs(web_option_map) do
 		if is_list_key(toml_key) then
 			local val = uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key) or data[toml_key]
@@ -615,7 +638,7 @@ function M.export_uci_to_toml(uci)
 			end
 		end
 	end
-	web.cmd_port = nil
+	web.ctrl_port = nil
 
 	for toml_key, uci_key in pairs(server_option_map) do
 		if is_list_key(toml_key) then
