@@ -705,4 +705,8 @@ function M.get_server_summary(uci)
 	return M.read_toml(server_toml, server_defaults)
 end
 
+function M.has_any_section(uci, config, stype)
+	return uci:get_first(config, stype) ~= nil
+end
+
 return M

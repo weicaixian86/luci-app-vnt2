@@ -3,11 +3,10 @@ local fs = require "nixio.fs"
 local nixio = require "nixio"
 local util = require "luci.util"
 local sys = require "luci.sys"
+local uci = luci.model.uci.cursor()
 local toml = require "luci.model.vnt2_toml"
 
-toml.ensure_toml_files(luci.model.uci.cursor())
-toml.sync_toml_to_uci(luci.model.uci.cursor())
-luci.model.uci.cursor():commit("vnt2")
+toml.ensure_toml_files(uci)
 
 local m = Map("vnt2", translate("VNT2"))
 m.description = translate(
@@ -16,10 +15,12 @@ m.description = translate(
 
 m:section(SimpleSection).template = "vnt2/vnt2_status"
 
-m.on_after_commit = function(self)
+local function export_toml_from_uci(self)
 	toml.export_uci_to_toml(self.uci)
-	self.uci:commit("vnt2")
 end
+
+m.on_after_save = export_toml_from_uci
+m.on_after_commit = export_toml_from_uci
 
 local function trim(v)
 	if v == nil then
