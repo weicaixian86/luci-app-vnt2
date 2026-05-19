@@ -82,8 +82,8 @@ local function write_uci_list(cursor, config, section, option, value)
 	local items = split_words(value)
 
 	cursor:delete(config, section, option)
-	for _, item in ipairs(items) do
-		cursor:add_list(config, section, option, item)
+	if #items > 0 then
+		cursor:set_list(config, section, option, items)
 	end
 end
 
