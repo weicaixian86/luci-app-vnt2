@@ -496,7 +496,7 @@ local function maybe_repair_mojibake(path, content)
 end
 
 local function get_log_content(path)
-	return textutil.read_text_file(path)
+	return textutil.read_log_file(path)
 end
 
 local function parse_state_file(path)
@@ -523,7 +523,7 @@ local function parse_state_file(path)
 	end
 
 	out.state = textutil.sanitize_text(out.state)
-	out.message = textutil.normalize_text(out.message)
+	out.message = textutil.normalize_log_text(out.message)
 	out.asset = textutil.sanitize_text(out.asset)
 	out.tag = textutil.sanitize_text(out.tag)
 	out.arch = textutil.sanitize_text(out.arch)

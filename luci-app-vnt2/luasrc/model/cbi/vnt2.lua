@@ -38,6 +38,55 @@ local function trim(v)
 	return ""
 end
 
+local function split_words(value)
+	local items = {}
+
+	if type(value) == "table" then
+		for _, item in ipairs(value) do
+			item = trim(item)
+			for word in item:gmatch("%S+") do
+				word = trim(word)
+				if word ~= "" then
+					items[#items + 1] = word
+				end
+			end
+		end
+		return items
+	end
+
+	value = trim(value)
+	if value == "" then
+		return items
+	end
+
+	for item in value:gmatch("%S+") do
+		item = trim(item)
+		if item ~= "" then
+			items[#items + 1] = item
+		end
+	end
+
+	return items
+end
+
+local function read_uci_list_or_words(cursor, config, section, option)
+	local value = cursor:get_list(config, section, option)
+	if type(value) == "table" and #value > 0 then
+		return split_words(value)
+	end
+
+	return split_words(cursor:get(config, section, option))
+end
+
+local function write_uci_list(cursor, config, section, option, value)
+	local items = split_words(value)
+
+	cursor:delete(config, section, option)
+	for _, item in ipairs(items) do
+		cursor:add_list(config, section, option, item)
+	end
+end
+
 local function default_device_name()
 	local model = trim(fs.readfile("/proc/device-tree/model") or "")
 	local hostname = trim(fs.readfile("/proc/sys/kernel/hostname") or "")
@@ -1272,6 +1321,15 @@ vnt2_forward:value("vnt2fwwan", translate("允许从 VNT2 到 WAN"))
 vnt2_forward:value("lanfwvnt2", translate("允许从 LAN 到 VNT2"))
 vnt2_forward:value("wanfwvnt2", translate("允许从 WAN 到 VNT2"))
 vnt2_forward.widget = "checkbox"
+vnt2_forward.cfgvalue = function(self, section)
+	return read_uci_list_or_words(self.map.uci, self.map.config, section, self.option)
+end
+vnt2_forward.write = function(self, section, value)
+	write_uci_list(self.map.uci, self.map.config, section, self.option, value)
+end
+vnt2_forward.remove = function(self, section)
+	self.map.uci:delete(self.map.config, section, self.option)
+end
 
 local udp_stun = s:taboption("stun", DynamicList, "udp_stun", translate("UDP STUN 列表"),
 	translate("不带端口时通常默认使用 3478"))

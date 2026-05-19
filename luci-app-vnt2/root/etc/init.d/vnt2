@@ -1701,12 +1701,16 @@ prepare_cli_runtime() {
 prepare_client_network_runtime() {
 	local cfg="$1"
 	local conf_file="$2"
-	local bind_dev="" forward_list="" tun_name no_tun no_nat
+	local bind_dev="" forward_list="" forward_raw="" tun_name no_tun no_nat
 
 	VNT2_FORWARD_LIST=""
 	if [ -n "$cfg" ]; then
 		config_get bind_dev "$cfg" "bind_dev"
 		config_list_foreach "$cfg" vnt2_forward append_forward_item
+		if [ -z "$VNT2_FORWARD_LIST" ]; then
+			config_get forward_raw "$cfg" "vnt2_forward"
+			append_forward_items_from_string "$forward_raw"
+		fi
 		forward_list="${VNT2_FORWARD_LIST}"
 	fi
 
@@ -1733,6 +1737,18 @@ append_forward_item() {
 	else
 		VNT2_FORWARD_LIST="${value}"
 	fi
+}
+
+append_forward_items_from_string() {
+	local values="$1"
+	local item
+
+	values="$(trim_value "$values")"
+	[ -n "$values" ] || return 0
+
+	for item in $values; do
+		append_forward_item "$item"
+	done
 }
 
 append_server_item() {

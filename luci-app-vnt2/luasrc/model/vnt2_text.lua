@@ -37,6 +37,76 @@ local function run_iconv_command(cmd)
 	return nil
 end
 
+local log_message_exact_map = {
+	["legacy default server detected, cleared client server list"] = "检测到旧默认服务器地址，已清空客户端服务器列表",
+	["client config missing network_code"] = "客户端配置缺少 network_code",
+	["client config server list format is invalid"] = "客户端配置中的服务器地址列表格式无效",
+	["start requested"] = "收到启动请求",
+	["start command submitted"] = "启动命令已提交",
+	["client runtime preparation failed"] = "客户端运行环境准备失败",
+	["not enabled, skip start"] = "未启用，跳过启动",
+	["start failed: missing executable vnt2_web"] = "启动失败：缺少可执行文件 vnt2_web",
+	["start failed: client TOML validation failed"] = "启动失败：客户端 TOML 配置校验失败",
+	["start failed: client network runtime preparation failed"] = "启动失败：客户端网络运行环境准备失败",
+	["vnts2 disabled, skip start"] = "vnts2 未启用，跳过启动",
+	["start failed: missing usable vnts2 binary"] = "启动失败：缺少可用的 vnts2 程序",
+	["server runtime preparation failed"] = "服务端运行环境准备失败",
+	["service start flow begin"] = "服务启动流程开始",
+	["UCI to TOML export completed"] = "UCI 到 TOML 导出完成",
+	["UCI to TOML export failed, continue with existing config"] = "UCI 到 TOML 导出失败，继续使用现有配置",
+	["vnt2_cli config section not found"] = "未找到 vnt2_cli 配置节",
+	["vnt2_web config section not found"] = "未找到 vnt2_web 配置节",
+	["vnts2 config section not found"] = "未找到 vnts2 配置节",
+	["start_service finished"] = "服务启动流程结束",
+	["service stop flow begin"] = "服务停止流程开始",
+	["service stopped"] = "服务已停止",
+	["existing CLI/CTRL incomplete, trying auto-download or uploaded fallback"] = "现有 CLI/CTRL 不完整，正在尝试自动下载或回退到已上传程序",
+	["start failed: missing vnt2_cli or vnt2_ctrl"] = "启动失败：缺少 vnt2_cli 或 vnt2_ctrl",
+	["start failed: vnt2_ctrl missing after recovery"] = "启动失败：恢复后仍缺少 vnt2_ctrl",
+	["vnt2_cli disabled, skip start"] = "vnt2_cli 未启用，跳过启动",
+	["bundle missing vnt2_cli or vnt2_ctrl"] = "压缩包中缺少 vnt2_cli 或 vnt2_ctrl",
+	["install CLI bundle to /usr/bin failed"] = "安装 CLI 程序包到 /usr/bin 失败",
+	["bundle missing vnt2_web"] = "压缩包中缺少 vnt2_web",
+	["install web bundle to /usr/bin failed"] = "安装 Web 程序包到 /usr/bin 失败",
+	["bundle missing usable vnts2 or vnts"] = "压缩包中缺少可用的 vnts2 或 vnts",
+	["install server bundle to /usr/bin failed"] = "安装服务端程序包到 /usr/bin 失败"
+}
+
+local log_message_pattern_rules = {
+	{ "^client config file missing: (.+)$", "客户端配置文件不存在：%1" },
+	{ "^server config file missing: (.+)$", "服务端配置文件不存在：%1" },
+	{ "^existing CLI/CTRL detected: cli=(.+) ctrl=(.+)$", "检测到现有 CLI/CTRL：cli=%1 ctrl=%2" },
+	{ "^starting (.+) with config (.+)$", "正在启动 %1，配置文件：%2" },
+	{ "^using (.+) on (.+), conf=(.+)$", "使用 %1 监听 %2，配置文件：%3" },
+	{ "^checking (.+) releases list: (.+)$", "正在检查 %1 的 Releases 列表：%2" },
+	{ "^checking release endpoint: (.+)$", "正在检查发布接口：%1" },
+	{ "^checking releases list: (.+)$", "正在检查 Releases 列表：%1" },
+	{ "^failed to create install directory (.+)$", "创建安装目录失败：%1" },
+	{ "^failed to copy uploaded binary to (.+) from (.+)$", "复制已上传程序失败：目标=%1 来源=%2" },
+	{ "^failed to chmod uploaded binary (.+)$", "设置已上传程序执行权限失败：%1" },
+	{ "^uploaded binary not found after install (.+)$", "安装后未找到已上传程序：%1" },
+	{ "^mirror (.+) not supported for repo (.+), fallback to (.+)$", "镜像 %1 不支持仓库 %2，已回退到 %3" },
+	{ "^cached bundle found for (.+), reuse (.+)$", "发现 %1 的缓存程序包，复用目录：%2" },
+	{ "^query target release repo=(.+) tag=(.+) arch=(.+) scope=(.+)$", "准备查询发行版：repo=%1 tag=%2 arch=%3 scope=%4" },
+	{ "^querying (.+) release repo=(.+) tag=(.+) mirror=(.+) arch=(.+)$", "正在查询 %1 发行版：repo=%2 tag=%3 mirror=%4 arch=%5" },
+	{ "^release query failed repo=(.+) tag=(.+) mirror=(.+)$", "发行版查询失败：repo=%1 tag=%2 mirror=%3" },
+	{ "^release query ok: (.+)$", "发行版查询成功：%1" },
+	{ "^no release asset matched arch=(.+) scope=(.+)$", "未找到匹配的发行资源：arch=%1 scope=%2" },
+	{ "^selected asset (.+)$", "已选择发行资源：%1" },
+	{ "^reusing downloaded asset (.+)$", "复用已下载资源：%1" },
+	{ "^cached asset invalid, remove and redownload (.+)$", "缓存资源无效，已删除并重新下载：%1" },
+	{ "^asset download failed tool=(.+) url=(.+)$", "资源下载失败：工具=%1 地址=%2" },
+	{ "^downloaded asset invalid or corrupted (.+)$", "已下载资源无效或已损坏：%1" },
+	{ "^extract failed, remove cache and retry (.+)$", "解压失败，已删除缓存并重试：%1" },
+	{ "^retry asset download failed tool=(.+) url=(.+)$", "重试下载资源失败：工具=%1 地址=%2" },
+	{ "^retried asset still invalid (.+)$", "重试后资源仍然无效：%1" },
+	{ "^extract asset failed (.+)$", "解压资源失败：%1" },
+	{ "^CLI installed: cli=(.+) ctrl=(.+)$", "CLI 安装完成：cli=%1 ctrl=%2" },
+	{ "^web installed: web=(.+)$", "Web 安装完成：web=%1" },
+	{ "^server installed: server=(.+)$", "服务端安装完成：server=%1" },
+	{ "^(.+) auto download failed, fallback to uploaded binary (.+)$", "%1 自动下载失败，已回退到已上传程序：%2" }
+}
+
 function M.sanitize_text(content)
 	content = tostring(content or "")
 	content = content:gsub("\27%[[%d;?]*[%a]", "")
@@ -44,6 +114,51 @@ function M.sanitize_text(content)
 	content = content:gsub("%z", "")
 	content = content:gsub("\r", "")
 	return content
+end
+
+function M.translate_log_message(message)
+	message = tostring(message or "")
+	if message == "" then
+		return message
+	end
+
+	if log_message_exact_map[message] then
+		return log_message_exact_map[message]
+	end
+
+	for _, rule in ipairs(log_message_pattern_rules) do
+		local translated, count = message:gsub(rule[1], rule[2])
+		if count > 0 then
+			return translated
+		end
+	end
+
+	return message
+end
+
+function M.translate_log_text(content)
+	content = tostring(content or "")
+	if content == "" then
+		return content
+	end
+
+	local has_trailing_newline = content:sub(-1) == "\n"
+	local lines = {}
+
+	for line in (content .. "\n"):gmatch("(.-)\n") do
+		local prefix, message = line:match("^(.- : )(.*)$")
+		if prefix then
+			lines[#lines + 1] = prefix .. M.translate_log_message(message)
+		else
+			lines[#lines + 1] = M.translate_log_message(line)
+		end
+	end
+
+	local translated = table.concat(lines, "\n")
+	if not has_trailing_newline and translated:sub(-1) == "\n" then
+		translated = translated:sub(1, -2)
+	end
+	return translated
 end
 
 function M.looks_like_mojibake(content)
@@ -91,6 +206,14 @@ end
 
 function M.normalize_text(content)
 	return M.sanitize_text(M.repair_mojibake_text(content))
+end
+
+function M.normalize_log_text(content)
+	return M.translate_log_text(M.normalize_text(content))
+end
+
+function M.read_log_file(path)
+	return M.normalize_log_text(M.read_text_file(path))
 end
 
 return M
