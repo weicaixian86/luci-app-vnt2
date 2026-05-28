@@ -42,6 +42,11 @@ opkg list-installed | grep luci-app-vnt2
 apk add --allow-untrusted /tmp/luci-app-vnt2*.apk
 apk info luci-app-vnt2
 ```
+## 卸载方法
+```sh
+opkg remove luci-app-vnt2
+opkg remove vnt2
+```
 
 ## 在 OpenWrt 源码树中编译
 
