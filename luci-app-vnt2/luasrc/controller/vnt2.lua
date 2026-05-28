@@ -6,6 +6,7 @@ local http = require "luci.http"
 local uci = require "luci.model.uci".cursor()
 local toml = require "luci.model.vnt2_toml"
 local textutil = require "luci.model.vnt2_text"
+local LOG_DISPLAY_LINES = 300
 
 function index()
 	if not fs.access("/etc/config/vnt2") and not fs.access(toml.CLIENT_TOML) and not fs.access(toml.SERVER_TOML) then
@@ -561,8 +562,8 @@ local function maybe_repair_mojibake(path, content)
 	return content
 end
 
-local function get_log_content(path)
-	return textutil.read_log_file(path)
+local function get_log_content(path, max_lines)
+	return textutil.read_log_file(path, max_lines)
 end
 
 local function parse_state_file(path)
@@ -979,7 +980,7 @@ local function clear_log_file(path)
 end
 
 function get_client_log()
-	plain_write(get_log_content("/tmp/vnt2-cli.log"))
+	plain_write(get_log_content("/tmp/vnt2-cli.log", LOG_DISPLAY_LINES))
 end
 
 function clear_client_log()
@@ -988,7 +989,7 @@ function clear_client_log()
 end
 
 function get_web_log()
-	plain_write(get_log_content("/tmp/vnt2-web.log"))
+	plain_write(get_log_content("/tmp/vnt2-web.log", LOG_DISPLAY_LINES))
 end
 
 function clear_web_log()
@@ -997,7 +998,7 @@ function clear_web_log()
 end
 
 function get_server_log()
-	plain_write(get_log_content("/tmp/vnts2.log"))
+	plain_write(get_log_content("/tmp/vnts2.log", LOG_DISPLAY_LINES))
 end
 
 function clear_server_log()
@@ -1006,7 +1007,7 @@ function clear_server_log()
 end
 
 function get_download_log()
-	plain_write(get_log_content("/tmp/vnt2-download.log"))
+	plain_write(get_log_content("/tmp/vnt2-download.log", LOG_DISPLAY_LINES))
 end
 
 function clear_download_log()

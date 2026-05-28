@@ -3,6 +3,7 @@ local sys = require "luci.sys"
 local util = require "luci.util"
 
 local M = {}
+local tail_available = sys.call("command -v tail >/dev/null 2>&1") == 0
 
 local mojibake_markers = {
 	string.char(233, 150, 186, 63),
@@ -225,8 +226,54 @@ function M.normalize_log_text(content)
 	return M.translate_log_text(M.normalize_text(content))
 end
 
-function M.read_log_file(path)
-	return M.normalize_log_text(M.read_text_file(path))
+local function keep_last_lines(content, max_lines)
+	content = tostring(content or "")
+	max_lines = tonumber(max_lines or 0) or 0
+	if max_lines <= 0 or content == "" then
+		return content
+	end
+
+	local has_trailing_newline = content:sub(-1) == "\n"
+	local lines = {}
+	for line in (content .. "\n"):gmatch("(.-)\n") do
+		lines[#lines + 1] = line
+	end
+
+	if has_trailing_newline and lines[#lines] == "" then
+		table.remove(lines, #lines)
+	end
+
+	if #lines <= max_lines then
+		return table.concat(lines, "\n") .. (has_trailing_newline and #lines > 0 and "\n" or "")
+	end
+
+	local start_idx = #lines - max_lines + 1
+	local out = {}
+	for i = start_idx, #lines do
+		out[#out + 1] = lines[i]
+	end
+
+	return table.concat(out, "\n") .. (has_trailing_newline and #out > 0 and "\n" or "")
+end
+
+function M.read_log_file(path, max_lines)
+	local limit = tonumber(max_lines or 0) or 0
+	if limit <= 0 then
+		return M.normalize_log_text(M.read_text_file(path))
+	end
+
+	local content = ""
+	if path and path ~= "" and fs.access(path) then
+		if tail_available then
+			content = sys.exec(string.format("tail -n %d %s 2>/dev/null", limit, util.shellquote(path))) or ""
+		end
+		if content == "" then
+			content = keep_last_lines(M.read_text_file(path), limit)
+			return M.normalize_log_text(content)
+		end
+	end
+
+	return M.normalize_log_text(content)
 end
 
 return M
