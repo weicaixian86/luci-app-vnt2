@@ -421,6 +421,30 @@ local function parse_array(inner)
 	return out
 end
 
+local function get_client_uci_value(uci, section, option)
+	if not section then
+		return nil
+	end
+
+	local value = uci:get("vnt2", section, option)
+	if value ~= nil then
+		return value
+	end
+
+	if option == "tunnel_port" then
+		return uci:get("vnt2", section, "port")
+	end
+
+	if option == "device_mode" then
+		local legacy = uci:get("vnt2", section, "no_tun")
+		if legacy ~= nil then
+			return (trim(legacy) == "1" or trim(legacy) == "true") and "no" or "tun"
+		end
+	end
+
+	return nil
+end
+
 local function strip_toml_comment(line)
 	local quoted = false
 	local escaped = false
@@ -745,7 +769,7 @@ function M.ensure_client_toml_from_uci(uci)
 				data[toml_key] = normalize_list(val)
 			end
 		else
-			local val = section and uci:get("vnt2", section, uci_key) or nil
+			local val = get_client_uci_value(uci, section, uci_key)
 			if val ~= nil then
 				data[toml_key] = trim(val)
 			end
@@ -783,11 +807,14 @@ function M.ensure_web_toml_from_uci(uci)
 				data[toml_key] = normalize_list(val)
 			end
 		else
-			local val = section and uci:get("vnt2", section, uci_key) or nil
+			local val = get_client_uci_value(uci, section, uci_key)
 			if val ~= nil then
 				data[toml_key] = trim(val)
 			end
 		end
+	end
+	if #normalize_list(data.tunnel_addr) > 0 then
+		data.tunnel_port = nil
 	end
 
 	M.write_toml(web_toml, data, web_order)
@@ -860,7 +887,7 @@ function M.export_uci_to_toml(uci)
 				cli[toml_key] = normalize_list(cli_section and uci:get_list("vnt2", cli_section, uci_key) or {})
 			end
 		else
-			local val = cli_section and uci:get("vnt2", cli_section, uci_key) or nil
+			local val = get_client_uci_value(uci, cli_section, uci_key)
 			if val ~= nil then
 				cli[toml_key] = trim(val)
 			end
@@ -877,13 +904,16 @@ function M.export_uci_to_toml(uci)
 				web[toml_key] = normalize_list(cli_section and uci:get_list("vnt2", cli_section, uci_key) or {})
 			end
 		else
-			local val = cli_section and uci:get("vnt2", cli_section, uci_key) or nil
+			local val = get_client_uci_value(uci, cli_section, uci_key)
 			if val ~= nil then
 				web[toml_key] = trim(val)
 			end
 		end
 	end
 	web.ctrl_port = nil
+	if #normalize_list(web.tunnel_addr) > 0 then
+		web.tunnel_port = nil
+	end
 
 	for toml_key, uci_key in pairs(server_option_map) do
 		if is_list_key(toml_key) then
@@ -942,6 +972,8 @@ function M.sync_toml_to_uci(uci)
 			set_uci_scalar(uci, "vnt2", cli_section, uci_key, cli[toml_key])
 		end
 	end
+	uci:delete("vnt2", cli_section, "no_tun")
+	uci:delete("vnt2", cli_section, "port")
 
 	for toml_key, uci_key in pairs(server_option_map) do
 		if is_list_key(toml_key) then
