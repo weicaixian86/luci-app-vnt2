@@ -296,6 +296,22 @@ ensure_exec() {
 	return 0
 }
 
+is_elf_binary() {
+	local bin="$1"
+	local magic
+
+	[ -s "$bin" ] || return 1
+	magic="$(od -An -tx1 -N4 "$bin" 2>/dev/null | tr -d '[:space:]')"
+	[ "$magic" = "7f454c46" ]
+}
+
+ensure_elf_exec() {
+	local bin="$1"
+
+	ensure_exec "$bin" || return 1
+	is_elf_binary "$bin"
+}
+
 export_toml_from_uci() {
 	lua - <<'EOF' >/dev/null 2>&1
 package.path = package.path .. ";/usr/lib/lua/?.lua;/usr/lib/lua/?/init.lua"
@@ -456,6 +472,7 @@ download_file() {
 	local url="$1"
 	local out="$2"
 	local purpose="${3:-generic}"
+	local mirror="${4:-auto}"
 	local downloader
 	local rc
 	local actual_url
@@ -464,7 +481,7 @@ download_file() {
 	DOWNLOAD_LAST_TOOL="$downloader"
 	DOWNLOAD_LAST_URL=""
 
-	for actual_url in $(get_download_url_candidates "$url"); do
+	for actual_url in $(get_download_url_candidates_for_mirror "$url" "$mirror"); do
 		DOWNLOAD_LAST_URL="$actual_url"
 
 		case "$downloader" in
@@ -541,6 +558,23 @@ get_download_url_candidates() {
 	fi
 }
 
+get_download_url_candidates_for_mirror() {
+	local url="$1"
+	local mirror="$2"
+	local raw_url
+
+	url="$(trim_value "$url")"
+	raw_url="$(strip_github_proxy_url "$url")"
+	mirror="$(normalize_download_mirror "$mirror")"
+	[ -n "$raw_url" ] || return 0
+
+	if [ "$mirror" = "github" ]; then
+		printf '%s\n' "$raw_url"
+	else
+		get_download_url_candidates "$raw_url"
+	fi
+}
+
 normalize_release_tag() {
 	local tag="$1"
 	tag="$(trim_value "$tag")"
@@ -579,11 +613,19 @@ normalize_download_mirror() {
 
 	mirror="$(trim_value "$mirror" | tr 'A-Z' 'a-z')"
 	case "$mirror" in
-		auto|cn|china|domestic|'')
+		auto|cn|china|domestic|''|gh-proxy|ghproxy|proxy)
+		if [ "$mirror" = "gh-proxy" ] || [ "$mirror" = "ghproxy" ] || [ "$mirror" = "proxy" ]; then
+			echo "gh-proxy"
+		else
 			echo "auto"
+		fi
 		;;
-		github|gitee|gitlab|cloudflare)
-			echo "$mirror"
+		github)
+			echo "github"
+		;;
+		gitee|gitlab|cloudflare)
+		# Keep old UCI values readable, but use the supported GitHub transport.
+			echo "auto"
 		;;
 		*)
 			echo "auto"
@@ -631,24 +673,16 @@ get_download_mirror_candidates() {
 
 	case "$mirror" in
 		auto)
-			if repo_to_mirror_project "$repo" >/dev/null 2>&1; then
-				printf '%s\n' "gitee" "cloudflare" "gitlab" "github"
-			else
-				echo "github"
-			fi
+			printf '%s\n' "gh-proxy" "github"
+		;;
+		gh-proxy)
+			printf '%s\n' "gh-proxy" "github"
 		;;
 		github)
 			echo "github"
 		;;
-		gitee|gitlab|cloudflare)
-			if repo_to_mirror_project "$repo" >/dev/null 2>&1; then
-				printf '%s\n' "$mirror" "github"
-			else
-				echo "github"
-			fi
-		;;
 		*)
-			echo "github"
+			printf '%s\n' "gh-proxy" "github"
 		;;
 	esac
 }
@@ -659,22 +693,14 @@ get_download_mirror_cache_key() {
 
 	mirror="$(normalize_download_mirror "$mirror")"
 	case "$mirror" in
-		auto)
-			if repo_to_mirror_project "$repo" >/dev/null 2>&1; then
-				echo "auto"
-			else
-				echo "github"
-			fi
+		auto|gh-proxy)
+			echo "gh-proxy"
 		;;
-		gitee|gitlab|cloudflare)
-			if repo_to_mirror_project "$repo" >/dev/null 2>&1; then
-				echo "$mirror"
-			else
-				echo "github"
-			fi
+		github)
+			echo "github"
 		;;
 		*)
-			echo "github"
+			echo "gh-proxy"
 		;;
 	esac
 }
@@ -682,50 +708,27 @@ get_download_mirror_cache_key() {
 get_release_list_url() {
 	local repo="$1"
 	local mirror="$2"
-	local effective_mirror proj
+	local effective_mirror
 
 	[ -n "$repo" ] || repo="vnt-dev/vnt"
 	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
 
-	if [ "$effective_mirror" = "github" ]; then
-		echo "https://api.github.com/repos/${repo}/releases"
-		return 0
-	fi
-
-	proj="$(repo_to_mirror_project "$repo")" || return 1
-	case "$effective_mirror" in
-		gitee)
-			echo "https://gitee.com/api/v5/repos/whzhni/${proj}/releases"
-		;;
-		gitlab)
-			echo "https://gitlab.com/api/v4/projects/whzhni%2F${proj}/releases"
-		;;
-		cloudflare)
-			echo "https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev/${proj}/releases"
-		;;
-		*)
-			echo "https://api.github.com/repos/${repo}/releases"
-		;;
-	esac
+	# Release metadata always comes from GitHub. The transport is selected by
+	# download_file, which tries gh-proxy before the original URL.
+	echo "https://api.github.com/repos/${repo}/releases"
 }
 
 get_release_api_url() {
 	local repo="$1"
 	local tag="$2"
 	local mirror="$3"
-	local resolved_tag effective_mirror
+	local resolved_tag
 
 	[ -n "$repo" ] || repo="vnt-dev/vnt"
-	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
-
-	if [ "$effective_mirror" != "github" ]; then
-		get_release_list_url "$repo" "$effective_mirror"
-		return 0
-	fi
-
 	resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
 
 	if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
+		echo "https://api.github.com/repos/${repo}/releases"
 		echo "https://api.github.com/repos/${repo}/releases/latest"
 	else
 		echo "https://api.github.com/repos/${repo}/releases/tags/${resolved_tag}"
@@ -736,31 +739,23 @@ get_release_api_candidates() {
 	local repo="$1"
 	local tag="$2"
 	local mirror="$3"
-	local resolved_tag normalized_tag effective_mirror
+	local resolved_tag normalized_tag
 
 	[ -n "$repo" ] || repo="vnt-dev/vnt"
-	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
-
-	if [ "$effective_mirror" != "github" ]; then
-		get_release_list_url "$repo" "$effective_mirror"
-		return 0
-	fi
-
 	resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
 	normalized_tag="$(normalize_release_tag "$resolved_tag")"
 
 	if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
+		echo "https://api.github.com/repos/${repo}/releases"
 		echo "https://api.github.com/repos/${repo}/releases/latest"
 		return 0
 	fi
 
 	echo "https://api.github.com/repos/${repo}/releases/tags/${resolved_tag}"
 
-	if [ -n "$normalized_tag" ] && [ "$resolved_tag" = "$normalized_tag" ]; then
+	if [ -n "$normalized_tag" ]; then
 		echo "https://api.github.com/repos/${repo}/releases/tags/v${normalized_tag}"
 	fi
-
-	echo "https://api.github.com/repos/${repo}/releases/latest"
 }
 
 extract_release_urls() {
@@ -779,6 +774,8 @@ BEGIN {
 	in_array = 0
 	depth = 0
 	started = 0
+	in_string = 0
+	escaped = 0
 	out = ""
 }
 {
@@ -803,8 +800,21 @@ BEGIN {
 			continue
 		}
 		out = out c
-		if (c == "{") depth++
-		if (c == "}") {
+		if (in_string) {
+			if (escaped) {
+				escaped = 0
+			} else if (c == "\\") {
+				escaped = 1
+			} else if (c == "\"") {
+				in_string = 0
+			}
+			continue
+		}
+		if (c == "\"") {
+			in_string = 1
+		} else if (c == "{") {
+			depth++
+		} else if (c == "}") {
 			depth--
 			if (depth == 0) {
 				print out
@@ -828,6 +838,8 @@ BEGIN {
 	in_array = 0
 	depth = 0
 	started = 0
+	in_string = 0
+	escaped = 0
 	out = ""
 }
 {
@@ -852,8 +864,21 @@ BEGIN {
 			continue
 		}
 		out = out c
-		if (c == "{") depth++
-		if (c == "}") {
+		if (in_string) {
+			if (escaped) {
+				escaped = 0
+			} else if (c == "\\") {
+				escaped = 1
+			} else if (c == "\"") {
+				in_string = 0
+			}
+			continue
+		}
+		if (c == "\"") {
+			in_string = 1
+		} else if (c == "{") {
+			depth++
+		} else if (c == "}") {
 			depth--
 			if (depth == 0) {
 				if (out ~ "\"tag_name\"[[:space:]]*:[[:space:]]*\"" wanted "\"") {
@@ -861,6 +886,8 @@ BEGIN {
 					exit
 				}
 				started = 0
+				in_string = 0
+				escaped = 0
 				out = ""
 			}
 		}
@@ -876,208 +903,164 @@ fetch_release_metadata_from_mirror() {
 	local tag="$2"
 	local json_file="$3"
 	local mirror="$4"
-	local api_url response_tag candidate list_file resolved_tag normalized_tag effective_mirror
+	local api_url response_tag candidate requested_tag effective_mirror first_file
 
 	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
-
-	if [ "$effective_mirror" != "github" ]; then
-		list_file="${json_file}.list"
-		api_url="$(get_release_list_url "$repo" "$effective_mirror")"
-		log_download "checking ${effective_mirror} releases list: ${api_url}"
-		if download_file "$api_url" "$list_file" "api"; then
-			resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
-			normalized_tag="$(normalize_release_tag "$resolved_tag")"
-
-			if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
-				if extract_first_release_object "$list_file" "$json_file"; then
-					echo "${api_url}#latest-from-list"
-					return 0
-				fi
-			else
-				if extract_release_object_by_tag "$list_file" "$json_file" "$resolved_tag"; then
-					echo "${api_url}#tag-from-list:${resolved_tag}"
-					return 0
-				fi
-				if [ -n "$normalized_tag" ] && extract_release_object_by_tag "$list_file" "$json_file" "v${normalized_tag}"; then
-					echo "${api_url}#tag-from-list:v${normalized_tag}"
-					return 0
-				fi
-				if extract_first_release_object "$list_file" "$json_file"; then
-					echo "${api_url}#fallback-first"
-					return 0
-				fi
-			fi
-		fi
-
-		return 1
-	fi
+	requested_tag="$(normalize_release_tag "$tag")"
 
 	for candidate in $(get_release_api_candidates "$repo" "$tag" "$effective_mirror"); do
 		log_download "checking release endpoint: ${candidate}"
-		if download_file "$candidate" "$json_file" "api"; then
+		if download_file "$candidate" "$json_file" "api" "$effective_mirror"; then
 			response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
-			if [ -n "$response_tag" ]; then
+			response_tag="$(normalize_release_tag "$response_tag")"
+			case "$candidate" in
+				*/releases)
+					first_file="${json_file}.first"
+					if extract_first_release_object "$json_file" "$first_file"; then
+						mv -f "$first_file" "$json_file"
+						response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
+						response_tag="$(normalize_release_tag "$response_tag")"
+					fi
+				;;
+			esac
+			if [ -n "$response_tag" ] && {
+				[ -z "$requested_tag" ] || [ "$requested_tag" = "latest" ] || [ "$response_tag" = "$requested_tag" ]
+			}; then
 				echo "$candidate"
 				return 0
+			fi
+			# A proxy may return HTTP 200 with an HTML/error body. Validate the
+			# response tag before accepting it, then try the original endpoint.
+			if [ "$effective_mirror" != "github" ] && download_file "$candidate" "$json_file" "api" "github"; then
+				response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
+				response_tag="$(normalize_release_tag "$response_tag")"
+				case "$candidate" in
+					*/releases)
+						first_file="${json_file}.first"
+						if extract_first_release_object "$json_file" "$first_file"; then
+							mv -f "$first_file" "$json_file"
+							response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
+							response_tag="$(normalize_release_tag "$response_tag")"
+						fi
+					;;
+				esac
+				if [ -n "$response_tag" ] && {
+					[ -z "$requested_tag" ] || [ "$requested_tag" = "latest" ] || [ "$response_tag" = "$requested_tag" ]
+				}; then
+					echo "$candidate#github-fallback"
+					return 0
+				fi
 			fi
 		fi
 	done
 
-	list_file="${json_file}.list"
-	api_url="$(get_release_list_url "$repo" "$effective_mirror")"
-	log_download "checking releases list: ${api_url}"
-	if download_file "$api_url" "$list_file" "api"; then
-		resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
-		normalized_tag="$(normalize_release_tag "$resolved_tag")"
-
-		if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
-			if extract_first_release_object "$list_file" "$json_file"; then
-				echo "${api_url}#latest-from-list"
-				return 0
-			fi
-		else
-			if extract_release_object_by_tag "$list_file" "$json_file" "$resolved_tag"; then
-				echo "${api_url}#tag-from-list:${resolved_tag}"
-				return 0
-			fi
-			if [ -n "$normalized_tag" ] && extract_release_object_by_tag "$list_file" "$json_file" "v${normalized_tag}"; then
-				echo "${api_url}#tag-from-list:v${normalized_tag}"
-				return 0
-			fi
-			if extract_first_release_object "$list_file" "$json_file"; then
-				echo "${api_url}#fallback-first"
-				return 0
-			fi
-		fi
-	fi
-
 	return 1
+}
+
+get_release_asset_name_candidates() {
+	local scope="$1"
+	local version="$2"
+	local arch_name="$3"
+	local prefix suffix
+
+	version="$(normalize_release_tag "$version")"
+	[ -n "$version" ] || return 1
+
+	case "$scope" in
+		cli|web)
+			prefix="vnt2"
+			suffix=".zip"
+		;;
+		server)
+			prefix="vnts2"
+			suffix=""
+		;;
+		*)
+			return 1
+		;;
+	esac
+
+	case "$arch_name" in
+		x86_64)
+			echo "${prefix}-x86_64-unknown-linux-musl-v${version}${suffix}"
+		;;
+		aarch64)
+			echo "${prefix}-aarch64-unknown-linux-musl-v${version}${suffix}"
+		;;
+		arm)
+			echo "${prefix}-arm-unknown-linux-musleabi-v${version}${suffix}"
+			echo "${prefix}-arm-unknown-linux-musleabihf-v${version}${suffix}"
+			echo "${prefix}-armv7-unknown-linux-musleabi-v${version}${suffix}"
+			echo "${prefix}-armv7-unknown-linux-musleabihf-v${version}${suffix}"
+		;;
+		mips64el)
+			echo "${prefix}-mips64el-unknown-linux-musl-v${version}${suffix}"
+			echo "${prefix}-mips64-unknown-linux-musl-v${version}${suffix}"
+		;;
+		mipsel)
+			echo "${prefix}-mipsel-unknown-linux-musl-v${version}${suffix}"
+		;;
+		mips)
+			echo "${prefix}-mips-unknown-linux-musl-v${version}${suffix}"
+		;;
+		x86)
+			echo "${prefix}-i686-unknown-linux-musl-v${version}${suffix}"
+			echo "${prefix}-x86-unknown-linux-musl-v${version}${suffix}"
+		;;
+		*)
+			echo "${prefix}-${arch_name}-unknown-linux-musl-v${version}${suffix}"
+		;;
+	esac
+}
+
+get_default_release_version() {
+	case "$1" in
+		vnt-dev/vnt)
+			echo "2.0.9"
+		;;
+		vnt-dev/vnts)
+			echo "2.0.6"
+		;;
+		*)
+			return 1
+		;;
+	esac
+}
+
+get_release_asset_url() {
+	local repo="$1"
+	local scope="$2"
+	local version="$3"
+	local arch_name="$4"
+	local asset_name
+
+	asset_name="$(get_release_asset_name_candidates "$scope" "$version" "$arch_name" | head -n1)"
+	[ -n "$asset_name" ] || return 1
+	echo "https://github.com/${repo}/releases/download/v${version}/${asset_name}"
 }
 
 select_release_asset() {
 	local json_file="$1"
-	local arch_patterns="$2"
-	local scope="$3"
-	local urls asset pattern primary_arch
+	local scope="$2"
+	local version="$3"
+	local arch_name="$4"
+	local urls url filename expected
 
 	urls="$(extract_release_urls "$json_file")"
 	[ -n "$urls" ] || return 1
-	primary_arch="$(printf '%s\n' "$arch_patterns" | awk '{print $1}')"
 
-	case "$scope" in
-		cli|web)
-			if [ -n "$primary_arch" ]; then
-				asset="$(printf '%s\n' "$urls" | grep -iE "/vnt2[-_]${primary_arch}[-_].*unknown-linux-musl.*\.zip$" | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
+	for expected in $(get_release_asset_name_candidates "$scope" "$version" "$arch_name"); do
+		while IFS= read -r url; do
+			filename="${url##*/}"
+			filename="${filename%%\?*}"
+			if [ "$filename" = "$expected" ]; then
+				echo "$url"
+				return 0
 			fi
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt2[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '\.zip$' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt2[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnt2|vnt|cli|ctrl|web)' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			asset="$(printf '%s\n' "$urls" | grep -iE '/vnt2[-_]' | head -n1)"
-			[ -n "$asset" ] && {
-				echo "$asset"
-				return 0
-			}
-
-			asset="$(printf '%s\n' "$urls" | grep -iE '/vnt(2)?[-_]' | head -n1)"
-			[ -n "$asset" ] && {
-				echo "$asset"
-				return 0
-			}
-		;;
-		server)
-			if [ -n "$primary_arch" ]; then
-				asset="$(printf '%s\n' "$urls" | grep -iE "/vnts2[-_]${primary_arch}[-_].*unknown-linux-musl[^./]*$" | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			fi
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts2[-_]' | grep -i "$pattern" | grep -i 'unknown-linux-musl' | grep -ivE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts2[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | grep -iE '(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)$' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | grep -i "$pattern" | grep -iE '(linux|musl|openwrt)' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			for pattern in $arch_patterns; do
-				asset="$(printf '%s\n' "$urls" | grep -i "$pattern" | grep -iE '(vnts2|vnts|server)' | head -n1)"
-				[ -n "$asset" ] && {
-					echo "$asset"
-					return 0
-				}
-			done
-
-			asset="$(printf '%s\n' "$urls" | grep -iE '/vnts2[-_]' | head -n1)"
-			[ -n "$asset" ] && {
-				echo "$asset"
-				return 0
-			}
-
-			asset="$(printf '%s\n' "$urls" | grep -iE '/vnts(2)?[-_]' | head -n1)"
-			[ -n "$asset" ] && {
-				echo "$asset"
-				return 0
-			}
-		;;
-	esac
-
-	asset="$(printf '%s\n' "$urls" | grep -iE '/[^/]*(vnt2|vnt|vnts2|vnts)[^/]*(\.tar\.gz|\.tgz|\.tar\.xz|\.zip)?$' | head -n1)"
-	[ -n "$asset" ] && {
-		echo "$asset"
-		return 0
-	}
+		done <<EOF
+$urls
+EOF
+	done
 
 	return 1
 }
@@ -1135,6 +1118,24 @@ validate_asset_file() {
 			return 0
 		;;
 	esac
+}
+
+validate_release_asset() {
+	local asset_file="$1"
+	local scope="$2"
+
+	validate_asset_file "$asset_file" || return 1
+	if [ "$scope" = "server" ]; then
+		case "$asset_file" in
+			*.zip|*.tar.gz|*.tgz|*.tar.xz)
+				return 0
+			;;
+			*)
+				is_elf_binary "$asset_file" || return 1
+			;;
+		esac
+	fi
+	return 0
 }
 
 extract_release_asset() {
@@ -1227,7 +1228,7 @@ normalize_server_binary_name() {
 		cp -f "$server_bin" "$normalized_bin" >/dev/null 2>&1 || return 1
 	fi
 
-	ensure_exec "$normalized_bin" || return 1
+	ensure_elf_exec "$normalized_bin" || return 1
 	echo "$normalized_bin"
 	return 0
 }
@@ -1268,26 +1269,20 @@ install_bundle_to_usrbin() {
 	local cli_bin ctrl_bin web_bin server_bin
 
 	case "$scope" in
-		cli)
+		cli|web)
 			cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
 			ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
-			ensure_exec "$cli_bin" || return 1
-			ensure_exec "$ctrl_bin" || return 1
+			web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+			ensure_elf_exec "$cli_bin" || return 1
+			ensure_elf_exec "$ctrl_bin" || return 1
+			ensure_elf_exec "$web_bin" || return 1
 			install_binary_to_usrbin "$cli_bin" "vnt2_cli" >/dev/null || return 1
 			install_binary_to_usrbin "$ctrl_bin" "vnt2_ctrl" >/dev/null || return 1
-			web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
-			if ensure_exec "$web_bin"; then
-				install_binary_to_usrbin "$web_bin" "vnt2_web" >/dev/null || return 1
-			fi
-		;;
-		web)
-			web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
-			ensure_exec "$web_bin" || return 1
 			install_binary_to_usrbin "$web_bin" "vnt2_web" >/dev/null || return 1
 		;;
 		server)
 			server_bin="$(normalize_server_binary_name "$extracted_dir")"
-			ensure_exec "$server_bin" || return 1
+			ensure_elf_exec "$server_bin" || return 1
 			install_binary_to_usrbin "$server_bin" "vnts2" >/dev/null || return 1
 		;;
 		*)
@@ -1303,14 +1298,13 @@ cache_bundle_ready() {
 	local scope="$2"
 
 	case "$scope" in
-		cli)
-			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_cli")" && ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
-		;;
-		web)
-			ensure_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+		cli|web)
+			ensure_elf_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_cli")" && \
+			ensure_elf_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")" && \
+			ensure_elf_exec "$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
 		;;
 		server)
-			ensure_exec "$(normalize_server_binary_name "$extracted_dir")"
+			ensure_elf_exec "$(normalize_server_binary_name "$extracted_dir")"
 		;;
 		*)
 			return 1
@@ -1323,9 +1317,11 @@ auto_download_bundle() {
 	local scope="$2"
 	local state_file="$3"
 
-	local auto_download download_tag download_repo download_mirror cache_mirror_key candidate_mirror api_url arch_name arch_patterns
-	local cache_key cache_dir json_file release_tag asset_url asset_name asset_file extracted_dir
-	local cli_bin ctrl_bin web_bin server_bin server_name
+	local auto_download download_tag download_repo download_mirror cache_mirror_key candidate_mirror api_url arch_name
+	local cache_key cache_dir query_dir json_file release_tag asset_url asset_name asset_file extracted_dir
+	local fallback_version fallback_url
+	local cli_bin ctrl_bin web_bin server_bin
+	asset_name=""
 
 	config_get_bool auto_download "$cfg" "auto_download" "1"
 	[ "$auto_download" = "1" ] || {
@@ -1337,54 +1333,25 @@ auto_download_bundle() {
 		server)
 			config_get download_tag "$cfg" "download_tag" "latest"
 			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnts"
-			config_get download_mirror "$cfg" "download_mirror" "auto"
+			config_get download_mirror "$cfg" "download_mirror" "gh-proxy"
 		;;
 		*)
 			config_get download_tag "$cfg" "download_tag" "latest"
 			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
-			config_get download_mirror "$cfg" "download_mirror" "auto"
+			config_get download_mirror "$cfg" "download_mirror" "gh-proxy"
 		;;
 	esac
 	[ -n "$download_tag" ] || download_tag="latest"
 	[ -n "$download_repo" ] || download_repo="vnt-dev/vnt"
 	download_mirror="$(normalize_download_mirror "$download_mirror")"
 	cache_mirror_key="$(get_download_mirror_cache_key "$download_repo" "$download_mirror")"
-	if [ "$download_mirror" != "github" ] && [ "$cache_mirror_key" = "github" ]; then
-		log_download "mirror strategy ${download_mirror} not supported for repo ${download_repo}, fallback to github"
-	fi
 	download_tag="$(resolve_v2_release_tag "$download_repo" "$download_tag")"
 	[ -n "$download_tag" ] || download_tag="latest"
 
 	arch_name="$(detect_arch_name)"
-	arch_patterns="$(detect_arch_patterns "$arch_name")"
-	cache_key="$(sanitize_name "${cache_mirror_key}_${download_repo}_${download_tag}_${arch_name}_${scope}")"
-	cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
-	json_file="${cache_dir}/release.json"
-	extracted_dir="${cache_dir}/extracted"
-
-	mkdir -p "$cache_dir"
-
-	if cache_bundle_ready "$extracted_dir" "$scope"; then
-		log_download "cached bundle found for ${scope}, reuse ${extracted_dir}"
-        write_download_state "$state_file" "cached" "reusing local cached bundle" "$(basename "$cache_dir")" "$download_tag" "$arch_name" "$extracted_dir"
-
-		if install_bundle_to_usrbin "$extracted_dir" "$scope"; then
-			case "$scope" in
-				cli)
-					uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
-					uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
-				;;
-				web)
-					uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
-				;;
-				server)
-					uci -q set ${CONF}.${cfg}.vnts2_bin="${INSTALL_BIN_DIR}/vnts2"
-				;;
-			esac
-			uci commit ${CONF} >/dev/null 2>&1
-			return 0
-		fi
-	fi
+	query_dir="${DOWNLOAD_CACHE_BASE}/query_$(sanitize_name "${cache_mirror_key}_${download_repo}_${download_tag}_${arch_name}_${scope}")"
+	json_file="${query_dir}/release.json"
+	mkdir -p "$query_dir"
 
 	log_download "query target release repo=${download_repo} tag=${download_tag} arch=${arch_name} scope=${scope}"
 	for candidate_mirror in $(get_download_mirror_candidates "$download_repo" "$download_mirror"); do
@@ -1393,14 +1360,40 @@ auto_download_bundle() {
 		api_url="$(fetch_release_metadata_from_mirror "$download_repo" "$download_tag" "$json_file" "$candidate_mirror")"
 		if [ -z "$api_url" ]; then
 			log_download "release query failed repo=${download_repo} tag=${download_tag} mirror=${candidate_mirror}"
-			continue
+			if [ "$candidate_mirror" != "github" ]; then
+				continue
+			fi
+			fallback_version="$(normalize_release_tag "$download_tag")"
+			if [ "$fallback_version" = "latest" ] || [ -z "$fallback_version" ]; then
+				fallback_version="$(get_default_release_version "$download_repo")"
+			fi
+			fallback_url="$(get_release_asset_url "$download_repo" "$scope" "$fallback_version" "$arch_name" 2>/dev/null)"
+			if [ -z "$fallback_url" ]; then
+				continue
+			fi
+			cat >"$json_file" <<EOF
+{"tag_name":"v${fallback_version}","assets":[{"browser_download_url":"${fallback_url}"}]}
+EOF
+			api_url="fallback:${fallback_url}"
+			log_download "using built-in release fallback repo=${download_repo} tag=${fallback_version} asset_url=${fallback_url}"
 		fi
 
-		log_download "release query ok: ${api_url}"
+		log_download "release query ok: ${api_url} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror}"
 		release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
 		release_tag="$(normalize_release_tag "$release_tag")"
 		[ -n "$release_tag" ] || release_tag="$download_tag"
-		asset_url="$(select_release_asset "$json_file" "$arch_patterns" "$scope")" || {
+		[ "$release_tag" != "latest" ] || {
+			log_download "release metadata did not provide a usable tag mirror=${candidate_mirror}"
+			continue
+		}
+
+		cache_key="$(sanitize_name "${cache_mirror_key}_${download_repo}_${release_tag}_${arch_name}_${scope}")"
+		cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
+		extracted_dir="${cache_dir}/extracted"
+		mkdir -p "$cache_dir"
+		cp -f "$json_file" "${cache_dir}/release.json" >/dev/null 2>&1
+
+		asset_url="$(select_release_asset "$json_file" "$scope" "$release_tag" "$arch_name")" || {
 			log_download "no release asset matched arch=${arch_name} scope=${scope} mirror=${candidate_mirror}"
 			continue
 		}
@@ -1408,10 +1401,32 @@ auto_download_bundle() {
 		asset_name="$(basename "$asset_url")"
 		asset_file="${cache_dir}/${asset_name}"
 		write_download_state "$state_file" "downloading" "downloading release asset (${candidate_mirror})" "$asset_name" "$release_tag" "$arch_name" ""
-		log_download "selected asset ${asset_name} mirror=${candidate_mirror}"
+		log_download "selected asset ${asset_name} mirror=${candidate_mirror} url=${asset_url}"
+
+		if cache_bundle_ready "$extracted_dir" "$scope"; then
+			log_download "cached bundle found for ${scope}, reuse ${extracted_dir} mirror=${candidate_mirror}"
+			write_download_state "$state_file" "cached" "reusing local cached bundle" "$(basename "$cache_dir")" "$release_tag" "$arch_name" "$extracted_dir"
+			if install_bundle_to_usrbin "$extracted_dir" "$scope"; then
+				case "$scope" in
+					cli|web)
+						if [ "$scope" = "cli" ]; then
+							uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
+							uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
+						else
+							uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
+						fi
+					;;
+					server)
+						uci -q set ${CONF}.${cfg}.vnts2_bin="${INSTALL_BIN_DIR}/vnts2"
+					;;
+				 esac
+				uci commit ${CONF} >/dev/null 2>&1
+				return 0
+			fi
+		fi
 
 		if [ -s "$asset_file" ]; then
-			if validate_asset_file "$asset_file"; then
+			if validate_release_asset "$asset_file" "$scope"; then
 				log_download "reusing downloaded asset ${asset_file}"
 			else
 				log_download "cached asset invalid, remove and redownload ${asset_file}"
@@ -1420,29 +1435,30 @@ auto_download_bundle() {
 		fi
 
 		if [ ! -s "$asset_file" ]; then
-			if ! download_file "$asset_url" "$asset_file" "asset"; then
-				log_download "asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} mirror=${candidate_mirror} url=${asset_url}"
+			if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror"; then
+				log_download "asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} asset_url=${asset_url}"
 				rm -f "$asset_file"
 				continue
 			fi
-			if ! validate_asset_file "$asset_file"; then
-				log_download "downloaded asset invalid or corrupted ${asset_file}"
+			if ! validate_release_asset "$asset_file" "$scope"; then
+				log_download "downloaded release asset invalid or corrupted scope=${scope} file=${asset_file}"
 				rm -f "$asset_file"
 				continue
 			fi
+			log_download "asset download ok tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} file=${asset_file}"
 		fi
 
 		write_download_state "$state_file" "extracting" "extracting program files (${candidate_mirror})" "$asset_name" "$release_tag" "$arch_name" ""
 		if ! extract_release_asset "$asset_file" "$extracted_dir"; then
 			log_download "extract failed, remove cache and retry ${asset_file}"
 			rm -f "$asset_file"
-			if ! download_file "$asset_url" "$asset_file" "asset"; then
-				log_download "retry asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} mirror=${candidate_mirror} url=${asset_url}"
+			if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror"; then
+				log_download "retry asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} asset_url=${asset_url}"
 				rm -f "$asset_file"
 				continue
 			fi
-			if ! validate_asset_file "$asset_file"; then
-				log_download "retried asset still invalid ${asset_file}"
+			if ! validate_release_asset "$asset_file" "$scope"; then
+				log_download "retried release asset still invalid scope=${scope} file=${asset_file}"
 				rm -f "$asset_file"
 				continue
 			fi
@@ -1455,11 +1471,12 @@ auto_download_bundle() {
 		fi
 
 		case "$scope" in
-			cli)
+			cli|web)
 				cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
 				ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
-				if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin"; then
-					log_download "bundle missing vnt2_cli or vnt2_ctrl mirror=${candidate_mirror}"
+				web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+				if ! ensure_elf_exec "$cli_bin" || ! ensure_elf_exec "$ctrl_bin" || ! ensure_elf_exec "$web_bin"; then
+					log_download "bundle missing one of vnt2_cli, vnt2_ctrl, vnt2_web mirror=${candidate_mirror}"
 					rm -rf "$extracted_dir"
 					continue
 				fi
@@ -1468,35 +1485,21 @@ auto_download_bundle() {
 					write_download_state "$state_file" "failed" "install to /usr/bin failed" "$asset_name" "$release_tag" "$arch_name" ""
 					return 1
 				fi
-				uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
-				uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
-				uci commit ${CONF} >/dev/null 2>&1
-				log_download "CLI installed: cli=${INSTALL_BIN_DIR}/vnt2_cli ctrl=${INSTALL_BIN_DIR}/vnt2_ctrl mirror=${candidate_mirror}"
-				write_download_state "$state_file" "success" "installed vnt2_cli and vnt2_ctrl to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_cli"
-				return 0
-			;;
-			web)
-				web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
-				if ! ensure_exec "$web_bin"; then
-					log_download "bundle missing vnt2_web mirror=${candidate_mirror}"
-					rm -rf "$extracted_dir"
-					continue
+				if [ "$scope" = "cli" ]; then
+					uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
+					uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
+				else
+					uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
 				fi
-				if ! install_bundle_to_usrbin "$extracted_dir" "web"; then
-					log_download "install web bundle to /usr/bin failed"
-					write_download_state "$state_file" "failed" "web install to /usr/bin failed" "$asset_name" "$release_tag" "$arch_name" ""
-					return 1
-				fi
-				uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
 				uci commit ${CONF} >/dev/null 2>&1
-				log_download "web installed: web=${INSTALL_BIN_DIR}/vnt2_web mirror=${candidate_mirror}"
-				write_download_state "$state_file" "success" "installed vnt2_web to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_web"
+				log_download "client bundle installed: cli=${INSTALL_BIN_DIR}/vnt2_cli ctrl=${INSTALL_BIN_DIR}/vnt2_ctrl web=${INSTALL_BIN_DIR}/vnt2_web mirror=${candidate_mirror} url=${asset_url}"
+				write_download_state "$state_file" "success" "installed vnt2_cli, vnt2_ctrl and vnt2_web to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_cli"
 				return 0
 			;;
 			server)
 				server_name="vnts2"
 				server_bin="$(normalize_server_binary_name "$extracted_dir")"
-				if ! ensure_exec "$server_bin"; then
+				if ! ensure_elf_exec "$server_bin"; then
 					log_download "bundle missing usable vnts2 or vnts mirror=${candidate_mirror}"
 					rm -rf "$extracted_dir"
 					continue
@@ -1515,7 +1518,7 @@ auto_download_bundle() {
 		esac
 	done
 
-	write_download_state "$state_file" "failed" "all download mirrors failed" "$asset_name" "$download_tag" "$arch_name" ""
+	write_download_state "$state_file" "failed" "all download mirrors failed" "${asset_name:-unknown}" "$download_tag" "$arch_name" ""
 	log_download "all download mirrors failed repo=${download_repo} tag=${download_tag} strategy=${download_mirror} arch=${arch_name} scope=${scope}"
 	return 1
 }
@@ -2023,7 +2026,7 @@ prepare_server_runtime() {
 
 start_cli_instance() {
 	local cfg="$1"
-	local enabled cli_bin ctrl_bin
+	local enabled cli_bin ctrl_bin web_bin web_cfg
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
@@ -2034,9 +2037,15 @@ start_cli_instance() {
 	log_cli 'start requested'
 	config_get cli_bin "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli"
 	config_get ctrl_bin "$cfg" "vnt2_ctrl_bin" "/usr/bin/vnt2_ctrl"
+	web_cfg="$(get_first_section_id "vnt2_web")"
+	if [ -n "$web_cfg" ]; then
+		config_get web_bin "$web_cfg" "vnt2_web_bin" "/usr/bin/vnt2_web"
+	else
+		web_bin="/usr/bin/vnt2_web"
+	fi
 
-	if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin"; then
-		log_cli 'existing CLI/CTRL incomplete, trying auto-download or uploaded fallback'
+	if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin" || ! ensure_exec "$web_bin"; then
+		log_cli 'existing CLI/CTRL/Web bundle incomplete, trying auto-download or uploaded fallback'
 		cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" "$DOWNLOAD_CLI_STATE" "cli")" || {
 			log_cli 'start failed: missing vnt2_cli or vnt2_ctrl'
 			return 1

@@ -398,13 +398,29 @@ end
 
 local function normalize_download_mirror(mirror)
 	mirror = trim(mirror):lower()
+	if mirror == "gh-proxy" or mirror == "ghproxy" or mirror == "proxy" then
+		return "gh-proxy"
+	end
 	if mirror == "" or mirror == "auto" or mirror == "cn" or mirror == "china" or mirror == "domestic" then
 		return "auto"
 	end
-	if mirror == "github" or mirror == "gitee" or mirror == "gitlab" or mirror == "cloudflare" then
+	if mirror == "github" then
 		return mirror
 	end
+	if mirror == "gitee" or mirror == "gitlab" or mirror == "cloudflare" then
+		return "auto"
+	end
 	return "auto"
+end
+
+local function get_download_url_candidates_for_mirror(url, mirror)
+	url = trim(url)
+	mirror = normalize_download_mirror(mirror)
+	if mirror == "github" then
+		url = url:gsub("^https://gh%-proxy%.com/", "")
+		return url ~= "" and { url } or {}
+	end
+	return get_download_url_candidates(url)
 end
 
 local function repo_to_mirror_project(repo)
@@ -424,20 +440,12 @@ local function get_download_mirror_candidates(repo, mirror)
 	end
 
 	mirror = normalize_download_mirror(mirror)
-	if mirror == "auto" then
-		if repo_to_mirror_project(repo) then
-			return { "gitee", "cloudflare", "gitlab", "github" }
-		end
-		return { "github" }
+	if mirror == "auto" or mirror == "gh-proxy" then
+		return { "gh-proxy", "github" }
 	elseif mirror == "github" then
 		return { "github" }
-	elseif mirror == "gitee" or mirror == "gitlab" or mirror == "cloudflare" then
-		if repo_to_mirror_project(repo) then
-			return { mirror, "github" }
-		end
-		return { "github" }
 	end
-	return { "github" }
+	return { "gh-proxy", "github" }
 end
 
 local function build_latest_release_endpoint_for_mirror(repo, mirror)
@@ -447,13 +455,13 @@ local function build_latest_release_endpoint_for_mirror(repo, mirror)
 	end
 
 	mirror = normalize_download_mirror(mirror)
-	if mirror == "github" then
-		return string.format("https://api.github.com/repos/%s/releases/latest", repo), mirror
+	if mirror == "github" or mirror == "gh-proxy" or mirror == "auto" then
+		return string.format("https://api.github.com/repos/%s/releases", repo), mirror
 	end
 
 	local proj = repo_to_mirror_project(repo)
 	if not proj then
-		return string.format("https://api.github.com/repos/%s/releases/latest", repo), "github"
+		return string.format("https://api.github.com/repos/%s/releases", repo), "github"
 	end
 
 	if mirror == "gitee" then
@@ -464,7 +472,7 @@ local function build_latest_release_endpoint_for_mirror(repo, mirror)
 		return string.format("https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev/%s/releases", proj), mirror
 	end
 
-	return string.format("https://api.github.com/repos/%s/releases/latest", repo), "github"
+	return string.format("https://api.github.com/repos/%s/releases", repo), "github"
 end
 
 local function get_cached_latest_tag(repo, mirror)
@@ -476,7 +484,7 @@ local function get_cached_latest_tag(repo, mirror)
 	local now = os.time() or 0
 	for _, candidate in ipairs(get_download_mirror_candidates(repo, mirror)) do
 		local endpoint, effective_mirror = build_latest_release_endpoint_for_mirror(repo, candidate)
-		local cache = "/tmp/vnt2_latest_" .. sanitize_cache_name(effective_mirror .. "_" .. repo) .. ".tag"
+		local cache = "/tmp/vnt2_latest_v2_" .. sanitize_cache_name(effective_mirror .. "_" .. repo) .. ".tag"
 
 		if fs.access(cache) then
 			local mtime = fs.stat(cache, "mtime") or 0
@@ -488,12 +496,18 @@ local function get_cached_latest_tag(repo, mirror)
 			end
 		end
 
-		for _, endpoint_url in ipairs(get_download_url_candidates(endpoint)) do
-			local cmd = string.format([=[curl -fsSL --connect-timeout 4 %s 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*:[[:space:]]*"//; s/"$//']=], shell_quote(endpoint_url))
-			local tag = trim(sys.exec(cmd))
-			if tag ~= "" then
-				fs.writefile(cache, tag)
-				return tag
+		local endpoints = {
+			endpoint,
+			string.format("https://api.github.com/repos/%s/releases/latest", repo)
+		}
+		for _, endpoint_candidate in ipairs(endpoints) do
+			for _, endpoint_url in ipairs(get_download_url_candidates_for_mirror(endpoint_candidate, effective_mirror)) do
+				local cmd = string.format([=[curl -fsSL --connect-timeout 4 %s 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*:[[:space:]]*"//; s/"$//']=], shell_quote(endpoint_url))
+				local tag = trim(sys.exec(cmd))
+				if tag ~= "" then
+					fs.writefile(cache, tag)
+					return tag
+				end
 			end
 		end
 	end
@@ -818,7 +832,7 @@ local function summarize_cli_config()
 		auto_download = uci_first("vnt2_cli", "auto_download", "1"),
 		download_repo = uci_first("vnt2_cli", "download_repo", "vnt-dev/vnt"),
 		download_tag = uci_first("vnt2_cli", "download_tag", "latest"),
-		download_mirror = uci_first("vnt2_cli", "download_mirror", "auto")
+		download_mirror = uci_first("vnt2_cli", "download_mirror", "gh-proxy")
 	}
 end
 
@@ -831,7 +845,7 @@ local function summarize_web_config()
 		auto_download = uci_first("vnt2_web", "auto_download", "1"),
 		download_repo = uci_first("vnt2_web", "download_repo", "vnt-dev/vnt"),
 		download_tag = uci_first("vnt2_web", "download_tag", "latest"),
-		download_mirror = uci_first("vnt2_web", "download_mirror", "auto")
+		download_mirror = uci_first("vnt2_web", "download_mirror", "gh-proxy")
 	}
 end
 
@@ -860,7 +874,7 @@ local function summarize_server_config()
 		auto_download = uci_first("vnts2", "auto_download", "1"),
 		download_repo = uci_first("vnts2", "download_repo", "vnt-dev/vnts"),
 		download_tag = uci_first("vnts2", "download_tag", "latest"),
-		download_mirror = uci_first("vnts2", "download_mirror", "auto"),
+		download_mirror = uci_first("vnts2", "download_mirror", "gh-proxy"),
 		white_list = cfg.white_list or {},
 		peer_servers = cfg.peer_servers or {},
 		custom_net = cfg.custom_nets or {},

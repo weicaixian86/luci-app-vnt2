@@ -9,7 +9,7 @@ on:
       release_tag:
         description: "Release tag"
         required: false
-        default: "v2.0.41"
+        default: "v2.0.50"
       release_description:
         description: "Release description"
         required: false
@@ -77,16 +77,26 @@ jobs:
 
       - name: Apply package version from release tag
         shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event.inputs.release_tag }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RAW_TAG="${{ github.event.inputs.release_tag }}"
+            RAW_TAG="${RELEASE_TAG_INPUT:-}"
           else
-            RAW_TAG="v2.0.0"
+            PACKAGE_VERSION_FROM_MAKEFILE="$(sed -n -E 's/^PKG_VERSION:=([^[:space:]]+).*$/\1/p' "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile" | head -n1)"
+            test -n "$PACKAGE_VERSION_FROM_MAKEFILE"
+            RAW_TAG="v${PACKAGE_VERSION_FROM_MAKEFILE}"
           fi
           VERSION="${RAW_TAG#v}"
           VERSION="${VERSION#V}"
           test -n "$RAW_TAG"
           test -n "$VERSION"
+          case "$VERSION" in
+            *[!0-9A-Za-z.+_-]*)
+              echo "Invalid package version: $VERSION"
+              exit 1
+              ;;
+          esac
           echo "RAW_TAG=$RAW_TAG" >> "$GITHUB_ENV"
           echo "PACKAGE_VERSION=$VERSION" >> "$GITHUB_ENV"
           sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
@@ -145,7 +155,10 @@ jobs:
           mkdir -p output
           mapfile -t package_files < <(find sdk/bin/packages -type f \( -name "${PACKAGE_NAME}_*.${{ matrix.package_format }}" -o -name "${PACKAGE_NAME}-*.${{ matrix.package_format }}" \) | sort)
           test "${#package_files[@]}" -eq 1
-          cp -f "${package_files[0]}" output/
+          FINAL_PACKAGE_FILE="${PACKAGE_NAME}_${PACKAGE_VERSION}-x86_64.${{ matrix.package_format }}"
+          cp -f "${package_files[0]}" "output/${FINAL_PACKAGE_FILE}"
+          test -f "output/${FINAL_PACKAGE_FILE}"
+          echo "Final package file: ${FINAL_PACKAGE_FILE}"
           ls -lah output
 
       - name: Upload artifact
@@ -170,15 +183,16 @@ jobs:
 
       - name: Set release metadata
         shell: bash
+        env:
+          RELEASE_DESCRIPTION_INPUT: ${{ github.event.inputs.release_description }}
         run: |
           BUILD_TIME="$(date '+%Y-%m-%d %H:%M:%S %Z')"
-          RELEASE_DESCRIPTION="${{ github.event.inputs.release_description }}"
           echo "BUILD_TIME=$BUILD_TIME" >> "$GITHUB_ENV"
           {
             echo "RELEASE_BODY<<EOF"
             printf '编译时间: %s\n' "$BUILD_TIME"
-            if [ -n "$RELEASE_DESCRIPTION" ]; then
-              printf '\n%s\n' "$RELEASE_DESCRIPTION"
+            if [ -n "${RELEASE_DESCRIPTION_INPUT:-}" ]; then
+              printf '\n%s\n' "$RELEASE_DESCRIPTION_INPUT"
             fi
             echo "EOF"
           } >> "$GITHUB_ENV"

@@ -1667,12 +1667,14 @@ local function bind_dynamiclist(option)
 end
 
 local function bind_download_mirror(option)
-	option:value("auto", translate("自动（国内优先）"))
+	option:value("auto", translate("自动（gh-proxy 优先）"))
+	option:value("gh-proxy", "gh-proxy")
 	option:value("github", "GitHub")
+	-- Keep legacy values visible for existing UCI configurations; init normalizes them.
 	option:value("gitee", "Gitee")
 	option:value("gitlab", "GitLab")
 	option:value("cloudflare", "Cloudflare R2")
-	option.default = "auto"
+	option.default = "gh-proxy"
 	option.rmempty = false
 end
 
@@ -1886,7 +1888,7 @@ auto_download_cli.rmempty = false
 auto_download_cli.default = auto_download_cli.enabled
 
 local download_mirror_cli = s:taboption("advanced", ListValue, "download_mirror", translate("客户端下载镜像源"),
-	translate("默认自动（Gitee -> Cloudflare -> GitLab -> GitHub）；国内镜像会优先尝试，失败后自动回退 GitHub。非 GitHub 镜像通常仅适用于默认仓库 vnt-dev/vnt"))
+	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；latest 会先识别 Release tag，再匹配当前架构的精确资源文件名"))
 bind_download_mirror(download_mirror_cli)
 
 local download_tag_cli = s:taboption("advanced", Value, "download_tag", translate("客户端下载版本"),
@@ -2219,7 +2221,7 @@ auto_download_web.rmempty = false
 auto_download_web.default = auto_download_web.enabled
 
 local download_mirror_web = w:taboption("general", ListValue, "download_mirror", translate("Web 下载镜像源"),
-	translate("默认自动（Gitee -> Cloudflare -> GitLab -> GitHub）；国内镜像会优先尝试，失败后自动回退 GitHub。非 GitHub 镜像通常仅适用于默认仓库 vnt-dev/vnt"))
+	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；客户端 ZIP 必须包含 vnt2_cli、vnt2_ctrl、vnt2_web"))
 bind_download_mirror(download_mirror_web)
 
 local download_tag_web = w:taboption("general", Value, "download_tag", translate("Web 下载版本"),
@@ -2344,7 +2346,7 @@ auto_download_server.rmempty = false
 auto_download_server.default = auto_download_server.enabled
 
 local download_mirror_server = v:taboption("general", ListValue, "download_mirror", translate("服务端下载镜像源"),
-	translate("默认自动（Gitee -> Cloudflare -> GitLab -> GitHub）；国内镜像会优先尝试，失败后自动回退 GitHub。非 GitHub 镜像通常仅适用于默认仓库 vnt-dev/vnts"))
+	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；服务端资源为无扩展名 ELF 文件"))
 bind_download_mirror(download_mirror_server)
 
 local download_tag_server = v:taboption("general", Value, "download_tag", translate("服务端下载版本"),
