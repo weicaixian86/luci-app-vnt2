@@ -30,6 +30,7 @@ config vnt2_cli
 	option event_script ''
 	option cert_mode 'skip'
 	option ctrl_port '11233'
+	option tunnel_port '0'
 	list peer_address
 	list turn
 	list punch_model
