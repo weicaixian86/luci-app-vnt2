@@ -19,8 +19,8 @@ CLI_CONF_DEFAULT="${CLI_WEB_CONF_DEFAULT}"
 WEB_CONF_DEFAULT="${CLI_WEB_CONF_DEFAULT}"
 SERVER_CONF_DEFAULT="/etc/config/vnts2.toml"
 
-LEGACY_DEFAULT_SERVER="tcp://8.163.89.234:29872"
-DEPRECATED_DEFAULT_SERVER="tcp://0.0.0.0:29872"
+LEGACY_DEFAULT_SERVER="tcp://0.0.0.0:29872"
+DEFAULT_SERVER="tcp://1.1.1.1:29872"
 
 CLI_CONF_FILE=""
 WEB_CONF_FILE=""
@@ -159,6 +159,30 @@ bind_allows_external_access() {
 	host_allows_external_access "$bind_host"
 }
 
+format_socket_addr() {
+	local host="$1"
+	local port="$2"
+	host="$(trim_value "$host")"
+	case "$host" in
+		\[*\])
+			printf '%s:%s\n' "$host" "$port"
+		;;
+		*:*)
+			printf '[%s]:%s\n' "$host" "$port"
+		;;
+		*)
+			printf '%s:%s\n' "$host" "$port"
+		;;
+	esac
+}
+
+valid_port() {
+	case "$1" in
+		""|*[!0-9]*) return 1 ;;
+	esac
+	[ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null
+}
+
 ensure_conf_path_ready() {
 	local conf_path="$1"
 	local conf_dir
@@ -227,11 +251,12 @@ migrate_legacy_client_server() {
 	first_server="${server_list%% *}"
 	first_server="$(trim_value "$first_server")"
 
-	if [ "$server_list" = "$LEGACY_DEFAULT_SERVER" ] || [ "$server_list" = "$DEPRECATED_DEFAULT_SERVER" ]; then
+	if [ "$server_list" = "$LEGACY_DEFAULT_SERVER" ]; then
 		uci -q delete ${CONF}.${cfg}.server
+		uci add_list ${CONF}.${cfg}.server="$DEFAULT_SERVER"
 		uci commit ${CONF} >/dev/null 2>&1
 		changed="1"
-		log_cli 'legacy default server detected, cleared client server list'
+		log_cli 'legacy default server detected, migrated client server list'
 	fi
 
 	return 0
@@ -534,7 +559,7 @@ resolve_v2_release_tag() {
 	case "$repo" in
 		vnt-dev/vnt|vnt-dev/vnts)
 			if [ -z "$tag" ] || [ "$tag" = "latest" ]; then
-				echo "2.0.0"
+				echo "$tag"
 			else
 				normalize_release_tag "$tag"
 			fi
@@ -1574,6 +1599,69 @@ toml_get_bool() {
 	[ "$raw" = "true" ] && echo "1" || echo "0"
 }
 
+toml_get_section_raw() {
+	local file="$1"
+	local section="$2"
+	local key="$3"
+	[ -f "$file" ] || return 1
+	awk -v wanted_section="$section" -v wanted_key="$key" '
+	function trim(s) {
+		sub(/^[[:space:]]+/, "", s)
+		sub(/[[:space:]]+$/, "", s)
+		return s
+	}
+	{
+		line=$0
+		sub(/\r$/, "", line)
+		if (line ~ /^[[:space:]]*\[/) {
+			section=line
+			sub(/^[[:space:]]*\[/, "", section)
+			sub(/\][[:space:]]*$/, "", section)
+			in_section=(trim(section) == wanted_section)
+			next
+		}
+		if (in_section) {
+			candidate=line
+			sub(/^[[:space:]]*/, "", candidate)
+			if (candidate ~ ("^" wanted_key "[[:space:]]*=")) {
+				sub("^[^=]*=[[:space:]]*", "", candidate)
+				sub(/[[:space:]]*$/, "", candidate)
+				print candidate
+				exit
+			}
+		}
+	}
+	' "$file"
+}
+
+toml_get_section_string() {
+	local file="$1"
+	local section="$2"
+	local key="$3"
+	local raw val
+
+	raw="$(trim_value "$(toml_get_section_raw "$file" "$section" "$key" 2>/dev/null)")"
+	case "$raw" in
+		\"*\")
+			val="${raw#\"}"
+			val="${val%\"}"
+			printf '%s\n' "$val" | sed 's/\\"/"/g; s/\\\\/\\/g'
+		;;
+		*)
+			printf '%s\n' "$raw"
+		;;
+	esac
+}
+
+toml_get_section_bool() {
+	local file="$1"
+	local section="$2"
+	local key="$3"
+	local raw
+	raw="$(trim_value "$(toml_get_section_raw "$file" "$section" "$key" 2>/dev/null)")"
+	[ "$raw" = "true" ] && echo "1" || echo "0"
+}
+
 toml_validate_client_config() {
 	local file="$1"
 	local network_code server_line
@@ -1635,7 +1723,11 @@ configure_network() {
 	uci set firewall.vnt2zone.input='ACCEPT'
 	uci set firewall.vnt2zone.output='ACCEPT'
 	uci set firewall.vnt2zone.forward='ACCEPT'
-	uci set firewall.vnt2zone.masq='1'
+	if [ "${no_nat:-0}" = "1" ]; then
+		uci set firewall.vnt2zone.masq='0'
+	else
+		uci set firewall.vnt2zone.masq='1'
+	fi
 	uci set firewall.vnt2zone.mtu_fix='1'
 	uci set firewall.vnt2zone.network='VNT2'
 
@@ -1740,7 +1832,7 @@ configure_web_firewall() {
 	wan_zone="$(find_firewall_zone_name "wan" 2>/dev/null || true)"
 
 	uci -q delete firewall.vnt2web
-	if [ "$wan" = "1" ] && [ -n "$port" ] && [ -n "$wan_zone" ] && host_allows_external_access "$host"; then
+	if [ "$wan" = "1" ] && valid_port "$port" && [ -n "$wan_zone" ] && host_allows_external_access "$host"; then
 		ensure_firewall_rule "vnt2web" "vnt2_web" "tcp" "$port" "$wan_zone"
 	fi
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
@@ -1756,28 +1848,50 @@ configure_server_firewall() {
 	local quic_bind="$2"
 	local ws_bind="$3"
 	local web_bind="$4"
-	local open_tcp="$5"
-	local open_quic="$6"
-	local open_ws="$7"
-	local open_web="$8"
+	local server_quic_bind="$5"
+	local ikev2_bind="$6"
+	local ikev2_natt_bind="$7"
+	local wireguard_bind="$8"
+	local open_tcp="$9"
+	local open_quic="${10}"
+	local open_server_quic="${11}"
+	local open_ws="${12}"
+	local open_web="${13}"
+	local open_ikev2_ike="${14}"
+	local open_ikev2_natt="${15}"
+	local open_wireguard="${16}"
+	local ikev2_enabled="${17}"
+	local wireguard_enabled="${18}"
 	local wan_zone
 
-	local tcp_port quic_port ws_port web_port
+	local tcp_port quic_port server_quic_port ws_port web_port ikev2_port ikev2_natt_port wireguard_port
 	tcp_port="${tcp_bind##*:}"
 	quic_port="${quic_bind##*:}"
+	server_quic_port="${server_quic_bind##*:}"
 	ws_port="${ws_bind##*:}"
 	web_port="${web_bind##*:}"
+	ikev2_port="${ikev2_bind##*:}"
+	ikev2_natt_port="${ikev2_natt_bind##*:}"
+	wireguard_port="${wireguard_bind##*:}"
 	wan_zone="$(find_firewall_zone_name "wan" 2>/dev/null || true)"
 
 	uci -q delete firewall.vnts2_tcp
 	uci -q delete firewall.vnts2_quic
+	uci -q delete firewall.vnts2_server_quic
 	uci -q delete firewall.vnts2_ws
 	uci -q delete firewall.vnts2_web
+	uci -q delete firewall.vnts2_ikev2_ike
+	uci -q delete firewall.vnts2_ikev2_natt
+	uci -q delete firewall.vnts2_wireguard
 
-	[ "$open_tcp" = "1" ] && [ -n "$tcp_port" ] && [ -n "$wan_zone" ] && bind_allows_external_access "$tcp_bind" && ensure_firewall_rule "vnts2_tcp" "vnts2_tcp" "tcp" "$tcp_port" "$wan_zone"
-	[ "$open_quic" = "1" ] && [ -n "$quic_port" ] && [ -n "$wan_zone" ] && bind_allows_external_access "$quic_bind" && ensure_firewall_rule "vnts2_quic" "vnts2_quic" "udp" "$quic_port" "$wan_zone"
-	[ "$open_ws" = "1" ] && [ -n "$ws_port" ] && [ -n "$wan_zone" ] && bind_allows_external_access "$ws_bind" && ensure_firewall_rule "vnts2_ws" "vnts2_ws" "tcp" "$ws_port" "$wan_zone"
-	[ "$open_web" = "1" ] && [ -n "$web_port" ] && [ -n "$wan_zone" ] && bind_allows_external_access "$web_bind" && ensure_firewall_rule "vnts2_web" "vnts2_web" "tcp" "$web_port" "$wan_zone"
+	[ "$open_tcp" = "1" ] && valid_port "$tcp_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$tcp_bind" && ensure_firewall_rule "vnts2_tcp" "vnts2_tcp" "tcp" "$tcp_port" "$wan_zone"
+	[ "$open_quic" = "1" ] && valid_port "$quic_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$quic_bind" && ensure_firewall_rule "vnts2_quic" "vnts2_quic" "udp" "$quic_port" "$wan_zone"
+	[ "$open_server_quic" = "1" ] && valid_port "$server_quic_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$server_quic_bind" && ensure_firewall_rule "vnts2_server_quic" "vnts2_server_quic" "udp" "$server_quic_port" "$wan_zone"
+	[ "$open_ws" = "1" ] && valid_port "$ws_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ws_bind" && ensure_firewall_rule "vnts2_ws" "vnts2_ws" "tcp" "$ws_port" "$wan_zone"
+	[ "$open_web" = "1" ] && valid_port "$web_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$web_bind" && ensure_firewall_rule "vnts2_web" "vnts2_web" "tcp" "$web_port" "$wan_zone"
+	[ "$ikev2_enabled" = "1" ] && [ "$open_ikev2_ike" = "1" ] && valid_port "$ikev2_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ikev2_bind" && ensure_firewall_rule "vnts2_ikev2_ike" "vnts2_ikev2_ike" "udp" "$ikev2_port" "$wan_zone"
+	[ "$ikev2_enabled" = "1" ] && [ "$open_ikev2_natt" = "1" ] && valid_port "$ikev2_natt_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ikev2_natt_bind" && ensure_firewall_rule "vnts2_ikev2_natt" "vnts2_ikev2_natt" "udp" "$ikev2_natt_port" "$wan_zone"
+	[ "$wireguard_enabled" = "1" ] && [ "$open_wireguard" = "1" ] && valid_port "$wireguard_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$wireguard_bind" && ensure_firewall_rule "vnts2_wireguard" "vnts2_wireguard" "udp" "$wireguard_port" "$wan_zone"
 
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
@@ -1785,8 +1899,12 @@ configure_server_firewall() {
 cleanup_server_firewall() {
 	uci -q delete firewall.vnts2_tcp
 	uci -q delete firewall.vnts2_quic
+	uci -q delete firewall.vnts2_server_quic
 	uci -q delete firewall.vnts2_ws
 	uci -q delete firewall.vnts2_web
+	uci -q delete firewall.vnts2_ikev2_ike
+	uci -q delete firewall.vnts2_ikev2_natt
+	uci -q delete firewall.vnts2_wireguard
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
@@ -1806,7 +1924,7 @@ prepare_cli_runtime() {
 prepare_client_network_runtime() {
 	local cfg="$1"
 	local conf_file="$2"
-	local bind_dev="" forward_list="" forward_raw="" tun_name no_tun no_nat
+	local bind_dev="" forward_list="" forward_raw="" tun_name device_mode no_nat
 
 	VNT2_FORWARD_LIST=""
 	if [ -n "$cfg" ]; then
@@ -1821,13 +1939,21 @@ prepare_client_network_runtime() {
 
 	tun_name="$(trim_value "$(toml_get_string "${conf_file}" "tun_name")")"
 	[ -n "$tun_name" ] || tun_name="vnt-tun"
-	no_tun="$(toml_get_bool "${conf_file}" "no_tun")"
+	device_mode="$(trim_value "$(toml_get_string "${conf_file}" "device_mode")")"
+	[ -n "$device_mode" ] || device_mode="tun"
+	case "$device_mode" in
+		no|tun|tap) : ;;
+		*)
+			log_cli "invalid device_mode=${device_mode}, using tun"
+			device_mode="tun"
+		;;
+	esac
 	no_nat="$(toml_get_bool "${conf_file}" "no_nat")"
 	[ -n "$no_nat" ] || no_nat="0"
 
 	VNT2_BIND_DEV="${bind_dev}"
 	VNT2_TUN_NAME="${tun_name}"
-	VNT2_NO_TUN="${no_tun}"
+	VNT2_DEVICE_MODE="${device_mode}"
 	VNT2_NO_NAT="${no_nat}"
 	VNT2_FORWARD_LIST="${forward_list}"
 	return 0
@@ -1881,11 +2007,16 @@ prepare_server_runtime() {
 	VNTS2_QUIC_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "quic_bind")")"
 	VNTS2_WS_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "ws_bind")")"
 	VNTS2_WEB_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "web_bind")")"
+	VNTS2_SERVER_QUIC_BIND="$(trim_value "$(toml_get_string "${SERVER_CONF_FILE}" "server_quic_bind")")"
+	VNTS2_IKEV2_ENABLED="$(toml_get_section_bool "${SERVER_CONF_FILE}" "ikev2" "enabled")"
+	VNTS2_IKEV2_BIND="$(trim_value "$(toml_get_section_string "${SERVER_CONF_FILE}" "ikev2" "ike_bind")")"
+	VNTS2_IKEV2_NATT_BIND="$(trim_value "$(toml_get_section_string "${SERVER_CONF_FILE}" "ikev2" "natt_bind")")"
+	VNTS2_WIREGUARD_ENABLED="$(toml_get_section_bool "${SERVER_CONF_FILE}" "wireguard" "enabled")"
+	VNTS2_WIREGUARD_BIND="$(trim_value "$(toml_get_section_string "${SERVER_CONF_FILE}" "wireguard" "bind")")"
 
-	[ -n "${VNTS2_TCP_BIND}" ] || VNTS2_TCP_BIND="0.0.0.0:29872"
-	[ -n "${VNTS2_QUIC_BIND}" ] || VNTS2_QUIC_BIND="0.0.0.0:29872"
-	[ -n "${VNTS2_WS_BIND}" ] || VNTS2_WS_BIND="0.0.0.0:29872"
-	[ -n "${VNTS2_WEB_BIND}" ] || VNTS2_WEB_BIND="0.0.0.0:29871"
+	[ -n "${VNTS2_IKEV2_BIND}" ] || VNTS2_IKEV2_BIND="[::]:500"
+	[ -n "${VNTS2_IKEV2_NATT_BIND}" ] || VNTS2_IKEV2_NATT_BIND="[::]:4500"
+	[ -n "${VNTS2_WIREGUARD_BIND}" ] || VNTS2_WIREGUARD_BIND="[::]:51820"
 
 	return 0
 }
@@ -1925,10 +2056,10 @@ start_cli_instance() {
 		return 1
 	fi
 
-	if [ "${VNT2_NO_TUN}" != "1" ]; then
-		configure_network "${VNT2_TUN_NAME}" "${VNT2_FORWARD_LIST}" "${VNT2_NO_NAT}"
-	else
+	if [ "${VNT2_DEVICE_MODE}" = "no" ]; then
 		cleanup_network
+	else
+		configure_network "${VNT2_TUN_NAME}" "${VNT2_FORWARD_LIST}" "${VNT2_NO_NAT}"
 	fi
 
 	log_cli "starting ${cli_bin} with config ${CLI_CONF_FILE}"
@@ -1949,7 +2080,7 @@ start_cli_instance() {
 
 start_web_instance() {
 	local cfg="$1"
-	local enabled web_bin web_host web_port web_wan log_level cli_cfg
+	local enabled web_bin web_host web_port web_addr web_wan log_level cli_cfg
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
@@ -1967,6 +2098,7 @@ start_web_instance() {
 	config_get web_port "$cfg" "web_port" "19099"
 	config_get_bool web_wan "$cfg" "web_wan" "1"
 	config_get log_level "$cfg" "log_level" "info"
+	web_addr="$(format_socket_addr "$web_host" "$web_port")"
 
 	WEB_CONF_FILE="$(resolve_web_conf_file "$cfg")"
 	ensure_conf_path_ready "${WEB_CONF_FILE}"
@@ -1981,17 +2113,17 @@ start_web_instance() {
 		return 1
 	fi
 
-	if [ "${VNT2_NO_TUN}" != "1" ]; then
-		configure_network "${VNT2_TUN_NAME}" "${VNT2_FORWARD_LIST}" "${VNT2_NO_NAT}"
-	else
+	if [ "${VNT2_DEVICE_MODE}" = "no" ]; then
 		cleanup_network
+	else
+		configure_network "${VNT2_TUN_NAME}" "${VNT2_FORWARD_LIST}" "${VNT2_NO_NAT}"
 	fi
 
 	configure_web_firewall "$web_host" "$web_port" "$web_wan"
-    log_web "using ${web_bin} on ${web_host}:${web_port}, conf=${WEB_CONF_FILE}"
+	log_web "using ${web_bin} on ${web_addr}, conf=${WEB_CONF_FILE}"
 	procd_open_instance "vnt2_web"
 	procd_set_param env RUST_LOG="$log_level"
-	procd_set_param command /bin/sh -c "exec \"${web_bin}\" --addr \"${web_host}:${web_port}\" --conf \"${WEB_CONF_FILE}\" >>\"${WEB_LOG}\" 2>&1"
+	procd_set_param command /bin/sh -c "exec \"${web_bin}\" --addr \"${web_addr}\" --conf \"${WEB_CONF_FILE}\" >>\"${WEB_LOG}\" 2>&1"
 	procd_set_param stdout 0
 	procd_set_param stderr 0
 	procd_set_param respawn
@@ -2007,7 +2139,8 @@ start_web_instance() {
 start_server_instance() {
 	local cfg="$1"
 	local enabled server_bin
-	local open_tcp open_quic open_ws open_web
+	local open_tcp open_quic open_server_quic open_ws open_web
+	local open_ikev2_ike open_ikev2_natt open_wireguard
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
@@ -2028,10 +2161,14 @@ start_server_instance() {
 
 	config_get_bool open_tcp "$cfg" "open_wan_tcp" "0"
 	config_get_bool open_quic "$cfg" "open_wan_quic" "0"
+	config_get_bool open_server_quic "$cfg" "open_wan_server_quic" "0"
 	config_get_bool open_ws "$cfg" "open_wan_ws" "0"
 	config_get_bool open_web "$cfg" "open_wan_web" "0"
+	config_get_bool open_ikev2_ike "$cfg" "open_wan_ikev2_ike" "0"
+	config_get_bool open_ikev2_natt "$cfg" "open_wan_ikev2_natt" "0"
+	config_get_bool open_wireguard "$cfg" "open_wan_wireguard" "0"
 
-	configure_server_firewall "${VNTS2_TCP_BIND}" "${VNTS2_QUIC_BIND}" "${VNTS2_WS_BIND}" "${VNTS2_WEB_BIND}" "$open_tcp" "$open_quic" "$open_ws" "$open_web"
+	configure_server_firewall "${VNTS2_TCP_BIND}" "${VNTS2_QUIC_BIND}" "${VNTS2_WS_BIND}" "${VNTS2_WEB_BIND}" "${VNTS2_SERVER_QUIC_BIND}" "${VNTS2_IKEV2_BIND}" "${VNTS2_IKEV2_NATT_BIND}" "${VNTS2_WIREGUARD_BIND}" "$open_tcp" "$open_quic" "$open_server_quic" "$open_ws" "$open_web" "$open_ikev2_ike" "$open_ikev2_natt" "$open_wireguard" "${VNTS2_IKEV2_ENABLED}" "${VNTS2_WIREGUARD_ENABLED}"
 
 	log_server "starting ${server_bin} with config ${SERVER_CONF_FILE}"
 	procd_open_instance "vnts2"

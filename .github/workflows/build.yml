@@ -1,12 +1,15 @@
 name: Build luci-app-vnt2 for OpenWrt x86_64
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       release_tag:
         description: "Release tag"
-        required: true
-        default: "v2.0.0"
+        required: false
+        default: "v2.0.41"
       release_description:
         description: "Release description"
         required: false
@@ -75,7 +78,11 @@ jobs:
       - name: Apply package version from release tag
         shell: bash
         run: |
-          RAW_TAG="${{ github.event.inputs.release_tag }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW_TAG="${{ github.event.inputs.release_tag }}"
+          else
+            RAW_TAG="v2.0.0"
+          fi
           VERSION="${RAW_TAG#v}"
           VERSION="${VERSION#V}"
           test -n "$RAW_TAG"
@@ -152,6 +159,7 @@ jobs:
     name: Publish Release
     runs-on: ubuntu-latest
     needs: build
+    if: github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Download all artifacts

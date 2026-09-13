@@ -20,11 +20,21 @@ config vnt2_cli
 	option compress '0'
 	option fec '0'
 	option no_nat '0'
-	option no_tun '0'
+	option device_mode 'tun'
+	option no_broadcast '0'
+	option allow_ikev2 '0'
+	option allow_wireguard '0'
 	option allow_mapping '0'
+	option auto_sync_subnet '0'
+	option outbound_interface ''
+	option event_script ''
 	option cert_mode 'skip'
 	option ctrl_port '11233'
-	option tunnel_port '0'
+	list peer_address
+	list turn
+	list punch_model
+	list subnet_mapping
+	list tunnel_addr
 	list input
 	list output
 	list port_mapping
@@ -55,10 +65,10 @@ config vnts2
 	option download_repo 'vnt-dev/vnts'
 	option download_mirror 'auto'
 	option vnts2_bin '/usr/bin/vnts2'
-	option tcp_bind '0.0.0.0:29872'
-	option quic_bind '0.0.0.0:29872'
-	option ws_bind '0.0.0.0:29872'
-	option web_bind '0.0.0.0:29871'
+	option tcp_bind '[::]:29872'
+	option quic_bind '[::]:29872'
+	option ws_bind '[::]:29872'
+	option web_bind '[::]:29871'
 	option server_quic_bind ''
 	option cert ''
 	option key ''
@@ -73,5 +83,22 @@ config vnts2
 	list custom_net
 	option open_wan_tcp '0'
 	option open_wan_quic '0'
+	option open_wan_server_quic '0'
 	option open_wan_ws '0'
 	option open_wan_web '0'
+	option ikev2_enabled '0'
+	option ikev2_ike_bind '[::]:500'
+	option ikev2_natt_bind '[::]:4500'
+	option ikev2_server_address ''
+	option ikev2_remote_id ''
+	option ikev2_cert ''
+	option ikev2_key ''
+	list ikev2_dns
+	option wireguard_enabled '0'
+	option wireguard_bind '[::]:51820'
+	option wireguard_endpoint ''
+	option wireguard_private_key ''
+	option wireguard_persistent_keepalive '25'
+	option open_wan_ikev2_ike '0'
+	option open_wan_ikev2_natt '0'
+	option open_wan_wireguard '0'

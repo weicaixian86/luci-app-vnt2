@@ -156,6 +156,8 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 				<tr><td>CPU / 内存</td><td id="server_usage">-</td></tr>
 				<tr><td>TCP / QUIC</td><td id="server_tcp_quic">-</td></tr>
 				<tr><td>WS / WEB</td><td id="server_ws_web">-</td></tr>
+				<tr><td>IKEv2 / NAT-T</td><td id="server_ikev2">-</td></tr>
+				<tr><td>WireGuard</td><td id="server_wireguard">-</td></tr>
 				<tr><td>虚拟网段</td><td id="server_network">-</td></tr>
 				<tr><td>持久化 / 租约</td><td id="server_persistence">-</td></tr>
 				<tr><td>集群节点</td><td id="server_peer_servers">-</td></tr>
@@ -238,7 +240,9 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 		setHtml("cli_device_name", text(data.cli_device_name));
 		setHtml("cli_device_id", text(data.cli_device_id));
 		setHtml("cli_servers", joinList(data.cli_servers));
-		setHtml("cli_tun_nat", "TUN：" + (String(data.cli_no_tun) === "1" ? "关闭" : text(data.cli_tun_name))
+		var deviceMode = String(data.cli_device_mode || "tun");
+		var deviceLabel = deviceMode === "no" ? "无虚拟网卡" : (deviceMode === "tap" ? "TAP" : (data.cli_tun_name ? "TUN (" + text(data.cli_tun_name) + ")" : "TUN"));
+		setHtml("cli_tun_nat", deviceLabel
 			+ " / 内置NAT：" + (String(data.cli_no_nat) === "1" ? "关闭" : "开启")
 			+ " / 转发：" + (String(data.cli_no_nat) === "1" ? "OpenWrt系统" : "VNT2内置"));
 		setHtml("ctrl_port", text(data.ctrl_port));
@@ -260,8 +264,15 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 		setHtml("server_runtime", text(data.server_runtime));
 		setHtml("server_pid", data.server_running ? ("PID " + text(data.server_pid)) : "未运行");
 		setHtml("server_usage", [text(data.server_cpu, "0"), text(data.server_ram, "0 MB")].join(" / "));
-		setHtml("server_tcp_quic", "TCP：" + text(data.server_tcp_bind) + "<br />QUIC：" + text(data.server_quic_bind));
-		setHtml("server_ws_web", "WS/WSS：" + text(data.server_ws_bind) + "<br />WEB：" + text(data.server_web_bind));
+		setHtml("server_tcp_quic", "TCP：" + text(data.server_tcp_bind) + "（WAN " + yesNo(data.server_open_wan_tcp) + "）"
+			+ "<br />QUIC：" + text(data.server_quic_bind) + "（WAN " + yesNo(data.server_open_wan_quic) + "）"
+			+ "<br />服务端互联 QUIC：" + text(data.server_quic_proxy, "未启用") + "（WAN " + yesNo(data.server_open_wan_server_quic) + "）");
+		setHtml("server_ws_web", "WS/WSS：" + text(data.server_ws_bind) + "（WAN " + yesNo(data.server_open_wan_ws) + "）"
+			+ "<br />WEB：" + text(data.server_web_bind) + "（WAN " + yesNo(data.server_open_wan_web) + "）");
+		setHtml("server_ikev2", yesNo(data.server_ikev2_enabled) + "<br />IKE：" + text(data.server_ikev2_ike_bind) + "（WAN " + yesNo(data.server_open_wan_ikev2_ike) + "）"
+			+ "<br />NAT-T：" + text(data.server_ikev2_natt_bind) + "（WAN " + yesNo(data.server_open_wan_ikev2_natt) + "）");
+		setHtml("server_wireguard", yesNo(data.server_wireguard_enabled) + "<br />Bind：" + text(data.server_wireguard_bind) + "（WAN " + yesNo(data.server_open_wan_wireguard) + "）"
+			+ "<br />Endpoint：" + text(data.server_wireguard_endpoint));
 		setHtml("server_network", text(data.server_network));
 		setHtml("server_persistence", "持久化：" + yesNo(data.server_persistence) + " / 租约：" + text(data.server_lease_duration) + " 秒");
 		setHtml("server_peer_servers", joinList(data.server_peer_servers));

@@ -458,7 +458,7 @@ local function get_cli_info_context()
 		network_code = trim(cfg.network_code),
 		mtu = trim(cfg.mtu),
 		tun_name = trim(cfg.tun_name),
-		no_tun = trim(cfg.no_tun),
+		device_mode = trim(cfg.device_mode) ~= "" and trim(cfg.device_mode) or "tun",
 		no_nat = trim(cfg.no_nat) ~= "" and trim(cfg.no_nat) or "0",
 		servers = as_list(cfg.server),
 		features = features
@@ -543,6 +543,9 @@ local function cleanup_table_border_chars(line)
 		:gsub("═", "")
 		:gsub("║", "")
 end
+
+-- CBI validators may need values from sibling fields in the same form post.
+local cbi_options = {}
 
 local function is_table_border_line(line)
 	local simplified = cleanup_table_border_chars(line)
@@ -733,7 +736,12 @@ local function render_cli_info_panel(content)
 	add_row("P2P节点", first_nonempty(fields["P2P Clients"]))
 	add_row("设备ID", first_nonempty(fields["Id"], fields["Device id"], ctx.device_id))
 	add_row("本地地址", first_nonempty(fields["Local addr"], fields["Local address"]))
-	add_row("TUN", ctx.no_tun == "1" and "关闭" or first_nonempty(ctx.tun_name, "启用"))
+	local mode_label = {
+		no = "无虚拟网卡",
+		tun = "TUN",
+		tap = "TAP"
+	}
+	add_row("虚拟网卡", mode_label[ctx.device_mode] or ctx.device_mode)
 	add_row("内置子网 NAT", ctx.no_nat == "1" and "关闭" or "开启")
 	add_row("IP转发模式", ctx.no_nat == "1" and "OpenWrt 系统转发" or "VNT2 内置 IP 转发")
 	add_row("功能", features)
@@ -976,29 +984,62 @@ local function normalized_list_values(value)
 	return result
 end
 
-local function validate_server_item(value)
+local function validate_server_item(value, allow_udp)
 	value = trim(value)
 	if value == "" then
 		return value
 	end
 
-	if value:match("^[a-zA-Z][a-zA-Z0-9+.-]*://.+$") then
-		return value
+	local scheme = value:match("^([a-zA-Z][a-zA-Z0-9+.-]*)://")
+	local address = value
+	if scheme then
+		scheme = scheme:lower()
+		if scheme ~= "quic" and scheme ~= "tcp" and scheme ~= "wss" and scheme ~= "dynamic"
+			and not (allow_udp and scheme == "udp") then
+			if allow_udp then
+				return nil, translate("直连节点地址协议仅支持 tcp、udp 或 dynamic")
+			end
+			return nil, translate("服务器地址协议仅支持 quic、tcp、wss 或 dynamic")
+		end
+		if scheme == "dynamic" then
+			return value:match("^dynamic://.+$") and value or nil, translate("dynamic 地址不能为空")
+		end
+		address = value:gsub("^[a-zA-Z][a-zA-Z0-9+.-]*://", "")
 	end
 
-	if value:match("^%d+%.%d+%.%d+%.%d+:%d+$") then
-		return value
-	end
-
-	if value:match("^%[[0-9a-fA-F:]+%]:%d+$") then
-		return value
-	end
-
-	if value:match("^[%w._-]+:%d+$") then
+	if address:match("^%d+%.%d+%.%d+%.%d+:%d+$")
+		or address:match("^%[[0-9a-fA-F:]+%]:%d+$")
+		or address:match("^[%w._-]+:%d+$") then
 		return value
 	end
 
 	return nil, translate("服务器地址格式错误，支持 host:port、IPv4:port、[IPv6]:port 或 quic://host:port 等格式")
+end
+
+local function validate_peer_address(self, value)
+	if type(value) == "table" then
+		local values = normalized_list_values(value)
+		if #values == 0 then
+			return {}
+		end
+
+		local result = {}
+		for _, item in ipairs(values) do
+			local valid, err = validate_server_item(item, true)
+			if not valid then
+				return nil, err
+			end
+			result[#result + 1] = valid
+		end
+		return result
+	end
+
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+
+	return validate_server_item(value, true)
 end
 
 local function validate_server(self, value)
@@ -1043,25 +1084,331 @@ local function validate_port_or_zero(self, value)
 	return nil, translate("端口范围必须为 0~65535")
 end
 
-local function validate_bind_addr(self, value)
+local function socket_port(value)
+	value = trim(value)
+	local port = value:match("^%[[^%]]+%]:(%d+)$") or value:match("^[^:]+:(%d+)$")
+	port = tonumber(port or "")
+	if port and port >= 0 and port <= 65535 then
+		return port
+	end
+	return nil
+end
+
+local function is_ipv4(value)
+	local count = 0
+	for part in value:gmatch("[^%.]+") do
+		count = count + 1
+		if not part:match("^%d+$") or #part > 3 or tonumber(part) > 255 then
+			return false
+		end
+	end
+	return count == 4 and not value:match("^%.") and not value:match("%.$")
+end
+
+local function valid_ipv6_part(part)
+	if part == "" or part:match("^:") or part:match(":$") then
+		return false, 0
+	end
+
+	local count = 0
+	for group in part:gmatch("[^:]+") do
+		if group ~= "v" and not group:match("^[0-9a-fA-F]+$") then
+			return false, 0
+		end
+		if group ~= "v" and #group > 4 then
+			return false, 0
+		end
+		count = count + 1
+	end
+	return count > 0, count
+end
+
+local function is_ipv6(value)
+	if not value:find(":", 1, true) then
+		return false
+	end
+
+	local normalized = value
+	if value:find(".", 1, true) then
+		local prefix, suffix = value:match("^(.*:)([^:]+)$")
+		if not prefix or not is_ipv4(suffix) then
+			return false
+		end
+		normalized = prefix .. "v:v"
+	end
+
+	local left, right = normalized:match("^(.-)::(.-)$")
+	if left ~= nil then
+		if normalized:match("::.*::") then
+			return false
+		end
+		local left_ok, left_count = valid_ipv6_part(left)
+		local right_ok, right_count = valid_ipv6_part(right)
+		if (left ~= "" and not left_ok) or (right ~= "" and not right_ok) then
+			return false
+		end
+		return (left_count + right_count) < 8
+	end
+
+	if normalized:match("^:") or normalized:match(":$") then
+		return false
+	end
+	local ok, count = valid_ipv6_part(normalized)
+	return ok and count == 8
+end
+
+local function is_domain(value)
+	if #value == 0 or #value > 253 then
+		return false
+	end
+	if value:find("..", 1, true) then
+		return false
+	end
+	for label in value:gmatch("[^%.]+") do
+		if #label > 63 or label:match("^-") or label:match("-$")
+			or not label:match("^[A-Za-z0-9-]+$") then
+			return false
+		end
+	end
+	return not value:match("^%.") and not value:match("%.$")
+end
+
+local function validate_socket_addr(self, value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+	local port = socket_port(value)
+	if not port then
+		return nil, translate("地址格式错误，应为 IP:port 或 [IPv6]:port")
+	end
+
+	local host
+	if value:match("^%[[^%]]+%]:%d+$") then
+		host = value:match("^%[([^%]]+)%]:%d+$")
+	elseif value:match("^[^:]+:%d+$") then
+		host = value:match("^([^:]+):%d+$")
+	else
+		return nil, translate("地址格式错误，应为 IP:port 或 [IPv6]:port")
+	end
+
+	if not is_ipv4(host) and not is_ipv6(host) and not is_domain(host) then
+		return nil, translate("地址格式错误，应为 IP:port 或 [IPv6]:port")
+	end
+	if port == 0 then
+		return nil, translate("监听端口不能为 0")
+	end
+	return value
+end
+
+local function validate_ip_socket_addr(self, value)
 	value = trim(value)
 	if value == "" then
 		return value
 	end
 
-	if value:match("^%d+%.%d+%.%d+%.%d+:%d+$") then
-		return value
+	local port = socket_port(value)
+	if not port then
+		return nil, translate("地址格式错误，应为 IPv4:port 或 [IPv6]:port")
 	end
 
-	if value:match("^%[[0-9a-fA-F:]+%]:%d+$") then
-		return value
+	local host
+	if value:match("^%[[^%]]+%]:%d+$") then
+		host = value:match("^%[([^%]]+)%]:%d+$")
+	elseif value:match("^[^:]+:%d+$") then
+		host = value:match("^([^:]+):%d+$")
+	else
+		return nil, translate("地址格式错误，应为 IPv4:port 或 [IPv6]:port")
 	end
 
-	if value:match("^[%w._-]+:%d+$") then
-		return value
+	if not is_ipv4(host) and not is_ipv6(host) then
+		return nil, translate("绑定地址必须为 IPv4 或 IPv6 地址")
+	end
+	if port == 0 then
+		return nil, translate("监听端口不能为 0")
+	end
+	return value
+end
+
+local function validate_bind_addr(self, value)
+	return validate_ip_socket_addr(self, value)
+end
+
+local function validate_tunnel_addr(self, value)
+	local values = normalized_list_values(value)
+	local seen_ipv4 = false
+	local seen_ipv6 = false
+	local common_port
+	local result = {}
+
+	for _, item in ipairs(values) do
+		local ipv4, ipv6, port
+		local host, host_port = item:match("^([^:]+):(%d+)$")
+		if host then
+			ipv4 = host:match("^%d+%.%d+%.%d+%.%d+$")
+			port = tonumber(host_port)
+		else
+			host, host_port = item:match("^%[([^%]]+)%]:(%d+)$")
+			ipv6 = host
+			port = tonumber(host_port)
+		end
+
+		if ipv4 and not is_ipv4(ipv4) then
+			ipv4 = nil
+		end
+		if ipv6 and not is_ipv6(ipv6) then
+			ipv6 = nil
+		end
+		if not port or port < 0 or port > 65535 or (not ipv4 and not ipv6) then
+			return nil, translate("隧道地址必须为 IPv4:port 或 [IPv6]:port，端口 0 表示自动分配")
+		end
+		if common_port and common_port ~= port then
+			return nil, translate("所有隧道地址必须使用相同端口")
+		end
+		common_port = port
+		if ipv4 then
+			if seen_ipv4 then
+				return nil, translate("隧道地址每种 IP 地址族最多填写一个地址")
+			end
+			seen_ipv4 = true
+		else
+			if seen_ipv6 then
+				return nil, translate("隧道地址每种 IP 地址族最多填写一个地址")
+			end
+			seen_ipv6 = true
+		end
+		result[#result + 1] = item
 	end
 
-	return nil, translate("地址格式错误，应为 host:port、IPv4:port 或 [IPv6]:port")
+	return #result > 0 and result or value
+end
+
+local function validate_ipv4_item(self, value)
+	value = trim(value)
+	if value == "" or is_ipv4(value) then
+		return value
+	end
+	return nil, translate("请输入 IPv4 地址")
+end
+
+local function current_option(self, option)
+	local value
+	local option_object = cbi_options[option]
+	if option_object and type(option_object.formvalue) == "function" then
+		local ok, result = pcall(option_object.formvalue, option_object, self.section)
+		if ok then
+			value = result
+		end
+	end
+	if self.map and type(self.map.formvalue) == "function" then
+		if value == nil then
+			local ok, result = pcall(self.map.formvalue, self.map, self.section, option)
+			if ok then
+				value = result
+			end
+		end
+	end
+	if type(value) == "table" then
+		value = value[1]
+	end
+	if value == nil then
+		value = self.map.uci:get(self.map.config, self.section, option)
+	end
+	return trim(value)
+end
+
+local function validate_ikev2_bind(self, value)
+	return validate_ip_socket_addr(self, value)
+end
+
+local function validate_ikev2_natt_bind(self, value)
+	value = trim(value)
+	local valid, err = validate_ip_socket_addr(self, value)
+	if not valid then
+		return nil, err
+	end
+	local other = current_option(self, "ikev2_ike_bind")
+	if other ~= "" and socket_port(other) == socket_port(value) then
+		return nil, translate("IKEv2 与 NAT-T 监听端口不能相同")
+	end
+	return valid
+end
+
+local function validate_ikev2_server_address(self, value)
+	value = trim(value)
+	local enabled = current_option(self, "ikev2_enabled") == "1"
+	if enabled and value == "" then
+		return nil, translate("启用 IKEv2 时服务端地址不能为空")
+	end
+	if value ~= "" and not is_ipv4(value) and not is_ipv6(value) and not is_domain(value) then
+		return nil, translate("IKEv2 服务端地址必须为域名、IPv4 或 IPv6 地址")
+	end
+	return value
+end
+
+local function validate_ikev2_remote_id(self, value)
+	value = trim(value)
+	local enabled = current_option(self, "ikev2_enabled") == "1"
+	if enabled and value == "" then
+		return nil, translate("启用 IKEv2 时 Remote ID 不能为空")
+	end
+	if value ~= "" and not is_ipv4(value) and not is_domain(value) then
+		return nil, translate("IKEv2 Remote ID 必须为域名或 IPv4 地址")
+	end
+	return value
+end
+
+local function validate_ikev2_cert(self, value)
+	value = trim(value)
+	local key = current_option(self, "ikev2_key")
+	if (value == "") ~= (key == "") then
+		return nil, translate("IKEv2 证书和私钥必须同时填写或同时留空")
+	end
+	return value
+end
+
+local function validate_ikev2_key(self, value)
+	value = trim(value)
+	local cert = current_option(self, "ikev2_cert")
+	if (value == "") ~= (cert == "") then
+		return nil, translate("IKEv2 证书和私钥必须同时填写或同时留空")
+	end
+	return value
+end
+
+local function validate_wireguard_endpoint(self, value)
+	value = trim(value)
+	local enabled = current_option(self, "wireguard_enabled") == "1"
+	if enabled and value == "" then
+		return nil, translate("启用 WireGuard 时 Endpoint 不能为空")
+	end
+	if value ~= "" and not validate_socket_addr(self, value) then
+		return nil, translate("WireGuard Endpoint 必须为 host:port 或 [IPv6]:port")
+	end
+	if value ~= "" and socket_port(value) == 0 then
+		return nil, translate("WireGuard Endpoint 端口不能为 0")
+	end
+	return value
+end
+
+local function validate_wireguard_private_key(self, value)
+	value = trim(value)
+	if value ~= "" and (#value ~= 44 or not value:match("^[A-Za-z0-9+/]+=$")) then
+		return nil, translate("WireGuard 私钥 Base64 解码后必须为 32 字节")
+	end
+	return value
+end
+
+local function validate_wireguard_keepalive(self, value)
+	value = trim(value)
+	local n = tonumber(value)
+	if value == "" then
+		return "25"
+	end
+	if n and n >= 0 and n <= 65535 and math.floor(n) == n then
+		return tostring(math.floor(n))
+	end
+	return nil, translate("WireGuard 保活间隔必须为 0~65535 的整数")
 end
 
 local function validate_cidr(self, value)
@@ -1070,11 +1417,161 @@ local function validate_cidr(self, value)
 		return value
 	end
 
-	if value:match("^%d+%.%d+%.%d+%.%d+/%d+$") then
+	local address, prefix = value:match("^(%d+%.%d+%.%d+%.%d+)/(%d+)$")
+	if address and is_ipv4(address) and tonumber(prefix) <= 32 then
 		return value
 	end
 
 	return nil, translate("CIDR 格式错误，例如 10.26.0.0/24")
+end
+
+local function validate_custom_net_item(value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+
+	local code, cidr = value:match("^([^,]+),([^,]+)$")
+	if not code or not cidr then
+		return nil, translate("格式错误，应为网络编号,CIDR，例如 office,10.27.0.0/24")
+	end
+
+	code = trim(code)
+	cidr = trim(cidr)
+	if code == "" or #code > 32 or not code:match("^[A-Za-z0-9_.-]+$") then
+		return nil, translate("网络编号只能包含字母、数字、下划线、点和短横线，长度不超过 32")
+	end
+	if not validate_cidr(nil, cidr) then
+		return nil, translate("附加网段必须为有效 CIDR")
+	end
+	return code .. "," .. cidr
+end
+
+local function validate_rule_pair(value, first_validator, message)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+	local first, second = value:match("^([^,]+),([^,]+)$")
+	if not first or not second or not first_validator(first) then
+		return nil, translate(message)
+	end
+	return value
+end
+
+local function ipv4_network_key(value)
+	local address, prefix = value:match("^(%d+%.%d+%.%d+%.%d+)/(%d+)$")
+	local a, b, c, d = address:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+	local ip = ((tonumber(a) * 256 + tonumber(b)) * 256 + tonumber(c)) * 256 + tonumber(d)
+	local prefix_number = tonumber(prefix)
+	local host_size = 2 ^ (32 - prefix_number)
+	return math.floor(ip / host_size) * host_size .. "/" .. prefix
+end
+
+local function is_ipv4_or_cidr(value)
+	return validate_cidr(nil, value) or trim(value):match("^%d+%.%d+%.%d+%.%d+$")
+end
+
+local function validate_turn_item(value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+	local target, relay = value:match("^([^,]+),([^,]+)$")
+	if not target or not relay or not is_ipv4_or_cidr(target) or not is_ipv4(trim(relay)) then
+		return nil, translate("格式错误，应为目标 IP/CIDR,转发服务器 IPv4 地址")
+	end
+	return value
+end
+
+local function validate_punch_model_item(value)
+	value = trim(value)
+	if value == "" then
+		return value
+	end
+	local target, modes = value:match("^([^,]+),(.+)$")
+	if not target or not is_ipv4_or_cidr(target) then
+		return nil, translate("格式错误，应为目标 IP/CIDR,IPv4Tcp,IPv4Udp 等打洞模式")
+	end
+	for mode in modes:gmatch("[^,]+") do
+		if mode ~= "IPv4Tcp" and mode ~= "IPv4Udp" and mode ~= "IPv6Tcp" and mode ~= "IPv6Udp" then
+			return nil, translate("打洞模式仅支持 IPv4Tcp、IPv4Udp、IPv6Tcp、IPv6Udp")
+		end
+	end
+	return value
+end
+
+local function validate_subnet_mapping_item(value)
+	local valid = validate_rule_pair(value, function(item)
+		return validate_cidr(nil, item)
+	end, "格式错误，应为映射 CIDR,实际 CIDR")
+	if not valid then
+		return nil, translate("格式错误，应为映射 CIDR,实际 CIDR")
+	end
+	local first, second = valid:match("^([^,]+),([^,]+)$")
+	if not validate_cidr(nil, second) then
+		return nil, translate("格式错误，应为映射 CIDR,实际 CIDR")
+	end
+	local _, mapped_prefix = first:match("^(%d+%.%d+%.%d+%.%d+)/(%d+)$")
+	local _, actual_prefix = second:match("^(%d+%.%d+%.%d+%.%d+)/(%d+)$")
+	if tonumber(mapped_prefix) ~= tonumber(actual_prefix) then
+		return nil, translate("映射 CIDR 与实际 CIDR 的前缀长度必须相同")
+	end
+	if ipv4_network_key(first) == ipv4_network_key(second) then
+		return nil, translate("映射网段与实际网段不能相同")
+	end
+	return valid
+end
+
+local function validate_subnet_mapping(self, value)
+	if type(value) ~= "table" then
+		return validate_subnet_mapping_item(value)
+	end
+
+	local result = {}
+	local mapped_to_actual = {}
+	local actual_to_mapped = {}
+	for _, item in ipairs(normalized_list_values(value)) do
+		local valid, err = validate_subnet_mapping_item(item)
+		if not valid then
+			return nil, err
+		end
+
+		local mapped, actual = valid:match("^([^,]+),([^,]+)$")
+		local mapped_address, mapped_prefix = mapped:match("^(%d+%.%d+%.%d+%.%d+)/(%d+)$")
+		local actual_address, actual_prefix = actual:match("^(%d+%.%d+%.%d+%.%d+)/(%d+)$")
+		local mapped_key = ipv4_network_key(mapped)
+		local actual_key = ipv4_network_key(actual)
+		if mapped_to_actual[mapped_key] and mapped_to_actual[mapped_key] ~= actual_key then
+			return nil, translate("存在冲突的映射网段")
+		end
+		if actual_to_mapped[actual_key] and actual_to_mapped[actual_key] ~= mapped_key then
+			return nil, translate("存在冲突的实际网段映射")
+		end
+		mapped_to_actual[mapped_key] = actual_key
+		actual_to_mapped[actual_key] = mapped_key
+		result[#result + 1] = valid
+	end
+	return result
+end
+
+local function validate_dynamic_items(item_validator)
+	return function(self, value)
+		if type(value) == "table" then
+			local result = {}
+			for _, item in ipairs(normalized_list_values(value)) do
+				local valid, err = item_validator(item)
+				if not valid then
+					return nil, err
+				end
+				if valid ~= "" then
+					result[#result + 1] = valid
+				end
+			end
+			return result
+		end
+		return item_validator(value)
+	end
 end
 
 local function validate_input_rule_item(value)
@@ -1233,7 +1730,7 @@ network_code.rmempty = false
 network_code.placeholder = "123456"
 network_code.validate = function(self, value)
 	value = trim(value)
-	if value ~= "" and #value >= 1 and #value <= 63 then
+	if value ~= "" and #value >= 1 and #value <= 32 then
 		return value
 	end
 	return nil, translate("网络编号必须为 1~63 个字符")
@@ -1312,9 +1809,49 @@ local no_nat = s:taboption("network", Flag, "no_nat", translate("关闭内置子
 no_nat.rmempty = false
 no_nat.default = no_nat.disabled
 
-local no_tun = s:taboption("network", Flag, "no_tun", translate("无 TUN 模式"),
+local device_mode = s:taboption("network", ListValue, "device_mode", translate("虚拟网卡模式"),
 	translate("启用后不创建虚拟网卡，仅适用于端口映射或流量出口类场景"))
-no_tun.rmempty = false
+device_mode:value("tun", "TUN")
+device_mode:value("tap", "TAP")
+device_mode:value("no", translate("无虚拟网卡"))
+device_mode.default = "tun"
+device_mode.rmempty = false
+
+local no_broadcast = s:taboption("network", Flag, "no_broadcast", translate("禁用广播/组播"))
+no_broadcast.rmempty = false
+
+local allow_ikev2 = s:taboption("network", Flag, "allow_ikev2", translate("允许 IKEv2 转发"))
+allow_ikev2.rmempty = false
+
+local allow_wireguard = s:taboption("network", Flag, "allow_wireguard", translate("允许 WireGuard 转发"))
+allow_wireguard.rmempty = false
+
+local auto_sync_subnet = s:taboption("network", Flag, "auto_sync_subnet", translate("自动同步子网"))
+auto_sync_subnet.rmempty = false
+
+local peer_address = s:taboption("network", DynamicList, "peer_address", translate("直连节点地址"),
+	translate("支持 host:port、tcp://、udp:// 或 dynamic:// 地址"))
+peer_address.placeholder = "192.168.1.10:29873"
+peer_address.validate = validate_peer_address
+bind_dynamiclist(peer_address)
+
+local turn = s:taboption("network", DynamicList, "turn", translate("强制中转规则"),
+	translate("格式：目标 IP/CIDR,中转服务器 IPv4"))
+turn.placeholder = "10.26.0.0/24,10.26.0.2"
+turn.validate = validate_dynamic_items(validate_turn_item)
+bind_dynamiclist(turn)
+
+local punch_model = s:taboption("network", DynamicList, "punch_model", translate("打洞模式规则"),
+	translate("格式：目标 IP/CIDR,IPv4Tcp,IPv4Udp 等"))
+punch_model.placeholder = "10.26.0.0/24,IPv4Tcp,IPv4Udp"
+punch_model.validate = validate_dynamic_items(validate_punch_model_item)
+bind_dynamiclist(punch_model)
+
+local subnet_mapping = s:taboption("network", DynamicList, "subnet_mapping", translate("子网映射"),
+	translate("格式：映射 CIDR,实际 CIDR"))
+subnet_mapping.placeholder = "192.168.2.0/24,192.168.1.0/24"
+subnet_mapping.validate = validate_subnet_mapping
+bind_dynamiclist(subnet_mapping)
 
 local vnt2_forward = s:taboption("network", MultiValue, "vnt2_forward", translate("访问控制 / 防火墙转发"),
 	translate("按需自动创建 OpenWrt 防火墙区域与转发规则"))
@@ -1401,10 +1938,26 @@ local ctrl_port = s:taboption("advanced", Value, "ctrl_port", translate("控制�
 ctrl_port.placeholder = "11233"
 ctrl_port.validate = validate_port_or_zero
 
-local tunnel_port = s:taboption("advanced", Value, "tunnel_port", translate("隧道端口"),
+local tunnel_addr = s:taboption("advanced", DynamicList, "tunnel_addr", translate("Tunnel addresses"),
 	translate("用于 P2P 通信，0 表示自动分配"))
-tunnel_port.placeholder = "0"
-tunnel_port.validate = validate_port_or_zero
+tunnel_addr.placeholder = "192.168.1.10:29873"
+tunnel_addr.validate = validate_tunnel_addr
+bind_dynamiclist(tunnel_addr)
+
+local outbound_interface = s:taboption("advanced", Value, "outbound_interface", translate("Outbound interface"),
+	translate("Network interface used for outbound VNT traffic; leave empty for system routing"))
+outbound_interface.placeholder = "eth0"
+
+local event_script = s:taboption("advanced", Value, "event_script", translate("Event script"),
+	translate("Absolute path to a script executed when the connection state changes"))
+event_script.placeholder = "/etc/vnt2-event.sh"
+event_script.validate = function(self, value)
+	value = trim(value)
+	if value ~= "" and value:sub(1, 1) ~= "/" then
+		return nil, translate("Event script must be an absolute path")
+	end
+	return value
+end
 
 local bind_dev = s:taboption("advanced", ListValue, "bind_dev", translate("绑定出口网卡"),
 	translate("当前以环境变量形式传递给启动脚本，适合需要指定出口链路的场景"))
@@ -1831,8 +2384,8 @@ local web_bind = v:taboption("listen", Value, "web_bind", translate("管理页�
 web_bind.placeholder = "0.0.0.0:29871"
 web_bind.validate = validate_bind_addr
 
-local server_quic_bind = v:taboption("listen", Value, "server_quic_bind", translate("QUIC 代理地址"),
-	translate("用于多服务端 / 代理场景，留空则不启用"))
+local server_quic_bind = v:taboption("listen", Value, "server_quic_bind", translate("服务端互联 QUIC 地址"),
+	translate("用于多服务端互联，留空则不启动该 UDP 监听"))
 server_quic_bind.placeholder = "0.0.0.0:29900"
 server_quic_bind.validate = validate_bind_addr
 
@@ -1863,11 +2416,98 @@ open_wan_tcp.rmempty = false
 local open_wan_quic = v:taboption("listen", Flag, "open_wan_quic", translate("允许 WAN 访问 QUIC 端口"))
 open_wan_quic.rmempty = false
 
+local open_wan_server_quic = v:taboption("listen", Flag, "open_wan_server_quic", translate("允许 WAN 访问服务端互联 QUIC 端口"),
+	translate("仅放行服务端互联 QUIC 地址对应的 UDP 端口；留空监听地址时不会创建规则"))
+open_wan_server_quic.rmempty = false
+
 local open_wan_ws = v:taboption("listen", Flag, "open_wan_ws", translate("允许 WAN 访问 WS/WSS 端口"))
 open_wan_ws.rmempty = false
 
 local open_wan_web = v:taboption("listen", Flag, "open_wan_web", translate("允许 WAN 访问管理页面端口"))
 open_wan_web.rmempty = false
+
+local ikev2_enabled = v:taboption("listen", Flag, "ikev2_enabled", translate("启用 IKEv2"),
+	translate("启用 IKEv2 VPN 访问；必须填写服务器地址和 Remote ID"))
+ikev2_enabled.rmempty = false
+
+local ikev2_ike_bind = v:taboption("listen", Value, "ikev2_ike_bind", translate("IKEv2 绑定地址"),
+	translate("IKE 监听地址，通常使用 UDP 500 端口"))
+ikev2_ike_bind.placeholder = "[::]:500"
+ikev2_ike_bind.validate = validate_ikev2_bind
+
+local ikev2_natt_bind = v:taboption("listen", Value, "ikev2_natt_bind", translate("IKEv2 NAT-T 绑定地址"),
+	translate("NAT-T 监听地址，通常使用 UDP 4500 端口，必须与 IKE 使用不同端口"))
+ikev2_natt_bind.placeholder = "[::]:4500"
+ikev2_natt_bind.validate = validate_ikev2_natt_bind
+
+local ikev2_server_address = v:taboption("listen", Value, "ikev2_server_address", translate("IKEv2 服务器地址"),
+	translate("IKEv2 客户端使用的公网 DNS 名称或 IPv4 地址"))
+ikev2_server_address.placeholder = "vpn.example.com"
+ikev2_server_address.validate = validate_ikev2_server_address
+
+local ikev2_remote_id = v:taboption("listen", Value, "ikev2_remote_id", translate("IKEv2 Remote ID"),
+	translate("IKEv2 身份标识，通常填写服务器 DNS 名称"))
+ikev2_remote_id.placeholder = "vpn.example.com"
+ikev2_remote_id.validate = validate_ikev2_remote_id
+
+local ikev2_cert = v:taboption("listen", Value, "ikev2_cert", translate("IKEv2 证书路径"),
+	translate("证书路径；证书和私钥必须同时填写"))
+ikev2_cert.placeholder = "/etc/vnt2/ikev2.crt"
+ikev2_cert.validate = validate_ikev2_cert
+
+local ikev2_key = v:taboption("listen", Value, "ikev2_key", translate("IKEv2 私钥路径"),
+	translate("私钥路径；证书和私钥必须同时填写"))
+ikev2_key.placeholder = "/etc/vnt2/ikev2.key"
+ikev2_key.password = true
+ikev2_key.validate = validate_ikev2_key
+
+local ikev2_dns = v:taboption("listen", DynamicList, "ikev2_dns", translate("IKEv2 DNS"),
+	translate("IPv4 DNS addresses handed to IKEv2 clients"))
+ikev2_dns.placeholder = "1.1.1.1"
+ikev2_dns.validate = validate_dynamic_items(validate_ipv4_item)
+bind_dynamiclist(ikev2_dns)
+
+local wireguard_enabled = v:taboption("listen", Flag, "wireguard_enabled", translate("启用 WireGuard"),
+	translate("启用 WireGuard 访问"))
+wireguard_enabled.rmempty = false
+
+local wireguard_bind = v:taboption("listen", Value, "wireguard_bind", translate("WireGuard 绑定地址"),
+	translate("WireGuard UDP 监听地址，通常使用 51820 端口"))
+wireguard_bind.placeholder = "[::]:51820"
+wireguard_bind.validate = validate_ip_socket_addr
+
+local wireguard_endpoint = v:taboption("listen", Value, "wireguard_endpoint", translate("WireGuard 端点"),
+	translate("启用 WireGuard 时必填，格式为 host:port 或 [IPv6]:port"))
+wireguard_endpoint.placeholder = "vpn.example.com:51820"
+wireguard_endpoint.validate = validate_wireguard_endpoint
+
+local wireguard_private_key = v:taboption("listen", Value, "wireguard_private_key", translate("WireGuard 私钥"),
+	translate("Base64 编码的 32 字节私钥"))
+wireguard_private_key.password = true
+wireguard_private_key.validate = validate_wireguard_private_key
+
+local wireguard_persistent_keepalive = v:taboption("listen", Value, "wireguard_persistent_keepalive", translate("WireGuard 持久保活"),
+	translate("保活间隔秒数，范围 0 到 65535"))
+wireguard_persistent_keepalive.placeholder = "25"
+wireguard_persistent_keepalive.validate = validate_wireguard_keepalive
+
+local open_wan_ikev2_ike = v:taboption("listen", Flag, "open_wan_ikev2_ike", translate("允许 WAN 访问 IKEv2"))
+open_wan_ikev2_ike.rmempty = false
+
+local open_wan_ikev2_natt = v:taboption("listen", Flag, "open_wan_ikev2_natt", translate("允许 WAN 访问 IKEv2 NAT-T"))
+open_wan_ikev2_natt.rmempty = false
+
+local open_wan_wireguard = v:taboption("listen", Flag, "open_wan_wireguard", translate("允许 WAN 访问 WireGuard"))
+open_wan_wireguard.rmempty = false
+
+cbi_options.ikev2_enabled = ikev2_enabled
+cbi_options.ikev2_ike_bind = ikev2_ike_bind
+cbi_options.ikev2_natt_bind = ikev2_natt_bind
+cbi_options.ikev2_server_address = ikev2_server_address
+cbi_options.ikev2_remote_id = ikev2_remote_id
+cbi_options.ikev2_cert = ikev2_cert
+cbi_options.ikev2_key = ikev2_key
+cbi_options.wireguard_enabled = wireguard_enabled
 
 local open_server_web = v:taboption("listen", DummyValue, "_open_server_web", translate("打开页面"),
 	translate("打开当前配置对应的 vnts2 管理页面，默认地址通常为 http://路由器IP:29871/"))
@@ -1906,9 +2546,9 @@ peer_servers.validate = validate_server
 bind_dynamiclist(peer_servers)
 
 local custom_net = v:taboption("cluster", DynamicList, "custom_net", translate("附加网段列表"),
-	translate("为服务端附加更多 CIDR 配置"))
-custom_net.placeholder = "10.27.0.0/24"
-custom_net.validate = validate_cidr
+	translate("格式为网络编号,CIDR，例如 office,10.27.0.0/24"))
+custom_net.placeholder = "office,10.27.0.0/24"
+custom_net.validate = validate_dynamic_items(validate_custom_net_item)
 bind_dynamiclist(custom_net)
 
 local server_conf_path = v:taboption("advanced", Value, "server_conf_file", translate("配置文件路径"),

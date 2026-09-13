@@ -125,7 +125,7 @@ local function get_web_host()
 end
 
 local function get_server_web_bind()
-	return uci_first("vnts2", "web_bind", "0.0.0.0:29871")
+	return uci_first("vnts2", "web_bind", "[::]:29871")
 end
 
 local function get_client_conf()
@@ -522,7 +522,13 @@ local function get_vnt2_latest_tag(repo, configured_tag, mirror)
 		if configured_tag ~= "" and configured_tag ~= "latest" then
 			return normalize_display_tag(configured_tag)
 		end
-		return "2.0.0"
+
+		local latest = normalize_display_tag(get_cached_latest_tag(repo, mirror))
+		if latest ~= "" then
+			return latest
+		end
+
+		return repo == "vnt-dev/vnts" and "2.0.6" or "2.0.9"
 	end
 
 	if configured_tag ~= "" and configured_tag ~= "latest" then
@@ -718,8 +724,12 @@ local function is_server_reachable(server_cfg)
 	local ports = {
 		parse_bind_port(server_cfg.tcp_bind),
 		parse_bind_port(server_cfg.quic_bind),
+		parse_bind_port(server_cfg.server_quic_bind),
 		parse_bind_port(server_cfg.ws_bind),
-		parse_bind_port(server_cfg.web_bind)
+		parse_bind_port(server_cfg.web_bind),
+		parse_bind_port(server_cfg.ikev2_enabled == "1" and server_cfg.ikev2_ike_bind or ""),
+		parse_bind_port(server_cfg.ikev2_enabled == "1" and server_cfg.ikev2_natt_bind or ""),
+		parse_bind_port(server_cfg.wireguard_enabled == "1" and server_cfg.wireguard_bind or "")
 	}
 
 	for _, port in ipairs(ports) do
@@ -791,8 +801,19 @@ local function summarize_cli_config()
 		device_name = cfg.device_name or "",
 		device_id = cfg.device_id or "",
 		tun_name = cfg.tun_name or "vnt-tun",
-		no_tun = cfg.no_tun or "0",
+		device_mode = cfg.device_mode or "tun",
 		no_nat = trim(cfg.no_nat) ~= "" and cfg.no_nat or "0",
+		peer_address = cfg.peer_address or {},
+		turn = cfg.turn or {},
+		punch_model = cfg.punch_model or {},
+		no_broadcast = cfg.no_broadcast or "0",
+		allow_ikev2 = cfg.allow_ikev2 or "0",
+		allow_wireguard = cfg.allow_wireguard or "0",
+		subnet_mapping = cfg.subnet_mapping or {},
+		auto_sync_subnet = cfg.auto_sync_subnet or "0",
+		outbound_interface = cfg.outbound_interface or "",
+		tunnel_addr = cfg.tunnel_addr or {},
+		event_script = cfg.event_script or "",
 		ctrl_port = tonumber(cfg.ctrl_port or "11233") or 11233,
 		auto_download = uci_first("vnt2_cli", "auto_download", "1"),
 		download_repo = uci_first("vnt2_cli", "download_repo", "vnt-dev/vnt"),
@@ -817,11 +838,21 @@ end
 local function summarize_server_config()
 	local cfg = toml.get_server_summary(uci)
 	return {
-		tcp_bind = cfg.tcp_bind or "0.0.0.0:29872",
-		quic_bind = cfg.quic_bind or "0.0.0.0:29872",
-		ws_bind = cfg.ws_bind or "0.0.0.0:29872",
-		web_bind = cfg.web_bind or "0.0.0.0:29871",
+		tcp_bind = cfg.tcp_bind or "[::]:29872",
+		quic_bind = cfg.quic_bind or "[::]:29872",
+		ws_bind = cfg.ws_bind or "[::]:29872",
+		web_bind = cfg.web_bind or "[::]:29871",
 		server_quic_bind = cfg.server_quic_bind or "",
+		ikev2_enabled = cfg.ikev2 and cfg.ikev2.enabled or "0",
+		ikev2_ike_bind = cfg.ikev2 and cfg.ikev2.ike_bind or "[::]:500",
+		ikev2_natt_bind = cfg.ikev2 and cfg.ikev2.natt_bind or "[::]:4500",
+		ikev2_server_address = cfg.ikev2 and cfg.ikev2.server_address or "",
+		ikev2_remote_id = cfg.ikev2 and cfg.ikev2.remote_id or "",
+		ikev2_dns = cfg.ikev2 and cfg.ikev2.dns or {},
+		wireguard_enabled = cfg.wireguard and cfg.wireguard.enabled or "0",
+		wireguard_bind = cfg.wireguard and cfg.wireguard.bind or "[::]:51820",
+		wireguard_endpoint = cfg.wireguard and cfg.wireguard.endpoint or "",
+		wireguard_persistent_keepalive = cfg.wireguard and cfg.wireguard.persistent_keepalive or "25",
 		network = cfg.network or "10.26.0.0/24",
 		lease_duration = cfg.lease_duration or "86400",
 		persistence = cfg.persistence or "1",
@@ -835,8 +866,12 @@ local function summarize_server_config()
 		custom_net = cfg.custom_nets or {},
 		open_wan_tcp = uci_first("vnts2", "open_wan_tcp", "0"),
 		open_wan_quic = uci_first("vnts2", "open_wan_quic", "0"),
+		open_wan_server_quic = uci_first("vnts2", "open_wan_server_quic", "0"),
 		open_wan_ws = uci_first("vnts2", "open_wan_ws", "0"),
 		open_wan_web = uci_first("vnts2", "open_wan_web", "0"),
+		open_wan_ikev2_ike = uci_first("vnts2", "open_wan_ikev2_ike", "0"),
+		open_wan_ikev2_natt = uci_first("vnts2", "open_wan_ikev2_natt", "0"),
+		open_wan_wireguard = uci_first("vnts2", "open_wan_wireguard", "0"),
 		server_conf_file = get_server_conf()
 	}
 end
@@ -923,7 +958,18 @@ function act_status()
 	e.cli_device_name = cli_cfg.device_name
 	e.cli_device_id = cli_cfg.device_id
 	e.cli_tun_name = cli_cfg.tun_name
-	e.cli_no_tun = cli_cfg.no_tun
+	e.cli_device_mode = cli_cfg.device_mode
+	e.cli_peer_address = cli_cfg.peer_address
+	e.cli_turn = cli_cfg.turn
+	e.cli_punch_model = cli_cfg.punch_model
+	e.cli_no_broadcast = cli_cfg.no_broadcast
+	e.cli_allow_ikev2 = cli_cfg.allow_ikev2
+	e.cli_allow_wireguard = cli_cfg.allow_wireguard
+	e.cli_subnet_mapping = cli_cfg.subnet_mapping
+	e.cli_auto_sync_subnet = cli_cfg.auto_sync_subnet
+	e.cli_outbound_interface = cli_cfg.outbound_interface
+	e.cli_tunnel_addr = cli_cfg.tunnel_addr
+	e.cli_event_script = cli_cfg.event_script
 	e.cli_no_nat = cli_cfg.no_nat
 	e.cli_auto_download = cli_cfg.auto_download
 	e.cli_download_repo = cli_cfg.download_repo
@@ -955,8 +1001,22 @@ function act_status()
 	e.server_custom_net = server_cfg.custom_net
 	e.server_open_wan_tcp = server_cfg.open_wan_tcp
 	e.server_open_wan_quic = server_cfg.open_wan_quic
+	e.server_open_wan_server_quic = server_cfg.open_wan_server_quic
 	e.server_open_wan_ws = server_cfg.open_wan_ws
 	e.server_open_wan_web = server_cfg.open_wan_web
+	e.server_ikev2_enabled = server_cfg.ikev2_enabled
+	e.server_ikev2_ike_bind = server_cfg.ikev2_ike_bind
+	e.server_ikev2_natt_bind = server_cfg.ikev2_natt_bind
+	e.server_ikev2_server_address = server_cfg.ikev2_server_address
+	e.server_ikev2_remote_id = server_cfg.ikev2_remote_id
+	e.server_ikev2_dns = server_cfg.ikev2_dns
+	e.server_wireguard_enabled = server_cfg.wireguard_enabled
+	e.server_wireguard_bind = server_cfg.wireguard_bind
+	e.server_wireguard_endpoint = server_cfg.wireguard_endpoint
+	e.server_wireguard_persistent_keepalive = server_cfg.wireguard_persistent_keepalive
+	e.server_open_wan_ikev2_ike = server_cfg.open_wan_ikev2_ike
+	e.server_open_wan_ikev2_natt = server_cfg.open_wan_ikev2_natt
+	e.server_open_wan_wireguard = server_cfg.open_wan_wireguard
 	e.server_conf_file = server_cfg.server_conf_file
 	e.server_conf_preview = get_log_content(server_cfg.server_conf_file)
 

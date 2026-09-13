@@ -12,7 +12,7 @@ M.WEB_TOML = M.DEFAULT_WEB_TOML
 M.SERVER_TOML = M.DEFAULT_SERVER_TOML
 
 local LEGACY_DEFAULT_CLIENT_SERVER = "tcp://0.0.0.0:29872"
-local DEPRECATED_DEFAULT_CLIENT_SERVER = "tcp://1.1.1.1:29872"
+local DEFAULT_CLIENT_SERVER = "tcp://1.1.1.1:29872"
 
 local client_defaults = {
 	network_code = "123456",
@@ -25,26 +25,37 @@ local client_defaults = {
 	cert_mode = "skip",
 	mtu = "1400",
 	ctrl_port = "11233",
-	tunnel_port = "0",
+	tunnel_port = "",
+	device_mode = "tun",
 	no_punch = "0",
+	no_broadcast = "0",
+	allow_ikev2 = "0",
+	allow_wireguard = "0",
 	rtx = "0",
 	compress = "0",
 	fec = "0",
 	no_nat = "0",
-	no_tun = "0",
 	allow_mapping = "0",
+	auto_sync_subnet = "0",
+	outbound_interface = "",
+	event_script = "",
 	input = {},
 	output = {},
 	port_mapping = {},
+	peer_address = {},
+	turn = {},
+	punch_model = {},
+	subnet_mapping = {},
+	tunnel_addr = {},
 	udp_stun = {},
 	tcp_stun = {}
 }
 
 local server_defaults = {
-	tcp_bind = "0.0.0.0:29872",
-	quic_bind = "0.0.0.0:29872",
-	ws_bind = "0.0.0.0:29872",
-	web_bind = "0.0.0.0:29871",
+	tcp_bind = "[::]:29872",
+	quic_bind = "[::]:29872",
+	ws_bind = "[::]:29872",
+	web_bind = "[::]:29871",
 	server_quic_bind = "",
 	cert = "",
 	key = "",
@@ -56,12 +67,32 @@ local server_defaults = {
 	server_token = "",
 	white_list = {},
 	peer_servers = {},
-	custom_nets = {}
+	custom_nets = {},
+	ikev2 = {
+		enabled = "0",
+		ike_bind = "[::]:500",
+		natt_bind = "[::]:4500",
+		server_address = "",
+		remote_id = "",
+		cert = "",
+		key = "",
+		dns = {}
+	},
+	wireguard = {
+		enabled = "0",
+		bind = "[::]:51820",
+		endpoint = "",
+		private_key = "",
+		persistent_keepalive = "25"
+	}
 }
 
 local client_option_map = {
 	network_code = "network_code",
 	server = "server",
+	peer_address = "peer_address",
+	turn = "turn",
+	punch_model = "punch_model",
 	ip = "ip",
 	device_id = "device_id",
 	device_name = "device_name",
@@ -71,13 +102,21 @@ local client_option_map = {
 	mtu = "mtu",
 	ctrl_port = "ctrl_port",
 	tunnel_port = "tunnel_port",
+	device_mode = "device_mode",
 	no_punch = "no_punch",
+	no_broadcast = "no_broadcast",
+	allow_ikev2 = "allow_ikev2",
+	allow_wireguard = "allow_wireguard",
 	rtx = "rtx",
 	compress = "compress",
 	fec = "fec",
 	no_nat = "no_nat",
-	no_tun = "no_tun",
 	allow_mapping = "allow_mapping",
+	subnet_mapping = "subnet_mapping",
+	auto_sync_subnet = "auto_sync_subnet",
+	outbound_interface = "outbound_interface",
+	tunnel_addr = "tunnel_addr",
+	event_script = "event_script",
 	input = "input",
 	output = "output",
 	port_mapping = "port_mapping",
@@ -88,6 +127,9 @@ local client_option_map = {
 local web_option_map = {
 	network_code = "network_code",
 	server = "server",
+	peer_address = "peer_address",
+	turn = "turn",
+	punch_model = "punch_model",
 	ip = "ip",
 	device_id = "device_id",
 	device_name = "device_name",
@@ -96,13 +138,21 @@ local web_option_map = {
 	cert_mode = "cert_mode",
 	mtu = "mtu",
 	tunnel_port = "tunnel_port",
+	device_mode = "device_mode",
 	no_punch = "no_punch",
+	no_broadcast = "no_broadcast",
+	allow_ikev2 = "allow_ikev2",
+	allow_wireguard = "allow_wireguard",
 	rtx = "rtx",
 	compress = "compress",
 	fec = "fec",
 	no_nat = "no_nat",
-	no_tun = "no_tun",
 	allow_mapping = "allow_mapping",
+	subnet_mapping = "subnet_mapping",
+	auto_sync_subnet = "auto_sync_subnet",
+	outbound_interface = "outbound_interface",
+	tunnel_addr = "tunnel_addr",
+	event_script = "event_script",
 	input = "input",
 	output = "output",
 	port_mapping = "port_mapping",
@@ -129,18 +179,38 @@ local server_option_map = {
 	custom_nets = "custom_net"
 }
 
+local server_nested_option_map = {
+	ikev2 = {
+		enabled = "ikev2_enabled",
+		ike_bind = "ikev2_ike_bind",
+		natt_bind = "ikev2_natt_bind",
+		server_address = "ikev2_server_address",
+		remote_id = "ikev2_remote_id",
+		cert = "ikev2_cert",
+		key = "ikev2_key",
+		dns = "ikev2_dns"
+	},
+	wireguard = {
+		enabled = "wireguard_enabled",
+		bind = "wireguard_bind",
+		endpoint = "wireguard_endpoint",
+		private_key = "wireguard_private_key",
+		persistent_keepalive = "wireguard_persistent_keepalive"
+	}
+}
+
 local client_order = {
-	"network_code", "server", "ip", "device_id", "device_name", "password", "tun_name",
-	"cert_mode", "mtu", "ctrl_port", "tunnel_port", "no_punch", "rtx", "compress",
-	"fec", "no_nat", "no_tun", "allow_mapping", "input", "output", "port_mapping",
-	"udp_stun", "tcp_stun"
+	"network_code", "server", "peer_address", "turn", "punch_model", "ip", "device_id", "device_name", "password", "tun_name",
+	"cert_mode", "mtu", "ctrl_port", "tunnel_port", "device_mode", "no_punch", "no_broadcast", "allow_ikev2", "allow_wireguard", "rtx", "compress",
+	"fec", "no_nat", "allow_mapping", "subnet_mapping", "auto_sync_subnet", "outbound_interface", "tunnel_addr", "event_script",
+	"input", "output", "port_mapping", "udp_stun", "tcp_stun"
 }
 
 local web_order = {
-	"network_code", "server", "ip", "device_id", "device_name", "password", "tun_name",
-	"cert_mode", "mtu", "tunnel_port", "no_punch", "rtx", "compress",
-	"fec", "no_nat", "no_tun", "allow_mapping", "input", "output", "port_mapping",
-	"udp_stun", "tcp_stun"
+	"network_code", "server", "peer_address", "turn", "punch_model", "ip", "device_id", "device_name", "password", "tun_name",
+	"cert_mode", "mtu", "tunnel_port", "device_mode", "no_punch", "no_broadcast", "allow_ikev2", "allow_wireguard", "rtx", "compress",
+	"fec", "no_nat", "allow_mapping", "subnet_mapping", "auto_sync_subnet", "outbound_interface", "tunnel_addr", "event_script",
+	"input", "output", "port_mapping", "udp_stun", "tcp_stun"
 }
 
 local server_order = {
@@ -150,11 +220,16 @@ local server_order = {
 
 local list_keys = {
 	server = true,
+	peer_address = true,
+	turn = true,
+	punch_model = true,
 	input = true,
 	output = true,
 	port_mapping = true,
 	udp_stun = true,
 	tcp_stun = true,
+	subnet_mapping = true,
+	tunnel_addr = true,
 	white_list = true,
 	peer_servers = true,
 	custom_nets = true
@@ -162,12 +237,18 @@ local list_keys = {
 
 local bool_keys = {
 	no_punch = true,
+	no_broadcast = true,
+	allow_ikev2 = true,
+	allow_wireguard = true,
 	rtx = true,
 	compress = true,
 	fec = true,
 	no_nat = true,
-	no_tun = true,
 	allow_mapping = true,
+	auto_sync_subnet = true,
+	device_mode = false,
+	ikev2_enabled = true,
+	wireguard_enabled = true,
 	persistence = true
 }
 
@@ -182,12 +263,7 @@ local required_string_keys = {
 	network_code = true,
 	tun_name = true,
 	cert_mode = true,
-	tcp_bind = true,
-	quic_bind = true,
-	ws_bind = true,
-	web_bind = true,
-	network = true,
-	username = true
+	network = true
 }
 
 local legacy_key_aliases = {
@@ -197,7 +273,7 @@ local legacy_key_aliases = {
 	compressor = "compress",
 	use_fec = "fec",
 	no_proxy = "no_nat",
-	allow_wire_guard = "allow_mapping",
+	allow_wire_guard = "allow_wireguard",
 	in_ips = "input",
 	out_ips = "output",
 	mapping = "port_mapping",
@@ -281,8 +357,8 @@ local function normalize_client_server_list(value)
 
 	if #out == 1 then
 		local first = out[1]
-		if first == LEGACY_DEFAULT_CLIENT_SERVER and LEGACY_DEFAULT_CLIENT_SERVER ~= DEPRECATED_DEFAULT_CLIENT_SERVER then
-			return {}
+		if first == LEGACY_DEFAULT_CLIENT_SERVER then
+			return { DEFAULT_CLIENT_SERVER }
 		end
 	end
 
@@ -302,24 +378,84 @@ end
 
 local function parse_array(inner)
 	local out = {}
+	local pos = 1
 	inner = trim(inner)
 	if inner == "" then
 		return out
 	end
 
-	for item in inner:gmatch('"(.-)"') do
-		out[#out + 1] = toml_unescape(item)
+	while pos <= #inner do
+		while pos <= #inner and inner:sub(pos, pos):match("[%s,]") do
+			pos = pos + 1
+		end
+		if pos > #inner then
+			break
+		end
+
+		if inner:sub(pos, pos) ~= '"' then
+			return out
+		end
+
+		local start = pos + 1
+		local i = start
+		local escaped = false
+		while i <= #inner do
+			local char = inner:sub(i, i)
+			if escaped then
+				escaped = false
+			elseif char == "\\" then
+				escaped = true
+			elseif char == '"' then
+				break
+			end
+			i = i + 1
+		end
+		if i > #inner then
+			return out
+		end
+
+		out[#out + 1] = toml_unescape(inner:sub(start, i - 1))
+		pos = i + 1
 	end
 
 	return out
 end
 
+local function strip_toml_comment(line)
+	local quoted = false
+	local escaped = false
+	for i = 1, #line do
+		local char = line:sub(i, i)
+		if quoted then
+			if escaped then
+				escaped = false
+			elseif char == "\\" then
+				escaped = true
+			elseif char == '"' then
+				quoted = false
+			end
+		elseif char == '"' then
+			quoted = true
+		elseif char == "#" then
+			return line:sub(1, i - 1)
+		end
+	end
+	return line
+end
+
 local function encode_custom_nets(value)
 	local vals = normalize_list(value)
 	local lines = { "[custom_nets]" }
+	local seen = {}
 
 	for idx, item in ipairs(vals) do
-		lines[#lines + 1] = string.format('net%d = "%s"', idx, toml_escape(item))
+		local code, cidr = item:match("^([^,]+),(.+)$")
+		code = trim(code or ("net" .. idx))
+		cidr = trim(cidr or item)
+		if code ~= "" and cidr ~= "" and not seen[code] then
+			seen[code] = true
+			lines[#lines + 1] = string.format('"%s" = "%s"', toml_escape(code), toml_escape(cidr))
+		end
 	end
 
 	return table.concat(lines, "\n")
@@ -354,6 +490,23 @@ local function encode_value(key, value)
 	return '"' .. toml_escape(value) .. '"'
 end
 
+local function encode_nested_value(section, key, value)
+	if section == "ikev2" and key == "dns" then
+		local parts = {}
+		for _, item in ipairs(normalize_list(value)) do
+			parts[#parts + 1] = '"' .. toml_escape(item) .. '"'
+		end
+		return "[" .. table.concat(parts, ", ") .. "]"
+	end
+	if key == "enabled" then
+		return (trim(value) == "1" or trim(value) == "true") and "true" or "false"
+	end
+	if section == "wireguard" and key == "persistent_keepalive" then
+		return tostring(tonumber(value) or 0)
+	end
+	return '"' .. toml_escape(value) .. '"'
+end
+
 local function parse_value(key, raw)
 	raw = trim(raw)
 
@@ -377,15 +530,23 @@ local function parse_value(key, raw)
 	return raw
 end
 
+local function parse_nested_value(section, key, raw)
+	raw = trim(raw)
+	if section == "ikev2" and key == "dns" then
+		return parse_array(raw:match("^%[(.*)%]$") or "")
+	end
+	if key == "enabled" then
+		return raw == "true" and "1" or "0"
+	end
+	local quoted = raw:match('^"(.*)"$')
+	return quoted ~= nil and toml_unescape(quoted) or raw
+end
+
 local function clone_defaults(src)
 	local out = {}
 	for k, v in pairs(src) do
 		if type(v) == "table" then
-			local t = {}
-			for _, item in ipairs(v) do
-				t[#t + 1] = item
-			end
-			out[k] = t
+			out[k] = clone_defaults(v)
 		else
 			out[k] = v
 		end
@@ -404,22 +565,43 @@ function M.read_toml(path, defaults)
 
 	local content = fs.readfile(path) or ""
 	for line in content:gmatch("[^\r\n]+") do
-		local clean = trim(line:gsub("#.*$", ""))
+		local clean = trim(strip_toml_comment(line))
 		if clean ~= "" then
 			local section = clean:match("^%[([%w_]+)%]$")
 			if section then
 				current_section = section
 			else
-				local key, raw = clean:match("^([%w_]+)%s*=%s*(.-)%s*$")
+				local key, raw = clean:match("^([%w_.%-]+)%s*=%s*(.-)%s*$")
+				if not key then
+					key, raw = clean:match('^"(.-)"%s*=%s*(.-)%s*$')
+				end
 				if key then
 					if current_section == "custom_nets" then
 						data.custom_nets = data.custom_nets or {}
-						local value = parse_value("custom_nets", raw)
-						value = trim(value)
-						if value ~= "" then
-							data.custom_nets[#data.custom_nets + 1] = value
+						-- custom_nets is a TOML table of named string values, not an array.
+						key = toml_unescape(key)
+						local value = raw:match('^"(.*)"$')
+						if value ~= nil then
+							value = toml_unescape(value)
+						else
+							value = raw
 						end
+						value = trim(value)
+						key = trim(key)
+						if key ~= "" and value ~= "" then
+							data.custom_nets[#data.custom_nets + 1] = key .. "," .. value
+						end
+					elseif server_nested_option_map[current_section]
+						and server_nested_option_map[current_section][key] then
+						data[current_section] = data[current_section] or {}
+						data[current_section][key] = parse_nested_value(current_section, key, raw)
+						canonical_seen[current_section .. "." .. key] = true
 					else
+						if key == "no_tun" then
+							local old_value = trim(raw)
+							data.no_tun = (old_value == "true" or old_value == "1") and "1" or "0"
+							canonical_seen.no_tun = true
+						else
 						local target_key = legacy_key_aliases[key] or key
 						local is_legacy = target_key ~= key
 						if not (is_legacy and canonical_seen[target_key]) then
@@ -428,10 +610,14 @@ function M.read_toml(path, defaults)
 								canonical_seen[target_key] = true
 							end
 						end
+						end
 					end
 				end
 			end
 		end
+	end
+	if not canonical_seen.device_mode and canonical_seen.no_tun then
+		data.device_mode = data.no_tun == "1" and "no" or "tun"
 	end
 
 	return data
@@ -467,9 +653,43 @@ function M.write_toml(path, data, order)
 						keep = false
 					end
 				end
+				if key == "tunnel_port" and (trim(value) == "" or trim(value) == "0") then
+					keep = false
+				end
 
 				if keep then
 					lines[#lines + 1] = string.format("%s = %s", key, encode_value(key, value))
+				end
+			end
+		end
+	end
+
+	if order == server_order then
+		for _, section in ipairs({ "ikev2", "wireguard" }) do
+			local nested = data[section] or {}
+			if #lines > 0 and lines[#lines] ~= "" then
+				lines[#lines + 1] = ""
+			end
+			lines[#lines + 1] = "[" .. section .. "]"
+			local keys
+			if section == "ikev2" then
+				keys = { "enabled", "ike_bind", "natt_bind", "server_address", "remote_id", "cert", "key", "dns" }
+			else
+				keys = { "enabled", "bind", "endpoint", "private_key", "persistent_keepalive" }
+			end
+			for _, nested_key in ipairs(keys) do
+				local value = nested[nested_key]
+				if value ~= nil then
+					local keep = nested_key == "enabled"
+						or (section == "ikev2" and nested_key == "server_address")
+						or (section == "ikev2" and nested_key == "remote_id")
+						or (section == "ikev2" and nested_key == "dns")
+						or (section == "wireguard" and nested_key == "persistent_keepalive")
+						or trim(value) ~= ""
+					if keep then
+						lines[#lines + 1] = string.format("%s = %s", nested_key,
+							encode_nested_value(section, nested_key, value))
+					end
 				end
 			end
 		end
@@ -509,6 +729,7 @@ end
 
 function M.ensure_client_toml_from_uci(uci)
 	local client_toml = resolve_client_toml_path(uci)
+	local section = uci:get_first("vnt2", "vnt2_cli")
 
 	if fs.access(client_toml) then
 		return
@@ -517,18 +738,21 @@ function M.ensure_client_toml_from_uci(uci)
 	local data = clone_defaults(client_defaults)
 	for toml_key, uci_key in pairs(client_option_map) do
 		if is_list_key(toml_key) then
-			local val = uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key) or data[toml_key]
+			local val = section and uci:get_list("vnt2", section, uci_key) or data[toml_key]
 			if toml_key == "server" then
 				data[toml_key] = normalize_client_server_list(val)
 			else
 				data[toml_key] = normalize_list(val)
 			end
 		else
-			local val = uci:get_first("vnt2", "vnt2_cli", uci_key)
+			local val = section and uci:get("vnt2", section, uci_key) or nil
 			if val ~= nil then
 				data[toml_key] = trim(val)
 			end
 		end
+	end
+	if #normalize_list(data.tunnel_addr) > 0 then
+		data.tunnel_port = nil
 	end
 
 	M.write_toml(client_toml, data, client_order)
@@ -537,6 +761,7 @@ end
 function M.ensure_web_toml_from_uci(uci)
 	local web_toml = resolve_web_toml_path(uci)
 	local client_toml = resolve_client_toml_path(uci)
+	local section = uci:get_first("vnt2", "vnt2_cli")
 
 	if web_toml == client_toml then
 		M.ensure_client_toml_from_uci(uci)
@@ -551,14 +776,14 @@ function M.ensure_web_toml_from_uci(uci)
 	data.ctrl_port = nil
 	for toml_key, uci_key in pairs(web_option_map) do
 		if is_list_key(toml_key) then
-			local val = uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key) or data[toml_key]
+			local val = section and uci:get_list("vnt2", section, uci_key) or data[toml_key]
 			if toml_key == "server" then
 				data[toml_key] = normalize_client_server_list(val)
 			else
 				data[toml_key] = normalize_list(val)
 			end
 		else
-			local val = uci:get_first("vnt2", "vnt2_cli", uci_key)
+			local val = section and uci:get("vnt2", section, uci_key) or nil
 			if val ~= nil then
 				data[toml_key] = trim(val)
 			end
@@ -570,6 +795,7 @@ end
 
 function M.ensure_server_toml_from_uci(uci)
 	local server_toml = resolve_server_toml_path(uci)
+	local section = uci:get_first("vnt2", "vnts2")
 
 	if fs.access(server_toml) then
 		return
@@ -578,14 +804,31 @@ function M.ensure_server_toml_from_uci(uci)
 	local data = clone_defaults(server_defaults)
 	for toml_key, uci_key in pairs(server_option_map) do
 		if is_list_key(toml_key) then
-			local val = uci:get_list("vnt2", uci:get_first("vnt2", "vnts2"), uci_key) or data[toml_key]
+			local val = section and uci:get_list("vnt2", section, uci_key) or data[toml_key]
 			data[toml_key] = normalize_list(val)
 		else
-			local val = uci:get_first("vnt2", "vnts2", uci_key)
+			local val = section and uci:get("vnt2", section, uci_key) or nil
 			if val ~= nil then
 				data[toml_key] = trim(val)
 			end
 		end
+	end
+	for nested_section, nested_map in pairs(server_nested_option_map) do
+		local nested = data[nested_section] or {}
+		for toml_key, uci_key in pairs(nested_map) do
+			if toml_key == "dns" then
+				local val = section and uci:get_list("vnt2", section, uci_key) or nil
+				if val ~= nil then
+					nested[toml_key] = normalize_list(val)
+				end
+			else
+				local val = section and uci:get("vnt2", section, uci_key) or nil
+				if val ~= nil then
+					nested[toml_key] = trim(val)
+				end
+			end
+		end
+		data[nested_section] = nested
 	end
 
 	M.write_toml(server_toml, data, server_order)
@@ -604,18 +847,20 @@ function M.export_uci_to_toml(uci)
 	local cli = clone_defaults(client_defaults)
 	local web = clone_defaults(client_defaults)
 	local server = clone_defaults(server_defaults)
+	local cli_section = uci:get_first("vnt2", "vnt2_cli")
+	local server_section = uci:get_first("vnt2", "vnts2")
 
 	for toml_key, uci_key in pairs(client_option_map) do
 		if is_list_key(toml_key) then
 			if toml_key == "server" then
 				cli[toml_key] = normalize_client_server_list(
-					uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key)
+					cli_section and uci:get_list("vnt2", cli_section, uci_key) or {}
 				)
 			else
-				cli[toml_key] = normalize_list(uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key))
+				cli[toml_key] = normalize_list(cli_section and uci:get_list("vnt2", cli_section, uci_key) or {})
 			end
 		else
-			local val = uci:get_first("vnt2", "vnt2_cli", uci_key)
+			local val = cli_section and uci:get("vnt2", cli_section, uci_key) or nil
 			if val ~= nil then
 				cli[toml_key] = trim(val)
 			end
@@ -626,13 +871,13 @@ function M.export_uci_to_toml(uci)
 		if is_list_key(toml_key) then
 			if toml_key == "server" then
 				web[toml_key] = normalize_client_server_list(
-					uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key)
+					cli_section and uci:get_list("vnt2", cli_section, uci_key) or {}
 				)
 			else
-				web[toml_key] = normalize_list(uci:get_list("vnt2", uci:get_first("vnt2", "vnt2_cli"), uci_key))
+				web[toml_key] = normalize_list(cli_section and uci:get_list("vnt2", cli_section, uci_key) or {})
 			end
 		else
-			local val = uci:get_first("vnt2", "vnt2_cli", uci_key)
+			local val = cli_section and uci:get("vnt2", cli_section, uci_key) or nil
 			if val ~= nil then
 				web[toml_key] = trim(val)
 			end
@@ -642,13 +887,30 @@ function M.export_uci_to_toml(uci)
 
 	for toml_key, uci_key in pairs(server_option_map) do
 		if is_list_key(toml_key) then
-			server[toml_key] = normalize_list(uci:get_list("vnt2", uci:get_first("vnt2", "vnts2"), uci_key))
+			server[toml_key] = normalize_list(server_section and uci:get_list("vnt2", server_section, uci_key) or {})
 		else
-			local val = uci:get_first("vnt2", "vnts2", uci_key)
+			local val = server_section and uci:get("vnt2", server_section, uci_key) or nil
 			if val ~= nil then
 				server[toml_key] = trim(val)
 			end
 		end
+	end
+	if #normalize_list(cli.tunnel_addr) > 0 then
+		cli.tunnel_port = nil
+	end
+	for nested_section, nested_map in pairs(server_nested_option_map) do
+		local nested = server[nested_section] or {}
+		for toml_key, uci_key in pairs(nested_map) do
+			if toml_key == "dns" then
+				nested[toml_key] = normalize_list(server_section and uci:get_list("vnt2", server_section, uci_key) or {})
+			else
+				local val = server_section and uci:get("vnt2", server_section, uci_key) or nil
+				if val ~= nil then
+					nested[toml_key] = trim(val)
+				end
+			end
+		end
+		server[nested_section] = nested
 	end
 
 	M.write_toml(client_toml, cli, client_order)
@@ -686,6 +948,16 @@ function M.sync_toml_to_uci(uci)
 			set_uci_list(uci, "vnt2", server_section, uci_key, server[toml_key])
 		else
 			set_uci_scalar(uci, "vnt2", server_section, uci_key, server[toml_key])
+		end
+	end
+	for nested_section, nested_map in pairs(server_nested_option_map) do
+		local nested = server[nested_section] or {}
+		for toml_key, uci_key in pairs(nested_map) do
+			if toml_key == "dns" then
+				set_uci_list(uci, "vnt2", server_section, uci_key, nested[toml_key])
+			else
+				set_uci_scalar(uci, "vnt2", server_section, uci_key, nested[toml_key])
+			end
 		end
 	end
 
