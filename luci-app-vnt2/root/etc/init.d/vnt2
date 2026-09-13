@@ -252,9 +252,9 @@ migrate_legacy_client_server() {
 	first_server="$(trim_value "$first_server")"
 
 	if [ "$server_list" = "$LEGACY_DEFAULT_SERVER" ]; then
-		uci -q delete ${CONF}.${cfg}.server
-		uci add_list ${CONF}.${cfg}.server="$DEFAULT_SERVER"
-		uci commit ${CONF} >/dev/null 2>&1
+		uci -q delete "${CONF}.${cfg}.server"
+		uci add_list "${CONF}.${cfg}.server"="$DEFAULT_SERVER"
+		uci commit "$CONF" >/dev/null 2>&1
 		changed="1"
 		log_cli 'legacy default server detected, migrated client server list'
 	fi
@@ -329,7 +329,9 @@ EOF
 
 find_uploaded_bin() {
 	local name="$1"
-	for file in "/tmp/${name}" "/tmp/${name//_/-}" "/tmp/${name}.bin"; do
+	local alt_name
+	alt_name="$(printf '%s' "$name" | tr '_' '-')"
+	for file in "/tmp/${name}" "/tmp/${alt_name}" "/tmp/${name}.bin"; do
 		[ -f "$file" ] && {
 			echo "$file"
 			return 0
@@ -1168,8 +1170,8 @@ locate_extracted_bin() {
 	local name="$2"
 	local alt_dash alt_under found
 
-	alt_dash="${name//_/-}"
-	alt_under="${name//-/_}"
+	alt_dash="$(printf '%s' "$name" | tr '_' '-')"
+	alt_under="$(printf '%s' "$name" | tr '-' '_')"
 
 	found="$(
 		find "$root" -type f \
@@ -1320,7 +1322,7 @@ auto_download_bundle() {
 	local auto_download download_tag download_repo download_mirror cache_mirror_key candidate_mirror api_url arch_name
 	local cache_key cache_dir query_dir json_file release_tag asset_url asset_name asset_file extracted_dir
 	local fallback_version fallback_url
-	local cli_bin ctrl_bin web_bin server_bin
+	local cli_bin ctrl_bin web_bin server_bin server_name
 	asset_name=""
 
 	config_get_bool auto_download "$cfg" "auto_download" "1"
@@ -1410,17 +1412,17 @@ EOF
 				case "$scope" in
 					cli|web)
 						if [ "$scope" = "cli" ]; then
-							uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
-							uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
+							uci -q set "${CONF}.${cfg}.vnt2_cli_bin=${INSTALL_BIN_DIR}/vnt2_cli"
+							uci -q set "${CONF}.${cfg}.vnt2_ctrl_bin=${INSTALL_BIN_DIR}/vnt2_ctrl"
 						else
-							uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
+							uci -q set "${CONF}.${cfg}.vnt2_web_bin=${INSTALL_BIN_DIR}/vnt2_web"
 						fi
 					;;
 					server)
-						uci -q set ${CONF}.${cfg}.vnts2_bin="${INSTALL_BIN_DIR}/vnts2"
+						uci -q set "${CONF}.${cfg}.vnts2_bin=${INSTALL_BIN_DIR}/vnts2"
 					;;
 				 esac
-				uci commit ${CONF} >/dev/null 2>&1
+				uci commit "$CONF" >/dev/null 2>&1
 				return 0
 			fi
 		fi
@@ -1486,12 +1488,12 @@ EOF
 					return 1
 				fi
 				if [ "$scope" = "cli" ]; then
-					uci -q set ${CONF}.${cfg}.vnt2_cli_bin="${INSTALL_BIN_DIR}/vnt2_cli"
-					uci -q set ${CONF}.${cfg}.vnt2_ctrl_bin="${INSTALL_BIN_DIR}/vnt2_ctrl"
+					uci -q set "${CONF}.${cfg}.vnt2_cli_bin=${INSTALL_BIN_DIR}/vnt2_cli"
+					uci -q set "${CONF}.${cfg}.vnt2_ctrl_bin=${INSTALL_BIN_DIR}/vnt2_ctrl"
 				else
-					uci -q set ${CONF}.${cfg}.vnt2_web_bin="${INSTALL_BIN_DIR}/vnt2_web"
+					uci -q set "${CONF}.${cfg}.vnt2_web_bin=${INSTALL_BIN_DIR}/vnt2_web"
 				fi
-				uci commit ${CONF} >/dev/null 2>&1
+				uci commit "$CONF" >/dev/null 2>&1
 				log_download "client bundle installed: cli=${INSTALL_BIN_DIR}/vnt2_cli ctrl=${INSTALL_BIN_DIR}/vnt2_ctrl web=${INSTALL_BIN_DIR}/vnt2_web mirror=${candidate_mirror} url=${asset_url}"
 				write_download_state "$state_file" "success" "installed vnt2_cli, vnt2_ctrl and vnt2_web to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_cli"
 				return 0
@@ -1509,8 +1511,8 @@ EOF
 					write_download_state "$state_file" "failed" "server install to /usr/bin failed" "$asset_name" "$release_tag" "$arch_name" ""
 					return 1
 				fi
-				uci -q set ${CONF}.${cfg}.vnts2_bin="${INSTALL_BIN_DIR}/vnts2"
-				uci commit ${CONF} >/dev/null 2>&1
+				uci -q set "${CONF}.${cfg}.vnts2_bin=${INSTALL_BIN_DIR}/vnts2"
+				uci commit "$CONF" >/dev/null 2>&1
 				log_download "server installed: server=${INSTALL_BIN_DIR}/vnts2 mirror=${candidate_mirror}"
 				write_download_state "$state_file" "success" "installed vnts2 to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnts2"
 				return 0
@@ -1540,7 +1542,7 @@ prepare_binary() {
 	fi
 
 	if auto_download_bundle "$cfg" "$scope" "$state_file"; then
-		bin="$(uci -q get ${CONF}.${cfg}.${option})"
+		bin="$(uci -q get "${CONF}.${cfg}.${option}")"
 		if ensure_exec "$bin"; then
 			echo "$bin"
 			return 0
@@ -1559,8 +1561,8 @@ prepare_binary() {
 			bin="$uploaded"
             write_download_state "$state_file" "fallback" "auto download failed, using uploaded binary without install promotion" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$uploaded"
 		fi
-		uci -q set ${CONF}.${cfg}.${option}="$bin"
-		uci commit ${CONF} >/dev/null 2>&1
+		uci -q set "${CONF}.${cfg}.${option}=${bin}"
+		uci commit "$CONF" >/dev/null 2>&1
 	fi
 
 	ensure_exec "$bin" || return 1
@@ -2050,7 +2052,7 @@ start_cli_instance() {
 			log_cli 'start failed: missing vnt2_cli or vnt2_ctrl'
 			return 1
 		}
-		ctrl_bin="$(uci -q get ${CONF}.${cfg}.vnt2_ctrl_bin)"
+		ctrl_bin="$(uci -q get "${CONF}.${cfg}.vnt2_ctrl_bin")"
 		if ! ensure_exec "$ctrl_bin"; then
 			log_cli 'start failed: vnt2_ctrl missing after recovery'
 			return 1
@@ -2224,9 +2226,9 @@ start_service() {
 	web_cfg="$(get_first_section_id "vnt2_web")"
 	server_cfg="$(get_first_section_id "vnts2")"
 
-    [ -n "$cli_cfg" ] && start_cli_instance "$cli_cfg" || log_cli 'vnt2_cli config section not found'
-    [ -n "$web_cfg" ] && start_web_instance "$web_cfg" || log_web 'vnt2_web config section not found'
-    [ -n "$server_cfg" ] && start_server_instance "$server_cfg" || log_server 'vnts2 config section not found'
+	[ -n "$cli_cfg" ] && start_cli_instance "$cli_cfg" || log_cli 'vnt2_cli config section not found'
+	[ -n "$web_cfg" ] && start_web_instance "$web_cfg" || log_web 'vnt2_web config section not found'
+	[ -n "$server_cfg" ] && start_server_instance "$server_cfg" || log_server 'vnts2 config section not found'
 
 	log_download "start_service finished"
 }

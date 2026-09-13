@@ -3,7 +3,8 @@ local fs = require "nixio.fs"
 local nixio = require "nixio"
 local util = require "luci.util"
 local sys = require "luci.sys"
-local uci = luci.model.uci.cursor()
+local uci = require "luci.model.uci".cursor()
+local dispatcher = require "luci.dispatcher"
 local toml = require "luci.model.vnt2_toml"
 
 toml.ensure_toml_files(uci)
@@ -833,6 +834,17 @@ local function add_file_upload_handler(note_options)
 	local fd
 	local uploaded_name
 
+	local function is_elf_binary(path)
+		local file = nixio.open(path, "r")
+		if not file then
+			return false
+		end
+
+		local magic = file:read(4)
+		file:close()
+		return magic == "\127ELF"
+	end
+
 	local function install_uploaded_binary(src_path, raw_name)
 		local name = trim(raw_name)
 		local target_name
@@ -843,6 +855,9 @@ local function add_file_upload_handler(note_options)
 			target_name = "vnts2"
 		else
 			return nil, translate("未识别的程序文件名，仅支持 vnt2_cli / vnt2_ctrl / vnt2_web / vnts2 / vnts")
+		end
+		if not is_elf_binary(src_path) then
+			return nil, translate("上传文件不是有效的 ELF 可执行程序")
 		end
 
 		local target_path = install_dir .. target_name
@@ -865,6 +880,24 @@ local function add_file_upload_handler(note_options)
 		return trim(sys.exec(cmd))
 	end
 
+	local function archive_is_safe(path)
+		local quoted = util.shellquote(path)
+		if sys.call("tar -tzf " .. quoted .. " >/dev/null 2>&1") ~= 0 then
+			return false
+		end
+		if sys.call("tar -tzf " .. quoted .. " 2>/dev/null | awk '"
+			.. 'BEGIN { bad = 0 } '
+			.. '{ entry = $0; sub(/^\\.\\//, "", entry); '
+			.. 'if (entry ~ /^\\// || entry == ".." || entry ~ /^\\.\\.\\// || entry ~ /\\/\\.\\.\\// || entry ~ /\\/\\.\\.$/) bad = 1 } '
+			.. 'END { exit bad }' .. "'") ~= 0 then
+			return false
+		end
+		return sys.call("tar -tvzf " .. quoted .. " 2>/dev/null | awk '"
+			.. 'BEGIN { bad = 0 } '
+			.. '{ type = substr($0, 1, 1); if (type == "l" || type == "h") bad = 1 } '
+			.. 'END { exit bad }' .. "'") == 0
+	end
+
 	fs.mkdirr(upload_dir)
 	fs.mkdir(install_dir)
 
@@ -874,7 +907,8 @@ local function add_file_upload_handler(note_options)
 				return
 			end
 
-			uploaded_name = meta.file or ""
+			local raw_name = tostring(meta.file or "")
+			uploaded_name = raw_name:match("([^/\\]+)$") or raw_name
 			if uploaded_name == "" then
 				return
 			end
@@ -906,7 +940,8 @@ local function add_file_upload_handler(note_options)
 				sys.call("rm -rf " .. util.shellquote(extract_dir) .. " >/dev/null 2>&1")
 				fs.mkdirr(extract_dir)
 
-				if sys.call("tar -xzf " .. util.shellquote(full) .. " -C " .. util.shellquote(extract_dir) .. " >/dev/null 2>&1") == 0 then
+				if archive_is_safe(full)
+					and sys.call("tar -xzf " .. util.shellquote(full) .. " -C " .. util.shellquote(extract_dir) .. " >/dev/null 2>&1") == 0 then
 					for _, bin in ipairs({ "vnt2_cli", "vnt2_ctrl", "vnt2_web", "vnts2", "vnts" }) do
 						local found = find_extracted_binary(extract_dir, bin)
 						if found ~= "" then
@@ -1687,6 +1722,8 @@ local web_running = web_enabled_state and process_running("vnt2_web")
 local server_running = server_enabled_state and (process_running("vnts2") or process_running("vnts"))
 
 -- ==================== vnt2_cli ====================
+-- Keep each configuration section scoped separately for Lua 5.1 local limits.
+;(function()
 local s = m:section(TypedSection, "vnt2_cli", translate("vnt2_cli 客户端设置"))
 s.anonymous = true
 s.addremove = false
@@ -1772,18 +1809,22 @@ cert_mode.validate = validate_cert_mode
 
 local compress = s:taboption("security", Flag, "compress", translate("启用压缩（LZ4）"))
 compress.rmempty = false
+compress.default = "0"
 
 local fec = s:taboption("security", Flag, "fec", translate("启用 FEC 前向纠错"),
 	translate("在弱网环境下提升稳定性，但会增加带宽开销"))
 fec.rmempty = false
+fec.default = "0"
 
 local rtx = s:taboption("security", Flag, "rtx", translate("启用 QUIC 优化传输"),
 	translate("适用于需要提升链路稳定性的场景"))
 rtx.rmempty = false
+rtx.default = "0"
 
 local no_punch = s:taboption("security", Flag, "no_punch", translate("禁用 P2P 打洞"),
 	translate("开启后将优先通过中继或服务端转发"))
 no_punch.rmempty = false
+no_punch.default = "0"
 
 local input = s:taboption("network", DynamicList, "input", translate("入栈监听规则"),
 	translate("格式：CIDR,目标虚拟IP，例如 192.168.1.0/24,10.26.0.2"))
@@ -1805,11 +1846,12 @@ bind_dynamiclist(port_mapping)
 local allow_mapping = s:taboption("network", Flag, "allow_mapping", translate("允许作为端口映射出口"),
 	translate("开启后其他客户端可借助本机执行映射出口"))
 allow_mapping.rmempty = false
+allow_mapping.default = "0"
 
 local no_nat = s:taboption("network", Flag, "no_nat", translate("关闭内置子网 NAT"),
 	translate("勾选后关闭 VNT2 内置 IP 转发，改用 OpenWrt 系统转发/NAT；不勾选则继续使用 VNT2 内置 IP 转发"))
 no_nat.rmempty = false
-no_nat.default = no_nat.disabled
+no_nat.default = "0"
 
 local device_mode = s:taboption("network", ListValue, "device_mode", translate("虚拟网卡模式"),
 	translate("启用后不创建虚拟网卡，仅适用于端口映射或流量出口类场景"))
@@ -1821,15 +1863,19 @@ device_mode.rmempty = false
 
 local no_broadcast = s:taboption("network", Flag, "no_broadcast", translate("禁用广播/组播"))
 no_broadcast.rmempty = false
+no_broadcast.default = "0"
 
 local allow_ikev2 = s:taboption("network", Flag, "allow_ikev2", translate("允许 IKEv2 转发"))
 allow_ikev2.rmempty = false
+allow_ikev2.default = "0"
 
 local allow_wireguard = s:taboption("network", Flag, "allow_wireguard", translate("允许 WireGuard 转发"))
 allow_wireguard.rmempty = false
+allow_wireguard.default = "0"
 
 local auto_sync_subnet = s:taboption("network", Flag, "auto_sync_subnet", translate("自动同步子网"))
 auto_sync_subnet.rmempty = false
+auto_sync_subnet.default = "0"
 
 local peer_address = s:taboption("network", DynamicList, "peer_address", translate("直连节点地址"),
 	translate("支持 host:port、tcp://、udp:// 或 dynamic:// 地址"))
@@ -1885,7 +1931,7 @@ bind_dynamiclist(tcp_stun)
 local auto_download_cli = s:taboption("advanced", Flag, "auto_download", translate("自动下载程序"),
 	translate("当本地缺少 vnt2_cli / vnt2_ctrl 时，自动从所选镜像源的 Releases 下载匹配当前架构的发行包"))
 auto_download_cli.rmempty = false
-auto_download_cli.default = auto_download_cli.enabled
+auto_download_cli.default = "1"
 
 local download_mirror_cli = s:taboption("advanced", ListValue, "download_mirror", translate("客户端下载镜像源"),
 	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；latest 会先识别 Release tag，再匹配当前架构的精确资源文件名"))
@@ -2186,8 +2232,11 @@ upload.description = translate("支持上传 vnt2_cli / vnt2_ctrl / vnt2_web 二
 local upload_note = s:taboption("upload", DummyValue, "_upload_note")
 upload_note.rawhtml = true
 upload_note.template = "vnt2/other_dvalue"
+cbi_options.upload_note = upload_note
+end)()
 
 -- ==================== vnt2_web ====================
+;(function()
 local w = m:section(TypedSection, "vnt2_web", translate("vnt2_web 客户端设置"))
 w.anonymous = true
 w.addremove = false
@@ -2218,7 +2267,7 @@ end
 local auto_download_web = w:taboption("general", Flag, "auto_download", translate("自动下载程序"),
 	translate("当本地缺少 vnt2_web 时，自动从所选镜像源的 Releases 下载匹配当前架构的发行包"))
 auto_download_web.rmempty = false
-auto_download_web.default = auto_download_web.enabled
+auto_download_web.default = "1"
 
 local download_mirror_web = w:taboption("general", ListValue, "download_mirror", translate("Web 下载镜像源"),
 	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；客户端 ZIP 必须包含 vnt2_cli、vnt2_ctrl、vnt2_web"))
@@ -2262,7 +2311,7 @@ open_web.rawhtml = true
 open_web.cfgvalue = function()
 	return string.format(
 		'<a class="btn cbi-button cbi-button-apply" href="%s" target="_blank" rel="noopener noreferrer">%s</a>',
-		util.pcdata(luci.dispatcher.build_url("admin", "vpn", "vnt2", "open_web")),
+		util.pcdata(dispatcher.build_url("admin", "vpn", "vnt2", "open_web")),
 		util.pcdata(translate("打开页面"))
 	)
 end
@@ -2314,8 +2363,11 @@ web_upload.description = translate("支持上传 vnt2_web 二进制文件或包�
 local web_upload_note = w:taboption("upload", DummyValue, "_upload_note_web")
 web_upload_note.rawhtml = true
 web_upload_note.template = "vnt2/other_dvalue"
+cbi_options.web_upload_note = web_upload_note
+end)()
 
 -- ==================== vnts2 ====================
+;(function()
 local v = m:section(TypedSection, "vnts2", translate("vnts2 服务端设置"))
 v.anonymous = true
 v.addremove = false
@@ -2343,7 +2395,7 @@ end
 local auto_download_server = v:taboption("general", Flag, "auto_download", translate("自动下载程序"),
 	translate("当本地缺少 vnts2 时，自动从所选镜像源的 Releases 下载匹配当前架构的发行包"))
 auto_download_server.rmempty = false
-auto_download_server.default = auto_download_server.enabled
+auto_download_server.default = "1"
 
 local download_mirror_server = v:taboption("general", ListValue, "download_mirror", translate("服务端下载镜像源"),
 	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；服务端资源为无扩展名 ELF 文件"))
@@ -2414,23 +2466,29 @@ server_token.password = true
 
 local open_wan_tcp = v:taboption("listen", Flag, "open_wan_tcp", translate("允许 WAN 访问 TCP 端口"))
 open_wan_tcp.rmempty = false
+open_wan_tcp.default = "0"
 
 local open_wan_quic = v:taboption("listen", Flag, "open_wan_quic", translate("允许 WAN 访问 QUIC 端口"))
 open_wan_quic.rmempty = false
+open_wan_quic.default = "0"
 
 local open_wan_server_quic = v:taboption("listen", Flag, "open_wan_server_quic", translate("允许 WAN 访问服务端互联 QUIC 端口"),
 	translate("仅放行服务端互联 QUIC 地址对应的 UDP 端口；留空监听地址时不会创建规则"))
 open_wan_server_quic.rmempty = false
+open_wan_server_quic.default = "0"
 
 local open_wan_ws = v:taboption("listen", Flag, "open_wan_ws", translate("允许 WAN 访问 WS/WSS 端口"))
 open_wan_ws.rmempty = false
+open_wan_ws.default = "0"
 
 local open_wan_web = v:taboption("listen", Flag, "open_wan_web", translate("允许 WAN 访问管理页面端口"))
 open_wan_web.rmempty = false
+open_wan_web.default = "0"
 
 local ikev2_enabled = v:taboption("listen", Flag, "ikev2_enabled", translate("启用 IKEv2"),
 	translate("启用 IKEv2 VPN 访问；必须填写服务器地址和 Remote ID"))
 ikev2_enabled.rmempty = false
+ikev2_enabled.default = "0"
 
 local ikev2_ike_bind = v:taboption("listen", Value, "ikev2_ike_bind", translate("IKEv2 绑定地址"),
 	translate("IKE 监听地址，通常使用 UDP 500 端口"))
@@ -2472,6 +2530,7 @@ bind_dynamiclist(ikev2_dns)
 local wireguard_enabled = v:taboption("listen", Flag, "wireguard_enabled", translate("启用 WireGuard"),
 	translate("启用 WireGuard 访问"))
 wireguard_enabled.rmempty = false
+wireguard_enabled.default = "0"
 
 local wireguard_bind = v:taboption("listen", Value, "wireguard_bind", translate("WireGuard 绑定地址"),
 	translate("WireGuard UDP 监听地址，通常使用 51820 端口"))
@@ -2495,12 +2554,15 @@ wireguard_persistent_keepalive.validate = validate_wireguard_keepalive
 
 local open_wan_ikev2_ike = v:taboption("listen", Flag, "open_wan_ikev2_ike", translate("允许 WAN 访问 IKEv2"))
 open_wan_ikev2_ike.rmempty = false
+open_wan_ikev2_ike.default = "0"
 
 local open_wan_ikev2_natt = v:taboption("listen", Flag, "open_wan_ikev2_natt", translate("允许 WAN 访问 IKEv2 NAT-T"))
 open_wan_ikev2_natt.rmempty = false
+open_wan_ikev2_natt.default = "0"
 
 local open_wan_wireguard = v:taboption("listen", Flag, "open_wan_wireguard", translate("允许 WAN 访问 WireGuard"))
 open_wan_wireguard.rmempty = false
+open_wan_wireguard.default = "0"
 
 cbi_options.ikev2_enabled = ikev2_enabled
 cbi_options.ikev2_ike_bind = ikev2_ike_bind
@@ -2517,7 +2579,7 @@ open_server_web.rawhtml = true
 open_server_web.cfgvalue = function()
 	return string.format(
 		'<a class="btn cbi-button cbi-button-apply" href="%s" target="_blank" rel="noopener noreferrer">%s</a>',
-		util.pcdata(luci.dispatcher.build_url("admin", "vpn", "vnt2", "open_server_web")),
+		util.pcdata(dispatcher.build_url("admin", "vpn", "vnt2", "open_server_web")),
 		util.pcdata(translate("打开页面"))
 	)
 end
@@ -2535,6 +2597,7 @@ lease_duration.datatype = "uinteger"
 local persistence = v:taboption("cluster", Flag, "persistence", translate("启用持久化"),
 	translate("开启后服务端会持久化地址租约和相关状态"))
 persistence.rmempty = false
+persistence.default = "1"
 
 local white_list = v:taboption("cluster", DynamicList, "white_list", translate("白名单令牌"),
 	translate("用于限制允许接入的 token 列表"))
@@ -2605,7 +2668,13 @@ server_upload.description = translate("支持上传 vnts2 / vnts 二进制文件
 local server_upload_note = v:taboption("upload", DummyValue, "_upload_note_server")
 server_upload_note.rawhtml = true
 server_upload_note.template = "vnt2/other_dvalue"
+cbi_options.server_upload_note = server_upload_note
+end)()
 
-add_file_upload_handler({ upload_note, web_upload_note, server_upload_note })
+add_file_upload_handler({
+	cbi_options.upload_note,
+	cbi_options.web_upload_note,
+	cbi_options.server_upload_note
+})
 
 return m
