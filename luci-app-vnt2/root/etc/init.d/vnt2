@@ -475,6 +475,7 @@ download_file() {
 	local out="$2"
 	local purpose="${3:-generic}"
 	local mirror="${4:-auto}"
+	local custom_mirror_url="$5"
 	local downloader
 	local rc
 	local actual_url
@@ -483,7 +484,7 @@ download_file() {
 	DOWNLOAD_LAST_TOOL="$downloader"
 	DOWNLOAD_LAST_URL=""
 
-	for actual_url in $(get_download_url_candidates_for_mirror "$url" "$mirror"); do
+	for actual_url in $(get_download_url_candidates_for_mirror "$url" "$mirror" "$custom_mirror_url"); do
 		DOWNLOAD_LAST_URL="$actual_url"
 
 		case "$downloader" in
@@ -563,18 +564,35 @@ get_download_url_candidates() {
 get_download_url_candidates_for_mirror() {
 	local url="$1"
 	local mirror="$2"
+	local custom_mirror_url="$3"
 	local raw_url
 
 	url="$(trim_value "$url")"
 	raw_url="$(strip_github_proxy_url "$url")"
 	mirror="$(normalize_download_mirror "$mirror")"
+	custom_mirror_url="$(normalize_custom_mirror_url "$custom_mirror_url")"
 	[ -n "$raw_url" ] || return 0
 
 	if [ "$mirror" = "github" ]; then
 		printf '%s\n' "$raw_url"
+	elif [ "$mirror" = "custom" ] && [ -n "$custom_mirror_url" ] && is_github_download_url "$raw_url"; then
+		printf '%s\n' "${custom_mirror_url}${raw_url}"
+		printf '%s\n' "$raw_url"
 	else
 		get_download_url_candidates "$raw_url"
 	fi
+}
+
+normalize_custom_mirror_url() {
+	local url="$1"
+
+	url="$(trim_value "$url")"
+	[ -n "$url" ] || return 0
+	case "$url" in
+		http://*|https://*) ;;
+		*) return 0 ;;
+	esac
+	printf '%s\n' "$url" | sed 's#/*$#/#'
 }
 
 normalize_release_tag() {
@@ -625,9 +643,11 @@ normalize_download_mirror() {
 		github)
 			echo "github"
 		;;
+		custom)
+			echo "custom"
+		;;
 		gitee|gitlab|cloudflare)
-		# Keep old UCI values readable, but use the supported GitHub transport.
-			echo "auto"
+			echo "$mirror"
 		;;
 		*)
 			echo "auto"
@@ -683,6 +703,12 @@ get_download_mirror_candidates() {
 		github)
 			echo "github"
 		;;
+		custom)
+			printf '%s\n' "custom" "github"
+		;;
+		gitee|gitlab|cloudflare)
+			printf '%s\n' "$mirror" "github"
+		;;
 		*)
 			printf '%s\n' "gh-proxy" "github"
 		;;
@@ -692,6 +718,7 @@ get_download_mirror_candidates() {
 get_download_mirror_cache_key() {
 	local repo="$1"
 	local mirror="$2"
+	local custom_mirror_url="$3"
 
 	mirror="$(normalize_download_mirror "$mirror")"
 	case "$mirror" in
@@ -700,6 +727,17 @@ get_download_mirror_cache_key() {
 		;;
 		github)
 			echo "github"
+		;;
+		custom)
+			custom_mirror_url="$(normalize_custom_mirror_url "$custom_mirror_url")"
+			if [ -n "$custom_mirror_url" ]; then
+				echo "custom_$(sanitize_name "$custom_mirror_url")"
+			else
+				echo "gh-proxy"
+			fi
+		;;
+		gitee|gitlab|cloudflare)
+			echo "$mirror"
 		;;
 		*)
 			echo "gh-proxy"
@@ -741,11 +779,32 @@ get_release_api_candidates() {
 	local repo="$1"
 	local tag="$2"
 	local mirror="$3"
-	local resolved_tag normalized_tag
+	local resolved_tag normalized_tag effective_mirror project
 
 	[ -n "$repo" ] || repo="vnt-dev/vnt"
 	resolved_tag="$(resolve_v2_release_tag "$repo" "$tag")"
 	normalized_tag="$(normalize_release_tag "$resolved_tag")"
+	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
+
+	case "$effective_mirror" in
+		gitee|gitlab|cloudflare)
+			project="$(repo_to_mirror_project "$repo")" || effective_mirror="github"
+			if [ "$effective_mirror" != "github" ]; then
+				case "$effective_mirror" in
+					gitee)
+						echo "https://gitee.com/api/v5/repos/whzhni/${project}/releases"
+					;;
+					gitlab)
+						echo "https://gitlab.com/api/v4/projects/whzhni%2F${project}/releases"
+					;;
+					cloudflare)
+						echo "https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev/${project}/releases"
+					;;
+				 esac
+				return 0
+			fi
+		;;
+	esac
 
 	if [ -z "$resolved_tag" ] || [ "$resolved_tag" = "latest" ]; then
 		echo "https://api.github.com/repos/${repo}/releases"
@@ -905,21 +964,35 @@ fetch_release_metadata_from_mirror() {
 	local tag="$2"
 	local json_file="$3"
 	local mirror="$4"
-	local api_url response_tag candidate requested_tag effective_mirror first_file
+	local custom_mirror_url="$5"
+	local api_url response_tag candidate requested_tag effective_mirror first_file tagged_file json_root
 
 	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
 	requested_tag="$(normalize_release_tag "$tag")"
 
 	for candidate in $(get_release_api_candidates "$repo" "$tag" "$effective_mirror"); do
 		log_download "checking release endpoint: ${candidate}"
-		if download_file "$candidate" "$json_file" "api" "$effective_mirror"; then
+		if download_file "$candidate" "$json_file" "api" "$effective_mirror" "$custom_mirror_url"; then
 			response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
 			response_tag="$(normalize_release_tag "$response_tag")"
 			case "$candidate" in
 				*/releases)
-					first_file="${json_file}.first"
-					if extract_first_release_object "$json_file" "$first_file"; then
-						mv -f "$first_file" "$json_file"
+						json_root="$(sed -n 's/^[[:space:]]*\([{[]\).*/\1/p' "$json_file" | head -n1)"
+						if [ "$json_root" = "[" ] && [ -n "$requested_tag" ] && [ "$requested_tag" != "latest" ]; then
+							tagged_file="${json_file}.tagged"
+							if extract_release_object_by_tag "$json_file" "$tagged_file" "$requested_tag"; then
+								mv -f "$tagged_file" "$json_file"
+							else
+								rm -f "$tagged_file"
+								continue
+							fi
+						elif [ "$json_root" = "[" ]; then
+							first_file="${json_file}.first"
+							if extract_first_release_object "$json_file" "$first_file"; then
+								mv -f "$first_file" "$json_file"
+							fi
+						fi
+					if [ -s "$json_file" ]; then
 						response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
 						response_tag="$(normalize_release_tag "$response_tag")"
 					fi
@@ -930,28 +1003,6 @@ fetch_release_metadata_from_mirror() {
 			}; then
 				echo "$candidate"
 				return 0
-			fi
-			# A proxy may return HTTP 200 with an HTML/error body. Validate the
-			# response tag before accepting it, then try the original endpoint.
-			if [ "$effective_mirror" != "github" ] && download_file "$candidate" "$json_file" "api" "github"; then
-				response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
-				response_tag="$(normalize_release_tag "$response_tag")"
-				case "$candidate" in
-					*/releases)
-						first_file="${json_file}.first"
-						if extract_first_release_object "$json_file" "$first_file"; then
-							mv -f "$first_file" "$json_file"
-							response_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
-							response_tag="$(normalize_release_tag "$response_tag")"
-						fi
-					;;
-				esac
-				if [ -n "$response_tag" ] && {
-					[ -z "$requested_tag" ] || [ "$requested_tag" = "latest" ] || [ "$response_tag" = "$requested_tag" ]
-				}; then
-					echo "$candidate#github-fallback"
-					return 0
-				fi
 			fi
 		fi
 	done
@@ -1319,7 +1370,7 @@ auto_download_bundle() {
 	local scope="$2"
 	local state_file="$3"
 
-	local auto_download download_tag download_repo download_mirror cache_mirror_key candidate_mirror api_url arch_name
+	local auto_download download_tag download_repo download_mirror custom_mirror_url cache_mirror_key candidate_mirror api_url arch_name
 	local cache_key cache_dir query_dir json_file release_tag asset_url asset_name asset_file extracted_dir
 	local fallback_version fallback_url
 	local cli_bin ctrl_bin web_bin server_bin server_name
@@ -1336,17 +1387,20 @@ auto_download_bundle() {
 			config_get download_tag "$cfg" "download_tag" "latest"
 			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnts"
 			config_get download_mirror "$cfg" "download_mirror" "gh-proxy"
+			config_get custom_mirror_url "$cfg" "custom_download_mirror" ""
 		;;
 		*)
 			config_get download_tag "$cfg" "download_tag" "latest"
 			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
 			config_get download_mirror "$cfg" "download_mirror" "gh-proxy"
+			config_get custom_mirror_url "$cfg" "custom_download_mirror" ""
 		;;
 	esac
 	[ -n "$download_tag" ] || download_tag="latest"
 	[ -n "$download_repo" ] || download_repo="vnt-dev/vnt"
 	download_mirror="$(normalize_download_mirror "$download_mirror")"
-	cache_mirror_key="$(get_download_mirror_cache_key "$download_repo" "$download_mirror")"
+	custom_mirror_url="$(normalize_custom_mirror_url "$custom_mirror_url")"
+	cache_mirror_key="$(get_download_mirror_cache_key "$download_repo" "$download_mirror" "$custom_mirror_url")"
 	download_tag="$(resolve_v2_release_tag "$download_repo" "$download_tag")"
 	[ -n "$download_tag" ] || download_tag="latest"
 
@@ -1359,7 +1413,7 @@ auto_download_bundle() {
 	for candidate_mirror in $(get_download_mirror_candidates "$download_repo" "$download_mirror"); do
 		write_download_state "$state_file" "querying" "querying releases (${candidate_mirror})" "" "$download_tag" "$arch_name" ""
 		log_download "querying ${scope} release repo=${download_repo} tag=${download_tag} mirror=${candidate_mirror} strategy=${download_mirror} arch=${arch_name}"
-		api_url="$(fetch_release_metadata_from_mirror "$download_repo" "$download_tag" "$json_file" "$candidate_mirror")"
+		api_url="$(fetch_release_metadata_from_mirror "$download_repo" "$download_tag" "$json_file" "$candidate_mirror" "$custom_mirror_url")"
 		if [ -z "$api_url" ]; then
 			log_download "release query failed repo=${download_repo} tag=${download_tag} mirror=${candidate_mirror}"
 			if [ "$candidate_mirror" != "github" ]; then
@@ -1437,7 +1491,7 @@ EOF
 		fi
 
 		if [ ! -s "$asset_file" ]; then
-			if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror"; then
+			if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror" "$custom_mirror_url"; then
 				log_download "asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} asset_url=${asset_url}"
 				rm -f "$asset_file"
 				continue
@@ -1454,7 +1508,7 @@ EOF
 		if ! extract_release_asset "$asset_file" "$extracted_dir"; then
 			log_download "extract failed, remove cache and retry ${asset_file}"
 			rm -f "$asset_file"
-			if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror"; then
+			if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror" "$custom_mirror_url"; then
 				log_download "retry asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} asset_url=${asset_url}"
 				rm -f "$asset_file"
 				continue
@@ -2252,8 +2306,13 @@ stop_service() {
 }
 
 reload_service() {
-	stop
-	start
+	ensure_log_files
+	log_download 'reload requested, schedule asynchronous restart'
+	(
+		sleep 1
+		/etc/init.d/vnt2 restart >/dev/null 2>&1
+	) >/dev/null 2>&1 &
+	return 0
 }
 
 service_triggers() {

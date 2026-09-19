@@ -407,18 +407,38 @@ local function normalize_download_mirror(mirror)
 	if mirror == "github" then
 		return mirror
 	end
-	if mirror == "gitee" or mirror == "gitlab" or mirror == "cloudflare" then
-		return "auto"
+	if mirror == "gitee" or mirror == "gitlab" or mirror == "cloudflare" or mirror == "custom" then
+		return mirror
 	end
 	return "auto"
 end
 
-local function get_download_url_candidates_for_mirror(url, mirror)
+local function normalize_custom_mirror_url(url)
+	url = trim(url)
+	if url == "" or not url:match("^https?://[^%s]+/?$") then
+		return ""
+	end
+	return (url:gsub("/*$", "/"))
+end
+
+local function get_download_url_candidates_for_mirror(url, mirror, custom_mirror_url)
 	url = trim(url)
 	mirror = normalize_download_mirror(mirror)
 	if mirror == "github" then
 		url = url:gsub("^https://gh%-proxy%.com/", "")
 		return url ~= "" and { url } or {}
+	elseif mirror == "custom" then
+		local raw = url:gsub("^https://gh%-proxy%.com/", "")
+		local custom = normalize_custom_mirror_url(custom_mirror_url)
+		local is_github_url = raw:match("^https://api%.github%.com/")
+			or raw:match("^https://github%.com/")
+			or raw:match("^https://raw%.githubusercontent%.com/")
+			or raw:match("^https://objects%.githubusercontent%.com/")
+			or raw:match("^https://release%-assets%.githubusercontent%.com/")
+		if custom ~= "" and is_github_url then
+			return { custom .. raw, raw }
+		end
+		return raw ~= "" and { raw } or {}
 	end
 	return get_download_url_candidates(url)
 end
@@ -444,6 +464,10 @@ local function get_download_mirror_candidates(repo, mirror)
 		return { "gh-proxy", "github" }
 	elseif mirror == "github" then
 		return { "github" }
+	elseif mirror == "custom" then
+		return { "custom", "github" }
+	elseif mirror == "gitee" or mirror == "gitlab" or mirror == "cloudflare" then
+		return { mirror, "github" }
 	end
 	return { "gh-proxy", "github" }
 end
@@ -475,7 +499,7 @@ local function build_latest_release_endpoint_for_mirror(repo, mirror)
 	return string.format("https://api.github.com/repos/%s/releases", repo), "github"
 end
 
-local function get_cached_latest_tag(repo, mirror)
+local function get_cached_latest_tag(repo, mirror, custom_mirror_url)
 	repo = trim(repo)
 	if repo == "" then
 		repo = "vnt-dev/vnt"
@@ -501,7 +525,7 @@ local function get_cached_latest_tag(repo, mirror)
 			string.format("https://api.github.com/repos/%s/releases/latest", repo)
 		}
 		for _, endpoint_candidate in ipairs(endpoints) do
-			for _, endpoint_url in ipairs(get_download_url_candidates_for_mirror(endpoint_candidate, effective_mirror)) do
+			for _, endpoint_url in ipairs(get_download_url_candidates_for_mirror(endpoint_candidate, effective_mirror, custom_mirror_url)) do
 				local cmd = string.format([=[curl -fsSL --connect-timeout 4 %s 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*:[[:space:]]*"//; s/"$//']=], shell_quote(endpoint_url))
 				local tag = trim(sys.exec(cmd))
 				if tag ~= "" then
@@ -524,7 +548,7 @@ local function normalize_display_tag(tag)
 	return tag
 end
 
-local function get_vnt2_latest_tag(repo, configured_tag, mirror)
+local function get_vnt2_latest_tag(repo, configured_tag, mirror, custom_mirror_url)
 	repo = trim(repo)
 	configured_tag = trim(configured_tag)
 
@@ -537,7 +561,7 @@ local function get_vnt2_latest_tag(repo, configured_tag, mirror)
 			return normalize_display_tag(configured_tag)
 		end
 
-		local latest = normalize_display_tag(get_cached_latest_tag(repo, mirror))
+		local latest = normalize_display_tag(get_cached_latest_tag(repo, mirror, custom_mirror_url))
 		if latest ~= "" then
 			return latest
 		end
@@ -549,7 +573,7 @@ local function get_vnt2_latest_tag(repo, configured_tag, mirror)
 		return normalize_display_tag(configured_tag)
 	end
 
-	return normalize_display_tag(get_cached_latest_tag(repo, mirror))
+	return normalize_display_tag(get_cached_latest_tag(repo, mirror, custom_mirror_url))
 end
 
 local function sanitize_text_content(content)
@@ -832,7 +856,8 @@ local function summarize_cli_config()
 		auto_download = uci_first("vnt2_cli", "auto_download", "1"),
 		download_repo = uci_first("vnt2_cli", "download_repo", "vnt-dev/vnt"),
 		download_tag = uci_first("vnt2_cli", "download_tag", "latest"),
-		download_mirror = uci_first("vnt2_cli", "download_mirror", "gh-proxy")
+		download_mirror = uci_first("vnt2_cli", "download_mirror", "gh-proxy"),
+		custom_download_mirror = uci_first("vnt2_cli", "custom_download_mirror", "")
 	}
 end
 
@@ -845,7 +870,8 @@ local function summarize_web_config()
 		auto_download = uci_first("vnt2_web", "auto_download", "1"),
 		download_repo = uci_first("vnt2_web", "download_repo", "vnt-dev/vnt"),
 		download_tag = uci_first("vnt2_web", "download_tag", "latest"),
-		download_mirror = uci_first("vnt2_web", "download_mirror", "gh-proxy")
+		download_mirror = uci_first("vnt2_web", "download_mirror", "gh-proxy"),
+		custom_download_mirror = uci_first("vnt2_web", "custom_download_mirror", "")
 	}
 end
 
@@ -875,6 +901,7 @@ local function summarize_server_config()
 		download_repo = uci_first("vnts2", "download_repo", "vnt-dev/vnts"),
 		download_tag = uci_first("vnts2", "download_tag", "latest"),
 		download_mirror = uci_first("vnts2", "download_mirror", "gh-proxy"),
+		custom_download_mirror = uci_first("vnts2", "custom_download_mirror", ""),
 		white_list = cfg.white_list or {},
 		peer_servers = cfg.peer_servers or {},
 		custom_net = cfg.custom_nets or {},
@@ -944,15 +971,15 @@ function act_status()
 	e.web_tag = get_local_tag(get_web_bin())
 	e.server_tag = get_local_tag(get_server_bin())
 
-	local latest_tag = get_vnt2_latest_tag(cli_cfg.download_repo, cli_cfg.download_tag, cli_cfg.download_mirror)
+	local latest_tag = get_vnt2_latest_tag(cli_cfg.download_repo, cli_cfg.download_tag, cli_cfg.download_mirror, cli_cfg.custom_download_mirror)
 	if latest_tag == "" then
-		latest_tag = get_vnt2_latest_tag(web_cfg.download_repo, web_cfg.download_tag, web_cfg.download_mirror)
+		latest_tag = get_vnt2_latest_tag(web_cfg.download_repo, web_cfg.download_tag, web_cfg.download_mirror, web_cfg.custom_download_mirror)
 	end
 	if latest_tag == "" then
 		latest_tag = get_vnt2_latest_tag("vnt-dev/vnt", "latest", "auto")
 	end
 
-	local latest_server_tag = get_vnt2_latest_tag(server_cfg.download_repo, server_cfg.download_tag, server_cfg.download_mirror)
+	local latest_server_tag = get_vnt2_latest_tag(server_cfg.download_repo, server_cfg.download_tag, server_cfg.download_mirror, server_cfg.custom_download_mirror)
 	if latest_server_tag == "" then
 		latest_server_tag = get_vnt2_latest_tag("vnt-dev/vnts", "latest", "auto")
 	end
@@ -989,6 +1016,7 @@ function act_status()
 	e.cli_download_repo = cli_cfg.download_repo
 	e.cli_download_tag = cli_cfg.download_tag
 	e.cli_download_mirror = cli_cfg.download_mirror
+	e.cli_custom_download_mirror = cli_cfg.custom_download_mirror
 
 	e.web_log_level = web_cfg.log_level
 	e.web_wan = web_cfg.wan
@@ -996,6 +1024,7 @@ function act_status()
 	e.web_download_repo = web_cfg.download_repo
 	e.web_download_tag = web_cfg.download_tag
 	e.web_download_mirror = web_cfg.download_mirror
+	e.web_custom_download_mirror = web_cfg.custom_download_mirror
 
 	e.server_tcp_bind = server_cfg.tcp_bind
 	e.server_quic_bind = server_cfg.quic_bind
@@ -1010,6 +1039,7 @@ function act_status()
 	e.server_download_repo = server_cfg.download_repo
 	e.server_download_tag = server_cfg.download_tag
 	e.server_download_mirror = server_cfg.download_mirror
+	e.server_custom_download_mirror = server_cfg.custom_download_mirror
 	e.server_white_list = server_cfg.white_list
 	e.server_peer_servers = server_cfg.peer_servers
 	e.server_custom_net = server_cfg.custom_net

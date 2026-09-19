@@ -17,7 +17,17 @@ m.description = translate(
 m:section(SimpleSection).template = "vnt2/vnt2_status"
 
 local function export_toml_from_uci(self)
-	toml.export_uci_to_toml(self.uci)
+	local cursor = (self and self.uci) or uci
+	local ok, err = pcall(toml.export_uci_to_toml, cursor)
+	if not ok then
+		local msg = string.format("%s vnt2 CBI TOML export failed: %s\n",
+			os.date("%Y-%m-%d %H:%M:%S"), tostring(err))
+		fs.writefile("/tmp/vnt2-cbi-error.log", msg)
+	end
+end
+
+local function restart_vnt2_async()
+	sys.call("(sleep 1; /etc/init.d/vnt2 restart >/dev/null 2>&1) >/dev/null 2>&1 &")
 end
 
 m.on_after_save = export_toml_from_uci
@@ -1709,8 +1719,25 @@ local function bind_download_mirror(option)
 	option:value("gitee", "Gitee")
 	option:value("gitlab", "GitLab")
 	option:value("cloudflare", "Cloudflare R2")
+	option:value("custom", translate("自定义"))
 	option.default = "gh-proxy"
 	option.rmempty = false
+end
+
+local function bind_custom_download_mirror(option, mirror_option)
+	option:depends(mirror_option, "custom")
+	option.placeholder = "https://gh-proxy.com/"
+	option.description = translate("请输入镜像前缀，例如 https://gh-proxy.com/；下载时会将 GitHub 原始 URL 拼接到此前缀后，失败后回退 GitHub 原地址")
+	option.validate = function(self, value)
+		value = trim(value)
+		if value == "" then
+			return nil, translate("选择自定义镜像源时必须填写镜像源地址")
+		end
+		if not value:match("^https?://[^%s]+/?$") then
+			return nil, translate("自定义镜像源地址必须以 http:// 或 https:// 开头，且不能包含空格")
+		end
+		return value
+	end
 end
 
 local cli_enabled = m.uci:get_first("vnt2", "vnt2_cli", "enabled") == "1"
@@ -1760,7 +1787,7 @@ restart_btn.inputstyle = "apply"
 restart_btn.description = translate("在未修改参数时快速重启 vnt2_cli")
 restart_btn:depends("enabled", "1")
 restart_btn.write = function()
-	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")
+	restart_vnt2_async()
 end
 
 local network_code = s:taboption("general", Value, "network_code", translate("网络编号"),
@@ -1936,6 +1963,8 @@ auto_download_cli.default = "1"
 local download_mirror_cli = s:taboption("advanced", ListValue, "download_mirror", translate("客户端下载镜像源"),
 	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；latest 会先识别 Release tag，再匹配当前架构的精确资源文件名"))
 bind_download_mirror(download_mirror_cli)
+local custom_download_mirror_cli = s:taboption("advanced", Value, "custom_download_mirror", translate("客户端自定义镜像地址"))
+bind_custom_download_mirror(custom_download_mirror_cli, "download_mirror")
 
 local download_tag_cli = s:taboption("advanced", Value, "download_tag", translate("客户端下载版本"),
 	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签，如 v2.0.18"))
@@ -2261,7 +2290,7 @@ web_restart.inputstyle = "apply"
 web_restart.description = translate("在未修改参数时快速重启 vnt2_web")
 web_restart:depends("enabled", "1")
 web_restart.write = function()
-	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")
+	restart_vnt2_async()
 end
 
 local auto_download_web = w:taboption("general", Flag, "auto_download", translate("自动下载程序"),
@@ -2272,6 +2301,8 @@ auto_download_web.default = "1"
 local download_mirror_web = w:taboption("general", ListValue, "download_mirror", translate("Web 下载镜像源"),
 	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；客户端 ZIP 必须包含 vnt2_cli、vnt2_ctrl、vnt2_web"))
 bind_download_mirror(download_mirror_web)
+local custom_download_mirror_web = w:taboption("general", Value, "custom_download_mirror", translate("Web 自定义镜像地址"))
+bind_custom_download_mirror(custom_download_mirror_web, "download_mirror")
 
 local download_tag_web = w:taboption("general", Value, "download_tag", translate("Web 下载版本"),
 	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签，如 v2.0.18"))
@@ -2389,7 +2420,7 @@ server_restart.inputstyle = "apply"
 server_restart.description = translate("快速重启 vnts2")
 server_restart:depends("enabled", "1")
 server_restart.write = function()
-	sys.call("/etc/init.d/vnt2 restart >/dev/null 2>&1")
+	restart_vnt2_async()
 end
 
 local auto_download_server = v:taboption("general", Flag, "auto_download", translate("自动下载程序"),
@@ -2400,6 +2431,8 @@ auto_download_server.default = "1"
 local download_mirror_server = v:taboption("general", ListValue, "download_mirror", translate("服务端下载镜像源"),
 	translate("默认优先使用 gh-proxy，失败后自动回退 GitHub 原地址；服务端资源为无扩展名 ELF 文件"))
 bind_download_mirror(download_mirror_server)
+local custom_download_mirror_server = v:taboption("general", Value, "custom_download_mirror", translate("服务端自定义镜像地址"))
+bind_custom_download_mirror(custom_download_mirror_server, "download_mirror")
 
 local download_tag_server = v:taboption("general", Value, "download_tag", translate("服务端下载版本"),
 	translate("填写 latest 表示始终获取最新版本，也可填写指定 Release 标签"))
