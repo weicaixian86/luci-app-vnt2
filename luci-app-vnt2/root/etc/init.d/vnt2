@@ -31,6 +31,7 @@ DOWNLOAD_CLI_STATE="/tmp/vnt2-download-cli.state"
 DOWNLOAD_WEB_STATE="/tmp/vnt2-download-web.state"
 DOWNLOAD_SERVER_STATE="/tmp/vnt2-download-server.state"
 GH_PROXY_PREFIX="https://gh-proxy.com/"
+DOWNLOAD_MIRROR_RETRIES=3
 
 INSTALL_BIN_DIR="/usr/bin"
 
@@ -489,14 +490,14 @@ download_file() {
 
 		case "$downloader" in
 			curl)
-				curl -fsSL --connect-timeout 20 --max-time 600 --retry 3 --retry-delay 2 \
+				curl -fsSL --connect-timeout 20 --max-time 600 --retry 0 \
 					-A "luci-app-vnt2" \
 					-H "Accept: application/vnd.github+json, application/octet-stream, */*" \
 					-o "$out" "$actual_url" >/dev/null 2>&1
 				rc=$?
 			;;
 			wget)
-				wget -q --timeout=30 --tries=3 \
+				wget -q --timeout=30 --tries=1 \
 					--header="User-Agent: luci-app-vnt2" \
 					--header="Accept: application/vnd.github+json, application/octet-stream, */*" \
 					-O "$out" "$actual_url" >/dev/null 2>&1
@@ -515,6 +516,8 @@ download_file() {
 		esac
 
 		[ "$rc" -eq 0 ] && return 0
+		# A failed downloader may leave a partial file behind.
+		rm -f "$out"
 	done
 
 	return 1
@@ -575,11 +578,15 @@ get_download_url_candidates_for_mirror() {
 
 	if [ "$mirror" = "github" ]; then
 		printf '%s\n' "$raw_url"
+	elif [ "$mirror" = "gh-proxy" ] && is_github_download_url "$raw_url"; then
+		printf '%s\n' "${GH_PROXY_PREFIX}${raw_url}"
 	elif [ "$mirror" = "custom" ] && [ -n "$custom_mirror_url" ] && is_github_download_url "$raw_url"; then
 		printf '%s\n' "${custom_mirror_url}${raw_url}"
 		printf '%s\n' "$raw_url"
 	else
-		get_download_url_candidates "$raw_url"
+		# A selected mirror must not silently fall back to gh-proxy. The outer
+		# mirror loop owns source failover and retry counting.
+		printf '%s\n' "$raw_url"
 	fi
 }
 
@@ -695,7 +702,7 @@ get_download_mirror_candidates() {
 
 	case "$mirror" in
 		auto)
-			printf '%s\n' "gh-proxy" "github"
+			printf '%s\n' "gh-proxy" "github" "gitee" "gitlab" "cloudflare"
 		;;
 		gh-proxy)
 			printf '%s\n' "gh-proxy" "github"
@@ -722,7 +729,10 @@ get_download_mirror_cache_key() {
 
 	mirror="$(normalize_download_mirror "$mirror")"
 	case "$mirror" in
-		auto|gh-proxy)
+		auto)
+			echo "auto"
+		;;
+		gh-proxy)
 			echo "gh-proxy"
 		;;
 		github)
@@ -733,14 +743,14 @@ get_download_mirror_cache_key() {
 			if [ -n "$custom_mirror_url" ]; then
 				echo "custom_$(sanitize_name "$custom_mirror_url")"
 			else
-				echo "gh-proxy"
+				echo "custom"
 			fi
 		;;
 		gitee|gitlab|cloudflare)
 			echo "$mirror"
 		;;
 		*)
-			echo "gh-proxy"
+			echo "$mirror"
 		;;
 	esac
 }
@@ -753,8 +763,7 @@ get_release_list_url() {
 	[ -n "$repo" ] || repo="vnt-dev/vnt"
 	effective_mirror="$(select_download_mirror "$repo" "$mirror")"
 
-	# Release metadata always comes from GitHub. The transport is selected by
-	# download_file, which tries gh-proxy before the original URL.
+	# The selected mirror determines the release endpoint and transport.
 	echo "https://api.github.com/repos/${repo}/releases"
 }
 
@@ -1371,6 +1380,7 @@ auto_download_bundle() {
 	local state_file="$3"
 
 	local auto_download download_tag download_repo download_mirror custom_mirror_url cache_mirror_key candidate_mirror api_url arch_name
+	local mirror_attempt mirror_retry_limit
 	local cache_key cache_dir query_dir json_file release_tag asset_url asset_name asset_file extracted_dir
 	local fallback_version fallback_url
 	local cli_bin ctrl_bin web_bin server_bin server_name
@@ -1378,7 +1388,7 @@ auto_download_bundle() {
 
 	config_get_bool auto_download "$cfg" "auto_download" "1"
 	[ "$auto_download" = "1" ] || {
-        write_download_state "$state_file" "disabled" "auto download disabled" "" "" "" ""
+		write_download_state "$state_file" "disabled" "auto download disabled" "" "" "" ""
 		return 1
 	}
 
@@ -1386,13 +1396,13 @@ auto_download_bundle() {
 		server)
 			config_get download_tag "$cfg" "download_tag" "latest"
 			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnts"
-			config_get download_mirror "$cfg" "download_mirror" "gh-proxy"
+			config_get download_mirror "$cfg" "download_mirror" "auto"
 			config_get custom_mirror_url "$cfg" "custom_download_mirror" ""
 		;;
 		*)
 			config_get download_tag "$cfg" "download_tag" "latest"
 			config_get download_repo "$cfg" "download_repo" "vnt-dev/vnt"
-			config_get download_mirror "$cfg" "download_mirror" "gh-proxy"
+			config_get download_mirror "$cfg" "download_mirror" "auto"
 			config_get custom_mirror_url "$cfg" "custom_download_mirror" ""
 		;;
 	esac
@@ -1411,167 +1421,158 @@ auto_download_bundle() {
 
 	log_download "query target release repo=${download_repo} tag=${download_tag} arch=${arch_name} scope=${scope}"
 	for candidate_mirror in $(get_download_mirror_candidates "$download_repo" "$download_mirror"); do
-		write_download_state "$state_file" "querying" "querying releases (${candidate_mirror})" "" "$download_tag" "$arch_name" ""
-		log_download "querying ${scope} release repo=${download_repo} tag=${download_tag} mirror=${candidate_mirror} strategy=${download_mirror} arch=${arch_name}"
-		api_url="$(fetch_release_metadata_from_mirror "$download_repo" "$download_tag" "$json_file" "$candidate_mirror" "$custom_mirror_url")"
-		if [ -z "$api_url" ]; then
-			log_download "release query failed repo=${download_repo} tag=${download_tag} mirror=${candidate_mirror}"
-			if [ "$candidate_mirror" != "github" ]; then
-				continue
-			fi
-			fallback_version="$(normalize_release_tag "$download_tag")"
-			if [ "$fallback_version" = "latest" ] || [ -z "$fallback_version" ]; then
-				fallback_version="$(get_default_release_version "$download_repo")"
-			fi
-			fallback_url="$(get_release_asset_url "$download_repo" "$scope" "$fallback_version" "$arch_name" 2>/dev/null)"
-			if [ -z "$fallback_url" ]; then
-				continue
-			fi
-			cat >"$json_file" <<EOF
+		mirror_retry_limit="$DOWNLOAD_MIRROR_RETRIES"
+		[ "$candidate_mirror" = "custom" ] && mirror_retry_limit=1
+		for mirror_attempt in $(seq 1 "$mirror_retry_limit"); do
+			log_download "mirror attempt ${mirror_attempt}/${mirror_retry_limit} mirror=${candidate_mirror} scope=${scope}"
+			write_download_state "$state_file" "querying" "querying releases (${candidate_mirror})" "" "$download_tag" "$arch_name" ""
+			log_download "querying ${scope} release repo=${download_repo} tag=${download_tag} mirror=${candidate_mirror} strategy=${download_mirror} arch=${arch_name}"
+			api_url="$(fetch_release_metadata_from_mirror "$download_repo" "$download_tag" "$json_file" "$candidate_mirror" "$custom_mirror_url")"
+			if [ -z "$api_url" ]; then
+				log_download "release query failed repo=${download_repo} tag=${download_tag} mirror=${candidate_mirror}"
+				if [ "$candidate_mirror" != "github" ]; then
+					continue
+				fi
+				fallback_version="$(normalize_release_tag "$download_tag")"
+				if [ "$fallback_version" = "latest" ] || [ -z "$fallback_version" ]; then
+					fallback_version="$(get_default_release_version "$download_repo")"
+				fi
+				fallback_url="$(get_release_asset_url "$download_repo" "$scope" "$fallback_version" "$arch_name" 2>/dev/null)"
+				if [ -z "$fallback_url" ]; then
+					continue
+				fi
+				cat >"$json_file" <<EOF
 {"tag_name":"v${fallback_version}","assets":[{"browser_download_url":"${fallback_url}"}]}
 EOF
-			api_url="fallback:${fallback_url}"
-			log_download "using built-in release fallback repo=${download_repo} tag=${fallback_version} asset_url=${fallback_url}"
-		fi
-
-		log_download "release query ok: ${api_url} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror}"
-		release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
-		release_tag="$(normalize_release_tag "$release_tag")"
-		[ -n "$release_tag" ] || release_tag="$download_tag"
-		[ "$release_tag" != "latest" ] || {
-			log_download "release metadata did not provide a usable tag mirror=${candidate_mirror}"
-			continue
-		}
-
-		cache_key="$(sanitize_name "${cache_mirror_key}_${download_repo}_${release_tag}_${arch_name}_${scope}")"
-		cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
-		extracted_dir="${cache_dir}/extracted"
-		mkdir -p "$cache_dir"
-		cp -f "$json_file" "${cache_dir}/release.json" >/dev/null 2>&1
-
-		asset_url="$(select_release_asset "$json_file" "$scope" "$release_tag" "$arch_name")" || {
-			log_download "no release asset matched arch=${arch_name} scope=${scope} mirror=${candidate_mirror}"
-			continue
-		}
-
-		asset_name="$(basename "$asset_url")"
-		asset_file="${cache_dir}/${asset_name}"
-		write_download_state "$state_file" "downloading" "downloading release asset (${candidate_mirror})" "$asset_name" "$release_tag" "$arch_name" ""
-		log_download "selected asset ${asset_name} mirror=${candidate_mirror} url=${asset_url}"
-
-		if cache_bundle_ready "$extracted_dir" "$scope"; then
-			log_download "cached bundle found for ${scope}, reuse ${extracted_dir} mirror=${candidate_mirror}"
-			write_download_state "$state_file" "cached" "reusing local cached bundle" "$(basename "$cache_dir")" "$release_tag" "$arch_name" "$extracted_dir"
-			if install_bundle_to_usrbin "$extracted_dir" "$scope"; then
-				case "$scope" in
-					cli|web)
-						if [ "$scope" = "cli" ]; then
-							uci -q set "${CONF}.${cfg}.vnt2_cli_bin=${INSTALL_BIN_DIR}/vnt2_cli"
-							uci -q set "${CONF}.${cfg}.vnt2_ctrl_bin=${INSTALL_BIN_DIR}/vnt2_ctrl"
-						else
-							uci -q set "${CONF}.${cfg}.vnt2_web_bin=${INSTALL_BIN_DIR}/vnt2_web"
-						fi
-					;;
-					server)
-						uci -q set "${CONF}.${cfg}.vnts2_bin=${INSTALL_BIN_DIR}/vnts2"
-					;;
-				 esac
-				uci commit "$CONF" >/dev/null 2>&1
-				return 0
+				api_url="fallback:${fallback_url}"
+				log_download "using built-in release fallback repo=${download_repo} tag=${fallback_version} asset_url=${fallback_url}"
 			fi
-		fi
 
-		if [ -s "$asset_file" ]; then
-			if validate_release_asset "$asset_file" "$scope"; then
-				log_download "reusing downloaded asset ${asset_file}"
-			else
-				log_download "cached asset invalid, remove and redownload ${asset_file}"
-				rm -f "$asset_file"
-			fi
-		fi
-
-		if [ ! -s "$asset_file" ]; then
-			if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror" "$custom_mirror_url"; then
-				log_download "asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} asset_url=${asset_url}"
-				rm -f "$asset_file"
+			log_download "release query ok: ${api_url} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror}"
+			release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
+			release_tag="$(normalize_release_tag "$release_tag")"
+			[ -n "$release_tag" ] || release_tag="$download_tag"
+			[ "$release_tag" != "latest" ] || {
+				log_download "release metadata did not provide a usable tag mirror=${candidate_mirror}"
 				continue
-			fi
-			if ! validate_release_asset "$asset_file" "$scope"; then
-				log_download "downloaded release asset invalid or corrupted scope=${scope} file=${asset_file}"
-				rm -f "$asset_file"
-				continue
-			fi
-			log_download "asset download ok tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} file=${asset_file}"
-		fi
+			}
 
-		write_download_state "$state_file" "extracting" "extracting program files (${candidate_mirror})" "$asset_name" "$release_tag" "$arch_name" ""
-		if ! extract_release_asset "$asset_file" "$extracted_dir"; then
-			log_download "extract failed, remove cache and retry ${asset_file}"
-			rm -f "$asset_file"
-			if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror" "$custom_mirror_url"; then
-				log_download "retry asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} asset_url=${asset_url}"
-				rm -f "$asset_file"
+			cache_key="$(sanitize_name "${cache_mirror_key}_${candidate_mirror}_${download_repo}_${release_tag}_${arch_name}_${scope}")"
+			cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
+			extracted_dir="${cache_dir}/extracted"
+			mkdir -p "$cache_dir"
+			cp -f "$json_file" "${cache_dir}/release.json" >/dev/null 2>&1
+
+			asset_url="$(select_release_asset "$json_file" "$scope" "$release_tag" "$arch_name")" || {
+				log_download "no release asset matched arch=${arch_name} scope=${scope} mirror=${candidate_mirror}"
 				continue
+			}
+
+			asset_name="$(basename "$asset_url")"
+			asset_file="${cache_dir}/${asset_name}"
+			write_download_state "$state_file" "downloading" "downloading release asset (${candidate_mirror})" "$asset_name" "$release_tag" "$arch_name" ""
+			log_download "selected asset ${asset_name} mirror=${candidate_mirror} url=${asset_url}"
+
+			if cache_bundle_ready "$extracted_dir" "$scope"; then
+				log_download "cached bundle found for ${scope}, reuse ${extracted_dir} mirror=${candidate_mirror}"
+				write_download_state "$state_file" "cached" "reusing local cached bundle" "$(basename "$cache_dir")" "$release_tag" "$arch_name" "$extracted_dir"
+				if install_bundle_to_usrbin "$extracted_dir" "$scope"; then
+					case "$scope" in
+						cli|web)
+							if [ "$scope" = "cli" ]; then
+								uci -q set "${CONF}.${cfg}.vnt2_cli_bin=${INSTALL_BIN_DIR}/vnt2_cli"
+								uci -q set "${CONF}.${cfg}.vnt2_ctrl_bin=${INSTALL_BIN_DIR}/vnt2_ctrl"
+							else
+								uci -q set "${CONF}.${cfg}.vnt2_web_bin=${INSTALL_BIN_DIR}/vnt2_web"
+							fi
+						;;
+						server)
+							uci -q set "${CONF}.${cfg}.vnts2_bin=${INSTALL_BIN_DIR}/vnts2"
+						;;
+					esac
+					uci commit "$CONF" >/dev/null 2>&1
+					return 0
+				fi
 			fi
-			if ! validate_release_asset "$asset_file" "$scope"; then
-				log_download "retried release asset still invalid scope=${scope} file=${asset_file}"
-				rm -f "$asset_file"
-				continue
+
+			if [ -s "$asset_file" ]; then
+				if validate_release_asset "$asset_file" "$scope"; then
+					log_download "reusing downloaded asset ${asset_file}"
+				else
+					log_download "cached asset invalid, remove and redownload ${asset_file}"
+					rm -f "$asset_file"
+				fi
 			fi
+
+			if [ ! -s "$asset_file" ]; then
+				if ! download_file "$asset_url" "$asset_file" "asset" "$candidate_mirror" "$custom_mirror_url"; then
+					log_download "asset download failed tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} asset_url=${asset_url}"
+					rm -f "$asset_file"
+					continue
+				fi
+				if ! validate_release_asset "$asset_file" "$scope"; then
+					log_download "downloaded release asset invalid or corrupted scope=${scope} file=${asset_file}"
+					rm -f "$asset_file"
+					continue
+				fi
+				log_download "asset download ok tool=${DOWNLOAD_LAST_TOOL:-unknown} used_url=${DOWNLOAD_LAST_URL:-unknown} mirror=${candidate_mirror} file=${asset_file}"
+			fi
+
+			write_download_state "$state_file" "extracting" "extracting program files (${candidate_mirror})" "$asset_name" "$release_tag" "$arch_name" ""
 			if ! extract_release_asset "$asset_file" "$extracted_dir"; then
-				log_download "extract asset failed ${asset_file}"
+				log_download "extract failed, remove cache and retry mirror attempt ${candidate_mirror} ${asset_file}"
 				rm -rf "$extracted_dir"
 				rm -f "$asset_file"
 				continue
 			fi
-		fi
 
-		case "$scope" in
-			cli|web)
-				cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
-				ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
-				web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
-				if ! ensure_elf_exec "$cli_bin" || ! ensure_elf_exec "$ctrl_bin" || ! ensure_elf_exec "$web_bin"; then
-					log_download "bundle missing one of vnt2_cli, vnt2_ctrl, vnt2_web mirror=${candidate_mirror}"
-					rm -rf "$extracted_dir"
-					continue
-				fi
-				if ! install_bundle_to_usrbin "$extracted_dir" "cli"; then
-					log_download "install CLI bundle to /usr/bin failed"
-					write_download_state "$state_file" "failed" "install to /usr/bin failed" "$asset_name" "$release_tag" "$arch_name" ""
-					return 1
-				fi
-				if [ "$scope" = "cli" ]; then
-					uci -q set "${CONF}.${cfg}.vnt2_cli_bin=${INSTALL_BIN_DIR}/vnt2_cli"
-					uci -q set "${CONF}.${cfg}.vnt2_ctrl_bin=${INSTALL_BIN_DIR}/vnt2_ctrl"
-				else
-					uci -q set "${CONF}.${cfg}.vnt2_web_bin=${INSTALL_BIN_DIR}/vnt2_web"
-				fi
-				uci commit "$CONF" >/dev/null 2>&1
-				log_download "client bundle installed: cli=${INSTALL_BIN_DIR}/vnt2_cli ctrl=${INSTALL_BIN_DIR}/vnt2_ctrl web=${INSTALL_BIN_DIR}/vnt2_web mirror=${candidate_mirror} url=${asset_url}"
-				write_download_state "$state_file" "success" "installed vnt2_cli, vnt2_ctrl and vnt2_web to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_cli"
-				return 0
-			;;
-			server)
-				server_name="vnts2"
-				server_bin="$(normalize_server_binary_name "$extracted_dir")"
-				if ! ensure_elf_exec "$server_bin"; then
-					log_download "bundle missing usable vnts2 or vnts mirror=${candidate_mirror}"
-					rm -rf "$extracted_dir"
-					continue
-				fi
-				if ! install_bundle_to_usrbin "$extracted_dir" "server"; then
-					log_download "install server bundle to /usr/bin failed"
-					write_download_state "$state_file" "failed" "server install to /usr/bin failed" "$asset_name" "$release_tag" "$arch_name" ""
-					return 1
-				fi
-				uci -q set "${CONF}.${cfg}.vnts2_bin=${INSTALL_BIN_DIR}/vnts2"
-				uci commit "$CONF" >/dev/null 2>&1
-				log_download "server installed: server=${INSTALL_BIN_DIR}/vnts2 mirror=${candidate_mirror}"
-				write_download_state "$state_file" "success" "installed vnts2 to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnts2"
-				return 0
-			;;
-		esac
+			case "$scope" in
+				cli|web)
+					cli_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_cli")"
+					ctrl_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_ctrl")"
+					web_bin="$(locate_extracted_bin "$extracted_dir" "vnt2_web")"
+					if ! ensure_elf_exec "$cli_bin" || ! ensure_elf_exec "$ctrl_bin" || ! ensure_elf_exec "$web_bin"; then
+						log_download "bundle missing one of vnt2_cli, vnt2_ctrl, vnt2_web mirror=${candidate_mirror}"
+						rm -rf "$extracted_dir"
+						continue
+					fi
+					if ! install_bundle_to_usrbin "$extracted_dir" "cli"; then
+						log_download "install CLI bundle to /usr/bin failed"
+						write_download_state "$state_file" "failed" "install to /usr/bin failed" "$asset_name" "$release_tag" "$arch_name" ""
+						return 1
+					fi
+					if [ "$scope" = "cli" ]; then
+						uci -q set "${CONF}.${cfg}.vnt2_cli_bin=${INSTALL_BIN_DIR}/vnt2_cli"
+						uci -q set "${CONF}.${cfg}.vnt2_ctrl_bin=${INSTALL_BIN_DIR}/vnt2_ctrl"
+					else
+						uci -q set "${CONF}.${cfg}.vnt2_web_bin=${INSTALL_BIN_DIR}/vnt2_web"
+					fi
+					uci commit "$CONF" >/dev/null 2>&1
+					log_download "client bundle installed: cli=${INSTALL_BIN_DIR}/vnt2_cli ctrl=${INSTALL_BIN_DIR}/vnt2_ctrl web=${INSTALL_BIN_DIR}/vnt2_web mirror=${candidate_mirror} url=${asset_url}"
+					write_download_state "$state_file" "success" "installed vnt2_cli, vnt2_ctrl and vnt2_web to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnt2_cli"
+					return 0
+				;;
+				server)
+					server_name="vnts2"
+					server_bin="$(normalize_server_binary_name "$extracted_dir")"
+					if ! ensure_elf_exec "$server_bin"; then
+						log_download "bundle missing usable vnt2 or vnts mirror=${candidate_mirror}"
+						rm -rf "$extracted_dir"
+						continue
+					fi
+					if ! install_bundle_to_usrbin "$extracted_dir" "server"; then
+						log_download "install server bundle to /usr/bin failed"
+						write_download_state "$state_file" "failed" "server install to /usr/bin failed" "$asset_name" "$release_tag" "$arch_name" ""
+						return 1
+					fi
+					uci -q set "${CONF}.${cfg}.vnts2_bin=${INSTALL_BIN_DIR}/vnts2"
+					uci commit "$CONF" >/dev/null 2>&1
+					log_download "server installed: server=${INSTALL_BIN_DIR}/vnts2 mirror=${candidate_mirror}"
+					write_download_state "$state_file" "success" "installed vnts2 to /usr/bin" "$asset_name" "$release_tag" "$arch_name" "${INSTALL_BIN_DIR}/vnts2"
+					return 0
+				;;
+			esac
+		done
 	done
 
 	write_download_state "$state_file" "failed" "all download mirrors failed" "${asset_name:-unknown}" "$download_tag" "$arch_name" ""
@@ -1587,17 +1588,28 @@ prepare_binary() {
 	local state_file="$5"
 	local scope="$6"
 
-	local bin uploaded target_name installed_bin
+	local bin companion_bin uploaded target_name installed_bin
 	config_get bin "$cfg" "$option" "$default_path"
 
-	if ensure_exec "$bin"; then
-		echo "$bin"
-		return 0
-	fi
+	case "$scope" in
+		cli)
+			config_get companion_bin "$cfg" "vnt2_ctrl_bin" "/usr/bin/vnt2_ctrl"
+			if ensure_elf_exec "$bin" && ensure_elf_exec "$companion_bin"; then
+				echo "$bin"
+				return 0
+			fi
+		;;
+		*)
+			if ensure_elf_exec "$bin"; then
+				echo "$bin"
+				return 0
+			fi
+		;;
+	esac
 
 	if auto_download_bundle "$cfg" "$scope" "$state_file"; then
 		bin="$(uci -q get "${CONF}.${cfg}.${option}")"
-		if ensure_exec "$bin"; then
+		if ensure_elf_exec "$bin"; then
 			echo "$bin"
 			return 0
 		fi
@@ -1608,7 +1620,7 @@ prepare_binary() {
 		log_download "${scope} auto download failed, fallback to uploaded binary ${uploaded}"
 		target_name="${option%_bin}"
 		installed_bin="$(install_binary_to_usrbin "$uploaded" "$target_name" 2>/dev/null)"
-		if ensure_exec "$installed_bin"; then
+		if ensure_elf_exec "$installed_bin"; then
 			bin="$installed_bin"
             write_download_state "$state_file" "fallback" "auto download failed, using uploaded binary installed to /usr/bin" "$(basename "$uploaded")" "" "$(detect_arch_name)" "$installed_bin"
 		else
@@ -1619,7 +1631,7 @@ prepare_binary() {
 		uci commit "$CONF" >/dev/null 2>&1
 	fi
 
-	ensure_exec "$bin" || return 1
+	ensure_elf_exec "$bin" || return 1
 	echo "$bin"
 	return 0
 }
@@ -2082,7 +2094,7 @@ prepare_server_runtime() {
 
 start_cli_instance() {
 	local cfg="$1"
-	local enabled cli_bin ctrl_bin web_bin web_cfg
+	local enabled cli_bin ctrl_bin
 
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
@@ -2093,21 +2105,15 @@ start_cli_instance() {
 	log_cli 'start requested'
 	config_get cli_bin "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli"
 	config_get ctrl_bin "$cfg" "vnt2_ctrl_bin" "/usr/bin/vnt2_ctrl"
-	web_cfg="$(get_first_section_id "vnt2_web")"
-	if [ -n "$web_cfg" ]; then
-		config_get web_bin "$web_cfg" "vnt2_web_bin" "/usr/bin/vnt2_web"
-	else
-		web_bin="/usr/bin/vnt2_web"
-	fi
 
-	if ! ensure_exec "$cli_bin" || ! ensure_exec "$ctrl_bin" || ! ensure_exec "$web_bin"; then
-		log_cli 'existing CLI/CTRL/Web bundle incomplete, trying auto-download or uploaded fallback'
+	if ! ensure_elf_exec "$cli_bin" || ! ensure_elf_exec "$ctrl_bin"; then
+		log_cli 'existing CLI/CTRL bundle incomplete, trying auto-download or uploaded fallback'
 		cli_bin="$(prepare_binary "$cfg" "vnt2_cli_bin" "/usr/bin/vnt2_cli" "vnt2_cli" "$DOWNLOAD_CLI_STATE" "cli")" || {
 			log_cli 'start failed: missing vnt2_cli or vnt2_ctrl'
 			return 1
 		}
 		ctrl_bin="$(uci -q get "${CONF}.${cfg}.vnt2_ctrl_bin")"
-		if ! ensure_exec "$ctrl_bin"; then
+		if ! ensure_elf_exec "$ctrl_bin"; then
 			log_cli 'start failed: vnt2_ctrl missing after recovery'
 			return 1
 		fi
@@ -2307,11 +2313,11 @@ stop_service() {
 
 reload_service() {
 	ensure_log_files
-	log_download 'reload requested, schedule asynchronous restart'
+	log_download 'reload requested, schedule detached restart'
 	(
 		sleep 1
-		/etc/init.d/vnt2 restart >/dev/null 2>&1
-	) >/dev/null 2>&1 &
+		exec /etc/init.d/vnt2 restart
+	) </dev/null >/dev/null 2>&1 &
 	return 0
 }
 
