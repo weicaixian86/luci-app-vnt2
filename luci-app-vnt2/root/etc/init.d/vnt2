@@ -2,6 +2,8 @@
 
 START=99
 USE_PROCD=1
+EXTRA_COMMANDS="schedule_restart"
+EXTRA_HELP="\tschedule_restart\tSchedule a detached delayed restart"
 
 CONF="vnt2"
 
@@ -32,6 +34,8 @@ DOWNLOAD_WEB_STATE="/tmp/vnt2-download-web.state"
 DOWNLOAD_SERVER_STATE="/tmp/vnt2-download-server.state"
 GH_PROXY_PREFIX="https://gh-proxy.com/"
 DOWNLOAD_MIRROR_RETRIES=3
+RESTART_DELAY=5
+RESTART_LOCK_DIR="/var/run/vnt2-restart.lock"
 
 INSTALL_BIN_DIR="/usr/bin"
 
@@ -755,6 +759,38 @@ get_download_mirror_cache_key() {
 	esac
 }
 
+write_latest_release_cache() {
+	local strategy="$1"
+	local candidate="$2"
+	local repo="$3"
+	local custom_mirror_url="$4"
+	local tag="$5"
+	local effective_mirror cache_key cache_file cache_tmp
+
+	strategy="$(normalize_download_mirror "$strategy")"
+	effective_mirror="$(normalize_download_mirror "$candidate")"
+	tag="$(normalize_release_tag "$tag")"
+	[ -n "$tag" ] || return 0
+
+	case "$effective_mirror" in
+		gitee|gitlab|cloudflare)
+			repo_to_mirror_project "$repo" >/dev/null 2>&1 || effective_mirror="github"
+		;;
+	esac
+
+	cache_key="${strategy}_${effective_mirror}_${repo}"
+	if [ "$effective_mirror" = "custom" ]; then
+		custom_mirror_url="$(normalize_custom_mirror_url "$custom_mirror_url")"
+		cache_key="${cache_key}_${custom_mirror_url}"
+	fi
+	cache_file="/tmp/vnt2_latest_v2_$(sanitize_name "$cache_key").tag"
+	cache_tmp="${cache_file}.tmp.$$"
+	if ! printf '%s\n' "$tag" >"$cache_tmp" || ! mv -f "$cache_tmp" "$cache_file"; then
+		rm -f "$cache_tmp"
+	fi
+	return 0
+}
+
 get_release_list_url() {
 	local repo="$1"
 	local mirror="$2"
@@ -1456,6 +1492,7 @@ EOF
 				log_download "release metadata did not provide a usable tag mirror=${candidate_mirror}"
 				continue
 			}
+			write_latest_release_cache "$download_mirror" "$candidate_mirror" "$download_repo" "$custom_mirror_url" "$release_tag"
 
 			cache_key="$(sanitize_name "${cache_mirror_key}_${candidate_mirror}_${download_repo}_${release_tag}_${arch_name}_${scope}")"
 			cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
@@ -2313,11 +2350,47 @@ stop_service() {
 
 reload_service() {
 	ensure_log_files
-	log_download 'reload requested, schedule detached restart'
-	(
-		sleep 1
-		exec /etc/init.d/vnt2 restart
-	) </dev/null >/dev/null 2>&1 &
+	log_download 'reload requested, schedule delayed detached restart'
+	schedule_restart
+	return 0
+}
+
+schedule_restart() {
+	local lock_pid=""
+	local child_pid=""
+
+	if ! mkdir "$RESTART_LOCK_DIR" >/dev/null 2>&1; then
+		lock_pid="$(cat "${RESTART_LOCK_DIR}/pid" 2>/dev/null)"
+		if [ -n "$lock_pid" ] && kill -0 "$lock_pid" >/dev/null 2>&1; then
+			log_download "restart already scheduled pid=${lock_pid}"
+			return 0
+		fi
+
+		rm -f "${RESTART_LOCK_DIR}/pid" >/dev/null 2>&1
+		rmdir "$RESTART_LOCK_DIR" >/dev/null 2>&1
+		mkdir "$RESTART_LOCK_DIR" >/dev/null 2>&1 || return 0
+	fi
+	printf '%s\n' "$$" >"${RESTART_LOCK_DIR}/pid"
+
+	/bin/sh -c '
+		lock_dir="$1"
+		delay="$2"
+		trap '\''rm -f "${lock_dir}/pid"; rmdir "$lock_dir" >/dev/null 2>&1'\'' EXIT INT TERM
+
+		# A fresh -c shell has no init-script input descriptor. It can safely
+		# close every descriptor inherited from LuCI, uhttpd, ubus, and procd.
+		fd=3
+		while [ "$fd" -le 255 ]; do
+			eval "exec ${fd}>&-" 2>/dev/null
+			fd=$((fd + 1))
+		done
+
+		sleep "$delay"
+		/etc/init.d/vnt2 restart
+	' vnt2-restart "$RESTART_LOCK_DIR" "$RESTART_DELAY" </dev/null >/dev/null 2>&1 &
+	child_pid="$!"
+	printf '%s\n' "$child_pid" >"${RESTART_LOCK_DIR}/pid"
+	log_download "detached restart scheduled pid=${child_pid} delay=${RESTART_DELAY}s"
 	return 0
 }
 

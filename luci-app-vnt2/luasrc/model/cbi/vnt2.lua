@@ -17,8 +17,8 @@ m.description = translate(
 m:section(SimpleSection).template = "vnt2/vnt2_status"
 
 local function restart_vnt2_async()
-	-- Keep the potentially network-bound restart outside the LuCI CGI request.
-	sys.call("(sleep 1; exec /etc/init.d/vnt2 restart) </dev/null >/dev/null 2>&1 &")
+	-- Let the init script detach from LuCI and coalesce repeated requests.
+	sys.call("/etc/init.d/vnt2 schedule_restart >/dev/null 2>&1")
 end
 
 local function trim(v)

@@ -144,31 +144,6 @@ local function get_pid_by_name(name)
 	return nil
 end
 
-local function get_procd_instance_pid(instance)
-	instance = trim(instance)
-	if instance == "" then
-		return nil
-	end
-
-	local data = sys.exec("ubus call service list '{\"name\":\"vnt2\"}' 2>/dev/null") or ""
-	if data == "" then
-		return nil
-	end
-
-	local pattern = '"' .. instance:gsub("([^%w_])", "%%%1") .. '"%s*:%s*%b{}'
-	local block = data:match(pattern)
-	if not block then
-		return nil
-	end
-
-	local pid = trim(block:match('"pid"%s*:%s*(%d+)') or "")
-	if pid ~= "" then
-		return pid
-	end
-
-	return nil
-end
-
 local function get_pid_by_path(path)
 	local base = tostring(path or ""):match("([^/]+)$")
 	if base and base ~= "" then
@@ -187,15 +162,15 @@ local function get_pid_by_path(path)
 end
 
 local function get_cli_pid()
-	return get_procd_instance_pid("vnt2_cli") or get_pid_by_path(get_cli_bin())
+	return get_pid_by_path(get_cli_bin())
 end
 
 local function get_web_pid()
-	return get_procd_instance_pid("vnt2_web") or get_pid_by_path(get_web_bin())
+	return get_pid_by_path(get_web_bin())
 end
 
 local function get_server_pid()
-	return get_procd_instance_pid("vnts2") or get_pid_by_name("vnts2") or get_pid_by_name("vnts") or get_pid_by_path(get_server_bin())
+	return get_pid_by_name("vnts2") or get_pid_by_name("vnts") or get_pid_by_path(get_server_bin())
 end
 
 local function format_runtime(tag_file)
@@ -327,35 +302,18 @@ local function get_mem_usage(pid)
 	return string.format("%.2f MB", rss_kb / 1024)
 end
 
-local function extract_semver(text)
-	text = trim(text)
-	if text == "" then
-		return ""
-	end
-
-	local version = text:match("(%d+%.%d+%.%d+[-%w%.]*)")
-	if version then
-		return version
-	end
-
-	return ""
-end
-
-local function get_local_tag(bin_path)
+local function get_local_tag(bin_path, primary_state, fallback_state)
 	if not file_exists(bin_path) then
 		return ""
 	end
 
-	local output = trim(sys.exec(string.format("%s --version 2>&1", shell_quote(bin_path))))
-	local version = extract_semver(output)
-	if version ~= "" then
-		return version
-	end
-
-	output = trim(sys.exec(string.format("%s -V 2>&1", shell_quote(bin_path))))
-	version = extract_semver(output)
-	if version ~= "" then
-		return version
+	for _, state in ipairs({ primary_state, fallback_state }) do
+		if state and (state.state == "success" or state.state == "cached") then
+			local tag = trim(state.tag):gsub("^[vV]", "")
+			if tag ~= "" then
+				return tag
+			end
+		end
 	end
 
 	return ""
@@ -363,37 +321,6 @@ end
 
 local function sanitize_cache_name(s)
 	return tostring(s or ""):gsub("[^%w%._-]", "_")
-end
-
-local function get_download_url_candidates(url)
-	url = trim(url)
-	if url == "" then
-		return {}
-	end
-
-	local candidates = {}
-	local seen = {}
-	local raw = url:gsub("^https://gh%-proxy%.com/", "")
-	local function add(candidate)
-		candidate = trim(candidate)
-		if candidate ~= "" and not seen[candidate] then
-			seen[candidate] = true
-			table.insert(candidates, candidate)
-		end
-	end
-
-	if raw:match("^https://api%.github%.com/")
-		or raw:match("^https://github%.com/")
-		or raw:match("^https://raw%.githubusercontent%.com/")
-		or raw:match("^https://objects%.githubusercontent%.com/")
-		or raw:match("^https://release%-assets%.githubusercontent%.com/") then
-		add("https://gh-proxy.com/" .. raw)
-		add(raw)
-	else
-		add(raw)
-	end
-
-	return candidates
 end
 
 local function normalize_download_mirror(mirror)
@@ -419,31 +346,6 @@ local function normalize_custom_mirror_url(url)
 		return ""
 	end
 	return (url:gsub("/*$", "/"))
-end
-
-local function get_download_url_candidates_for_mirror(url, mirror, custom_mirror_url)
-	url = trim(url)
-	mirror = normalize_download_mirror(mirror)
-	if mirror == "github" then
-		url = url:gsub("^https://gh%-proxy%.com/", "")
-		return url ~= "" and { url } or {}
-	elseif mirror == "custom" then
-		local raw = url:gsub("^https://gh%-proxy%.com/", "")
-		local custom = normalize_custom_mirror_url(custom_mirror_url)
-		local is_github_url = raw:match("^https://api%.github%.com/")
-			or raw:match("^https://github%.com/")
-			or raw:match("^https://raw%.githubusercontent%.com/")
-			or raw:match("^https://objects%.githubusercontent%.com/")
-			or raw:match("^https://release%-assets%.githubusercontent%.com/")
-		if custom ~= "" and is_github_url then
-			return { custom .. raw, raw }
-		end
-		return raw ~= "" and { raw } or {}
-	end
-	-- Source failover is controlled by get_download_mirror_candidates. Do not
-	-- silently inject gh-proxy while checking Gitee, GitLab, or R2.
-	local raw = url:gsub("^https://gh%-proxy%.com/", "")
-	return raw ~= "" and { raw } or {}
 end
 
 local function repo_to_mirror_project(repo)
@@ -513,10 +415,9 @@ local function get_cached_latest_tag(repo, mirror, custom_mirror_url)
 		repo = "vnt-dev/vnt"
 	end
 
-	local now = os.time() or 0
 	local strategy = normalize_download_mirror(mirror)
 	for _, candidate in ipairs(get_download_mirror_candidates(repo, mirror)) do
-		local endpoint, effective_mirror = build_latest_release_endpoint_for_mirror(repo, candidate)
+		local _, effective_mirror = build_latest_release_endpoint_for_mirror(repo, candidate)
 		local cache_key = strategy .. "_" .. effective_mirror .. "_" .. repo
 		if effective_mirror == "custom" then
 			cache_key = cache_key .. "_" .. normalize_custom_mirror_url(custom_mirror_url)
@@ -524,30 +425,9 @@ local function get_cached_latest_tag(repo, mirror, custom_mirror_url)
 		local cache = "/tmp/vnt2_latest_v2_" .. sanitize_cache_name(cache_key) .. ".tag"
 
 		if fs.access(cache) then
-			local mtime = fs.stat(cache, "mtime") or 0
-			if now > 0 and mtime > 0 and (now - mtime) < 21600 then
-				local cached = trim(fs.readfile(cache) or "")
-				if cached ~= "" then
-					return cached
-				end
-			end
-		end
-
-		local endpoints = { endpoint }
-		if effective_mirror == "gh-proxy" or effective_mirror == "github" or effective_mirror == "custom" then
-			local latest_endpoint = string.format("https://api.github.com/repos/%s/releases/latest", repo)
-			if latest_endpoint ~= endpoint then
-				table.insert(endpoints, latest_endpoint)
-			end
-		end
-		for _, endpoint_candidate in ipairs(endpoints) do
-			for _, endpoint_url in ipairs(get_download_url_candidates_for_mirror(endpoint_candidate, effective_mirror, custom_mirror_url)) do
-				local cmd = string.format([=[curl -fsSL --connect-timeout 4 %s 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*:[[:space:]]*"//; s/"$//']=], shell_quote(endpoint_url))
-				local tag = trim(sys.exec(cmd))
-				if tag ~= "" then
-					fs.writefile(cache, tag)
-					return tag
-				end
+			local cached = trim(fs.readfile(cache) or "")
+			if cached ~= "" then
+				return cached
 			end
 		end
 	end
@@ -664,7 +544,7 @@ local function parse_help_for_port_mode(bin_path)
 	if not file_exists(bin_path) then
 		return ""
 	end
-	local help = sys.exec(string.format("%s -h 2>&1", shell_quote(bin_path))) or ""
+	local help = sys.exec(string.format("timeout 2 %s -h 2>&1", shell_quote(bin_path))) or ""
 	if help:match("%-%-port") or help:match("%-p, %-%-port") then
 		return "--port"
 	end
@@ -683,16 +563,16 @@ local function run_ctrl(subcmd)
 	if file_exists(ctrl_bin) then
 		local port_arg = parse_help_for_port_mode(ctrl_bin)
 		if port_arg ~= "" then
-			out = sys.exec(string.format("%s %s %s %d 2>&1", shell_quote(ctrl_bin), subcmd, port_arg, ctrl_port))
+			out = sys.exec(string.format("timeout 2 %s %s %s %d 2>&1", shell_quote(ctrl_bin), subcmd, port_arg, ctrl_port))
 		else
-			out = sys.exec(string.format("%s %s %d 2>&1", shell_quote(ctrl_bin), subcmd, ctrl_port))
+			out = sys.exec(string.format("timeout 2 %s %s %d 2>&1", shell_quote(ctrl_bin), subcmd, ctrl_port))
 		end
 	end
 
 	out = trim(out)
 	if out == "" or out:match("not found") or out:match("unrecognized") or out:match("error:") then
 		if file_exists(cli_bin) then
-			out = sys.exec(string.format("%s %s 2>&1", shell_quote(cli_bin), subcmd))
+			out = sys.exec(string.format("timeout 2 %s %s 2>&1", shell_quote(cli_bin), subcmd))
 		end
 	end
 
@@ -706,59 +586,6 @@ local function get_cmdline(pid)
 	return trim(sys.exec("tr '\\000' ' ' </proc/" .. tostring(pid) .. "/cmdline 2>/dev/null"))
 end
 
-local function normalize_probe_host(host)
-	host = trim(host)
-	if host == "" or host == "0.0.0.0" or host == "::" then
-		return "127.0.0.1"
-	end
-	if host == "::1" then
-		return "[::1]"
-	end
-	if host:find(":", 1, true) and not host:match("^%[.*%]$") then
-		return "[" .. host .. "]"
-	end
-	return host
-end
-
-local function probe_http_url(url)
-	url = trim(url)
-	if url == "" then
-		return false
-	end
-
-	local cmd
-	if sys.call("command -v uclient-fetch >/dev/null 2>&1") == 0 then
-		cmd = string.format([[uclient-fetch -q -T 2 -O - %s >/dev/null 2>&1]], shell_quote(url))
-	elseif sys.call("command -v curl >/dev/null 2>&1") == 0 then
-		cmd = string.format([[curl -fsSL --connect-timeout 2 --max-time 3 %s >/dev/null 2>&1]], shell_quote(url))
-	elseif sys.call("command -v wget >/dev/null 2>&1") == 0 then
-		cmd = string.format([[wget -q -T 3 -O - %s >/dev/null 2>&1]], shell_quote(url))
-	else
-		return false
-	end
-
-	return sys.call(cmd) == 0
-end
-
-local function is_web_reachable()
-	local host = normalize_probe_host(get_web_host())
-	local port = get_web_port()
-	local api_url = "http://" .. host .. ":" .. tostring(port) .. "/api/info"
-	local root_url = "http://" .. host .. ":" .. tostring(port) .. "/"
-	return probe_http_url(api_url) or probe_http_url(root_url)
-end
-
-local function has_listen_port(port)
-	port = tonumber(port)
-	if not port or port < 1 then
-		return false
-	end
-
-	local hex = string.format("%04X", port)
-	local cmd = string.format([[awk 'NR>1 {split($2,a,":"); if (toupper(a[2])=="%s") {found=1; exit}} END {exit(found?0:1)}' /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null]], hex)
-	return sys.call(cmd) == 0
-end
-
 local function parse_bind_port(bind)
 	bind = trim(bind)
 	if bind == "" then
@@ -767,32 +594,6 @@ local function parse_bind_port(bind)
 
 	local port = bind:match(":(%d+)$")
 	return tonumber(port or "")
-end
-
-local function is_cli_reachable()
-	local out = run_ctrl("info")
-	return out ~= "" and not out:match("error") and not out:match("not found") and not out:match("unrecognized") and not out:match("refused") and not out:match("failed")
-end
-
-local function is_server_reachable(server_cfg)
-	local ports = {
-		parse_bind_port(server_cfg.tcp_bind),
-		parse_bind_port(server_cfg.quic_bind),
-		parse_bind_port(server_cfg.server_quic_bind),
-		parse_bind_port(server_cfg.ws_bind),
-		parse_bind_port(server_cfg.web_bind),
-		parse_bind_port(server_cfg.ikev2_enabled == "1" and server_cfg.ikev2_ike_bind or ""),
-		parse_bind_port(server_cfg.ikev2_enabled == "1" and server_cfg.ikev2_natt_bind or ""),
-		parse_bind_port(server_cfg.wireguard_enabled == "1" and server_cfg.wireguard_bind or "")
-	}
-
-	for _, port in ipairs(ports) do
-		if has_listen_port(port) then
-			return true
-		end
-	end
-
-	return false
 end
 
 local function get_router_host()
@@ -942,9 +743,6 @@ function act_status()
 	local cli_pid = get_cli_pid()
 	local web_pid = get_web_pid()
 	local server_pid = get_server_pid()
-	local cli_ctrl_ok = false
-	local web_http_ok = false
-	local server_port_ok = false
 
 	local cli_cfg = summarize_cli_config()
 	local web_cfg = summarize_web_config()
@@ -954,23 +752,15 @@ function act_status()
 	local web_dl = parse_state_file("/tmp/vnt2-download-web.state")
 	local server_dl = parse_state_file("/tmp/vnt2-download-server.state")
 
-	if cli_enabled and cli_pid == nil then
-		cli_ctrl_ok = is_cli_reachable()
-	end
-	if web_enabled and web_pid == nil then
-		web_http_ok = is_web_reachable()
-	end
-	if server_enabled and server_pid == nil then
-		server_port_ok = is_server_reachable(server_cfg)
-	end
+	-- This endpoint is polled every five seconds. Keep it local-only so an
+	-- unavailable process cannot hold the LuCI request open during apply.
+	e.cli_running = cli_enabled and cli_pid ~= nil
+	e.web_running = web_enabled and web_pid ~= nil
+	e.server_running = server_enabled and server_pid ~= nil
 
-	e.cli_running = cli_enabled and ((cli_pid ~= nil) or cli_ctrl_ok)
-	e.web_running = web_enabled and ((web_pid ~= nil) or web_http_ok)
-	e.server_running = server_enabled and ((server_pid ~= nil) or server_port_ok)
-
-	e.cli_pid = e.cli_running and (cli_pid or (cli_ctrl_ok and "CTRL") or "") or ""
-	e.web_pid = e.web_running and (web_pid or (web_http_ok and "HTTP") or "") or ""
-	e.server_pid = e.server_running and (server_pid or (server_port_ok and "PORT") or "") or ""
+	e.cli_pid = e.cli_running and cli_pid or ""
+	e.web_pid = e.web_running and web_pid or ""
+	e.server_pid = e.server_running and server_pid or ""
 
 	e.cli_runtime = format_runtime("/tmp/vnt2_cli_time")
 	e.web_runtime = format_runtime("/tmp/vnt2_web_time")
@@ -983,9 +773,11 @@ function act_status()
 	e.server_cpu = get_cpu_usage(server_pid)
 	e.server_ram = get_mem_usage(server_pid)
 
-	e.cli_tag = get_local_tag(get_cli_bin())
-	e.web_tag = get_local_tag(get_web_bin())
-	e.server_tag = get_local_tag(get_server_bin())
+	-- Never execute managed binaries from this polling endpoint. A broken or
+	-- blocked binary must not delay LuCI while an apply-triggered restart runs.
+	e.cli_tag = get_local_tag(get_cli_bin(), cli_dl, web_dl)
+	e.web_tag = get_local_tag(get_web_bin(), web_dl, cli_dl)
+	e.server_tag = get_local_tag(get_server_bin(), server_dl)
 
 	local latest_tag = get_vnt2_latest_tag(cli_cfg.download_repo, cli_cfg.download_tag, cli_cfg.download_mirror, cli_cfg.custom_download_mirror)
 	if latest_tag == "" then
@@ -1080,8 +872,6 @@ function act_status()
 	e.server_conf_file = server_cfg.server_conf_file
 	e.server_conf_preview = get_log_content(server_cfg.server_conf_file)
 
-	e.cli_info_preview = e.cli_running and run_ctrl("info") or ""
-	e.cli_ips_preview = e.cli_running and run_ctrl("ips") or ""
 	e.server_cmdline = get_cmdline(server_pid)
 
 	e.download_log_size = #(get_log_content("/tmp/vnt2-download.log") or "")
