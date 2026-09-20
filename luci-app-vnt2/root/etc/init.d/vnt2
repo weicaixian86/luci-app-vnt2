@@ -2,8 +2,8 @@
 
 START=99
 USE_PROCD=1
-EXTRA_COMMANDS="schedule_restart"
-EXTRA_HELP="\tschedule_restart\tQueue a restart for the vnt2 worker"
+EXTRA_COMMANDS="schedule_restart refresh_latest_versions"
+EXTRA_HELP="\tschedule_restart\tQueue a restart for the vnt2 worker\n\trefresh_latest_versions\tRefresh cached latest release versions"
 
 CONF="vnt2"
 
@@ -196,12 +196,12 @@ ensure_conf_path_ready() {
 
 	conf_dir="${conf_path%/*}"
 	if [ -n "$conf_dir" ] && [ "$conf_dir" != "$conf_path" ]; then
-		mkdir -p "$conf_dir" >/dev/null 2>&1
-		chmod 777 "$conf_dir" >/dev/null 2>&1
+		mkdir -p "$conf_dir" >/dev/null 2>&1 || return 1
+		chmod 755 "$conf_dir" >/dev/null 2>&1 || return 1
 	fi
 
 	if [ -e "$conf_path" ]; then
-		chmod 777 "$conf_path" >/dev/null 2>&1
+		chmod 600 "$conf_path" >/dev/null 2>&1 || return 1
 	fi
 
 	return 0
@@ -326,7 +326,10 @@ if not ok_uci or not ok_toml then
 	os.exit(1)
 end
 local uci = uci_mod.cursor()
-toml.export_uci_to_toml(uci)
+local exported = toml.export_uci_to_toml(uci)
+if not exported then
+	os.exit(1)
+end
 EOF
 }
 
@@ -482,6 +485,13 @@ download_file() {
 	local downloader
 	local rc
 	local actual_url
+	local connect_timeout=20
+	local transfer_timeout=600
+
+	if [ "$purpose" = "api" ]; then
+		connect_timeout=10
+		transfer_timeout=30
+	fi
 
 	downloader="$(get_downloader "$purpose")" || return 1
 	DOWNLOAD_LAST_TOOL="$downloader"
@@ -492,21 +502,21 @@ download_file() {
 
 		case "$downloader" in
 			curl)
-				curl -fsSL --connect-timeout 20 --max-time 600 --retry 0 \
+				curl -fsSL --connect-timeout "$connect_timeout" --max-time "$transfer_timeout" --retry 0 \
 					-A "luci-app-vnt2" \
 					-H "Accept: application/vnd.github+json, application/octet-stream, */*" \
 					-o "$out" "$actual_url" >/dev/null 2>&1
 				rc=$?
 			;;
 			wget)
-				wget -q --timeout=30 --tries=1 \
+				wget -q --timeout="$transfer_timeout" --tries=1 \
 					--header="User-Agent: luci-app-vnt2" \
 					--header="Accept: application/vnd.github+json, application/octet-stream, */*" \
 					-O "$out" "$actual_url" >/dev/null 2>&1
 				rc=$?
 			;;
 			uclient-fetch)
-				uclient-fetch -q -T 30 \
+				uclient-fetch -q -T "$transfer_timeout" \
 					--header "User-Agent: luci-app-vnt2" \
 					--header "Accept: application/vnd.github+json, application/octet-stream, */*" \
 					-O "$out" "$actual_url" >/dev/null 2>&1
@@ -763,12 +773,14 @@ write_latest_release_cache() {
 	local repo="$3"
 	local custom_mirror_url="$4"
 	local tag="$5"
-	local effective_mirror cache_key cache_file cache_tmp
+	local cache_scope="$6"
+	local effective_mirror cache_key cache_file cache_tmp canonical_key canonical_file canonical_tmp
 
 	strategy="$(normalize_download_mirror "$strategy")"
 	effective_mirror="$(normalize_download_mirror "$candidate")"
 	tag="$(normalize_release_tag "$tag")"
 	[ -n "$tag" ] || return 0
+	[ "$cache_scope" = "latest" ] || return 0
 
 	case "$effective_mirror" in
 		gitee|gitlab|cloudflare)
@@ -786,7 +798,71 @@ write_latest_release_cache() {
 	if ! printf '%s\n' "$tag" >"$cache_tmp" || ! mv -f "$cache_tmp" "$cache_file"; then
 		rm -f "$cache_tmp"
 	fi
+
+	canonical_key="${strategy}_${repo}"
+	if [ "$strategy" = "custom" ]; then
+		canonical_key="${canonical_key}_${custom_mirror_url}"
+	fi
+	canonical_file="/tmp/vnt2_latest_v3_$(sanitize_name "$canonical_key").tag"
+	canonical_tmp="${canonical_file}.tmp.$$"
+	if ! printf '%s\n' "$tag" >"$canonical_tmp" || ! mv -f "$canonical_tmp" "$canonical_file"; then
+		rm -f "$canonical_tmp"
+	fi
 	return 0
+}
+
+refresh_latest_version_for_section() {
+	local cfg="$1"
+	local default_repo="$2"
+	local scope="$3"
+	local repo mirror custom_mirror_url candidate attempt retry_limit query_dir json_file api_url release_tag
+
+	[ -n "$cfg" ] || return 1
+	config_get repo "$cfg" "download_repo" "$default_repo"
+	config_get mirror "$cfg" "download_mirror" "auto"
+	config_get custom_mirror_url "$cfg" "custom_download_mirror" ""
+	[ -n "$repo" ] || repo="$default_repo"
+	mirror="$(normalize_download_mirror "$mirror")"
+	custom_mirror_url="$(normalize_custom_mirror_url "$custom_mirror_url")"
+	query_dir="${DOWNLOAD_CACHE_BASE}/latest_$(sanitize_name "${scope}_${mirror}_${repo}_${custom_mirror_url}")"
+	json_file="${query_dir}/release.json"
+	mkdir -p "$query_dir"
+
+	for candidate in $(get_download_mirror_candidates "$repo" "$mirror"); do
+		retry_limit="$DOWNLOAD_MIRROR_RETRIES"
+		[ "$candidate" = "custom" ] && retry_limit=1
+		for attempt in $(seq 1 "$retry_limit"); do
+			log_download "latest version check ${attempt}/${retry_limit} repo=${repo} mirror=${candidate} scope=${scope}"
+			api_url="$(fetch_release_metadata_from_mirror "$repo" "latest" "$json_file" "$candidate" "$custom_mirror_url")"
+			[ -n "$api_url" ] || continue
+			release_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json_file" | head -n1)"
+			release_tag="$(normalize_release_tag "$release_tag")"
+			[ -n "$release_tag" ] && [ "$release_tag" != "latest" ] || continue
+			write_latest_release_cache "$mirror" "$candidate" "$repo" "$custom_mirror_url" "$release_tag" "latest"
+			log_download "latest version updated repo=${repo} tag=${release_tag} mirror=${candidate} scope=${scope}"
+			rm -f "$json_file"
+			return 0
+		done
+	done
+
+	rm -f "$json_file"
+	log_download "latest version check failed repo=${repo} strategy=${mirror} scope=${scope}"
+	return 1
+}
+
+refresh_latest_versions() {
+	local cli_cfg web_cfg server_cfg rc=0
+
+	ensure_log_files
+	config_load "${CONF}"
+	cli_cfg="$(get_first_section_id "vnt2_cli")"
+	web_cfg="$(get_first_section_id "vnt2_web")"
+	server_cfg="$(get_first_section_id "vnts2")"
+
+	refresh_latest_version_for_section "$cli_cfg" "vnt-dev/vnt" "cli" || rc=1
+	refresh_latest_version_for_section "$web_cfg" "vnt-dev/vnt" "web" || rc=1
+	refresh_latest_version_for_section "$server_cfg" "vnt-dev/vnts" "server" || rc=1
+	return "$rc"
 }
 
 get_release_list_url() {
@@ -939,6 +1015,7 @@ extract_release_object_by_tag() {
 
 	awk -v wanted="$wanted_tag" '
 BEGIN {
+	sub(/^[vV]/, "", wanted)
 	in_array = 0
 	depth = 0
 	started = 0
@@ -985,7 +1062,12 @@ BEGIN {
 		} else if (c == "}") {
 			depth--
 			if (depth == 0) {
-				if (out ~ "\"tag_name\"[[:space:]]*:[[:space:]]*\"" wanted "\"") {
+				tag = out
+				if (sub(/^.*"tag_name"[[:space:]]*:[[:space:]]*"/, "", tag)) {
+					sub(/".*$/, "", tag)
+					sub(/^[vV]/, "", tag)
+				}
+				if (tag == wanted) {
 					print out
 					exit
 				}
@@ -1184,6 +1266,72 @@ extract_zip_asset() {
 	return 1
 }
 
+archive_paths_are_safe() {
+	awk '
+BEGIN { bad = 0 }
+{
+	entry = $0
+	gsub(/\\/, "/", entry)
+	sub(/^\.\//, "", entry)
+	if (entry ~ /^\// || entry ~ /^[A-Za-z]:\// || entry == ".." ||
+		entry ~ /^\.\.\// || entry ~ /\/\.\.\// || entry ~ /\/\.\.$/) {
+		bad = 1
+	}
+}
+END { exit bad }
+'
+}
+
+archive_is_safe() {
+	local asset_file="$1"
+	local entries details
+
+	case "$asset_file" in
+		*.tar.gz|*.tgz)
+			entries="$(tar -tzf "$asset_file" 2>/dev/null)" || return 1
+			printf '%s\n' "$entries" | archive_paths_are_safe || return 1
+			details="$(tar -tvzf "$asset_file" 2>/dev/null)" || return 1
+			printf '%s\n' "$details" | awk '
+				{ type = substr($0, 1, 1); if (type != "-" && type != "d") bad = 1 }
+				END { exit bad }
+			' || return 1
+		;;
+		*.tar.xz)
+			entries="$(tar -tJf "$asset_file" 2>/dev/null)" || return 1
+			printf '%s\n' "$entries" | archive_paths_are_safe || return 1
+			details="$(tar -tvJf "$asset_file" 2>/dev/null)" || return 1
+			printf '%s\n' "$details" | awk '
+				{ type = substr($0, 1, 1); if (type != "-" && type != "d") bad = 1 }
+				END { exit bad }
+			' || return 1
+		;;
+		*.zip)
+			if command -v unzip >/dev/null 2>&1; then
+				entries="$(unzip -Z1 "$asset_file" 2>/dev/null)" || return 1
+				printf '%s\n' "$entries" | archive_paths_are_safe || return 1
+				details="$(unzip -Z -l "$asset_file" 2>/dev/null)" || return 1
+				printf '%s\n' "$details" | awk '
+					$1 ~ /^l/ { bad = 1 }
+					END { exit bad }
+				' || return 1
+			elif command -v bsdtar >/dev/null 2>&1; then
+				entries="$(bsdtar -tf "$asset_file" 2>/dev/null)" || return 1
+				printf '%s\n' "$entries" | archive_paths_are_safe || return 1
+				details="$(bsdtar -tvf "$asset_file" 2>/dev/null)" || return 1
+				printf '%s\n' "$details" | awk '
+					{ type = substr($0, 1, 1); if (type != "-" && type != "d") bad = 1 }
+					END { exit bad }
+				' || return 1
+			else
+				# BusyBox unzip cannot list entries without extracting them safely.
+				return 1
+			fi
+		;;
+	esac
+
+	return 0
+}
+
 validate_asset_file() {
 	local asset_file="$1"
 
@@ -1238,6 +1386,8 @@ extract_release_asset() {
 	local asset_file="$1"
 	local dest_dir="$2"
 	local base
+
+	archive_is_safe "$asset_file" || return 1
 
 	rm -rf "$dest_dir"
 	mkdir -p "$dest_dir"
@@ -1414,7 +1564,7 @@ auto_download_bundle() {
 	local state_file="$3"
 
 	local auto_download download_tag download_repo download_mirror custom_mirror_url cache_mirror_key candidate_mirror api_url arch_name
-	local mirror_attempt mirror_retry_limit
+	local mirror_attempt mirror_retry_limit latest_cache_scope
 	local cache_key cache_dir query_dir json_file release_tag asset_url asset_name asset_file extracted_dir
 	local fallback_version fallback_url
 	local cli_bin ctrl_bin web_bin server_bin server_name
@@ -1490,7 +1640,14 @@ EOF
 				log_download "release metadata did not provide a usable tag mirror=${candidate_mirror}"
 				continue
 			}
-			write_latest_release_cache "$download_mirror" "$candidate_mirror" "$download_repo" "$custom_mirror_url" "$release_tag"
+			latest_cache_scope=""
+			if [ "$download_tag" = "latest" ]; then
+				case "$api_url" in
+					fallback:*) ;;
+					*) latest_cache_scope="latest" ;;
+				esac
+			fi
+			write_latest_release_cache "$download_mirror" "$candidate_mirror" "$download_repo" "$custom_mirror_url" "$release_tag" "$latest_cache_scope"
 
 			cache_key="$(sanitize_name "${cache_mirror_key}_${candidate_mirror}_${download_repo}_${release_tag}_${arch_name}_${scope}")"
 			cache_dir="${DOWNLOAD_CACHE_BASE}/${cache_key}"
@@ -2057,7 +2214,10 @@ prepare_cli_runtime() {
 	local cfg="$1"
 
 	CLI_CONF_FILE="$(resolve_client_conf_file "$cfg")"
-	ensure_conf_path_ready "${CLI_CONF_FILE}"
+	if ! ensure_conf_path_ready "${CLI_CONF_FILE}"; then
+		log_cli "client config path is not writable: ${CLI_CONF_FILE}"
+		return 1
+	fi
 
 	if ! toml_validate_client_config "${CLI_CONF_FILE}"; then
 		return 1
@@ -2142,7 +2302,10 @@ prepare_server_runtime() {
 	local cfg="${1:-vnts2}"
 
 	SERVER_CONF_FILE="$(resolve_server_conf_file "$cfg")"
-	ensure_conf_path_ready "${SERVER_CONF_FILE}"
+	if ! ensure_conf_path_ready "${SERVER_CONF_FILE}"; then
+		log_server "server config path is not writable: ${SERVER_CONF_FILE}"
+		return 1
+	fi
 
 	if ! toml_validate_server_config "${SERVER_CONF_FILE}"; then
 		return 1
@@ -2248,7 +2411,10 @@ start_web_instance() {
 	web_addr="$(format_socket_addr "$web_host" "$web_port")"
 
 	WEB_CONF_FILE="$(resolve_web_conf_file "$cfg")"
-	ensure_conf_path_ready "${WEB_CONF_FILE}"
+	if ! ensure_conf_path_ready "${WEB_CONF_FILE}"; then
+		log_web "client config path is not writable: ${WEB_CONF_FILE}"
+		return 1
+	fi
 	if ! toml_validate_client_config "${WEB_CONF_FILE}"; then
 		log_web 'start failed: client TOML validation failed'
 		return 1
@@ -2334,7 +2500,7 @@ start_server_instance() {
 }
 
 start_service() {
-	local cli_cfg web_cfg server_cfg
+	local cli_cfg web_cfg server_cfg rc=0
 
 	ensure_log_files
 	log_cli 'service start flow begin'
@@ -2363,11 +2529,24 @@ start_service() {
 	web_cfg="$(get_first_section_id "vnt2_web")"
 	server_cfg="$(get_first_section_id "vnts2")"
 
-	[ -n "$cli_cfg" ] && start_cli_instance "$cli_cfg" || log_cli 'vnt2_cli config section not found'
-	[ -n "$web_cfg" ] && start_web_instance "$web_cfg" || log_web 'vnt2_web config section not found'
-	[ -n "$server_cfg" ] && start_server_instance "$server_cfg" || log_server 'vnts2 config section not found'
+	if [ -n "$cli_cfg" ]; then
+		start_cli_instance "$cli_cfg" || rc=1
+	else
+		log_cli 'vnt2_cli config section not found'
+	fi
+	if [ -n "$web_cfg" ]; then
+		start_web_instance "$web_cfg" || rc=1
+	else
+		log_web 'vnt2_web config section not found'
+	fi
+	if [ -n "$server_cfg" ]; then
+		start_server_instance "$server_cfg" || rc=1
+	else
+		log_server 'vnts2 config section not found'
+	fi
 
-	log_download "start_service finished"
+	log_download "start_service finished rc=${rc}"
+	return "$rc"
 }
 
 stop_service() {

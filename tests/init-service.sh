@@ -6,7 +6,11 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/etc/init.d/vnt2"
 WORKER_INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/etc/init.d/vnt2-worker"
 WORKER_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/usr/libexec/vnt2/restart-worker"
+VERSION_WORKER_INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/etc/init.d/vnt2-version-worker"
+VERSION_WORKER_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/usr/libexec/vnt2/version-worker"
 PACKAGE_MAKEFILE="${ROOT_DIR}/luci-app-vnt2/Makefile"
+CBI_SCRIPT="${ROOT_DIR}/luci-app-vnt2/luasrc/model/cbi/vnt2.lua"
+STATUS_VIEW="${ROOT_DIR}/luci-app-vnt2/luasrc/view/vnt2/vnt2_status.htm"
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
@@ -63,15 +67,30 @@ test_reload_only_queues_marker() {
 	printf 'PASS: reload only writes the restart marker\n'
 }
 
+test_luci_restart_marker_is_atomic() {
+	grep -Fq 'os.rename(temp, RESTART_PENDING_FILE)' "$CBI_SCRIPT" || \
+		fail "LuCI restart marker does not use atomic replacement"
+	if grep -Fq 'fs.writefile(RESTART_PENDING_FILE' "$CBI_SCRIPT"; then
+		fail "LuCI restart marker has a non-atomic direct-write fallback"
+	fi
+	printf 'PASS: LuCI restart marker only uses atomic replacement\n'
+}
+
 test_worker_package_lifecycle() {
 	grep -Fq 'START=98' "$WORKER_INIT_SCRIPT" || fail "worker does not start before the main service"
+	grep -Fq 'START=97' "$VERSION_WORKER_INIT_SCRIPT" || fail "version worker does not start before the restart worker"
 	grep -Fq 'START=99' "$INIT_SCRIPT" || fail "main service start priority changed unexpectedly"
 	grep -Fq 'RESTART_DELAY="${VNT2_RESTART_DELAY:-15}"' "$WORKER_SCRIPT" || fail "worker debounce is not 15 seconds"
+	grep -Fq 'CHECK_DELAY="${VNT2_VERSION_DELAY:-2}"' "$VERSION_WORKER_SCRIPT" || fail "version worker debounce is not 2 seconds"
+	grep -Fq '"$CHECK_COMMAND" refresh_latest_versions </dev/null >/dev/null 2>&1' "$VERSION_WORKER_SCRIPT" || \
+		fail "version worker does not detach and invoke the refresh command"
 
 	for path in \
 		'/etc/init.d/vnt2' \
 		'/etc/init.d/vnt2-worker' \
-		'/usr/libexec/vnt2/restart-worker'
+		'/etc/init.d/vnt2-version-worker' \
+		'/usr/libexec/vnt2/restart-worker' \
+		'/usr/libexec/vnt2/version-worker'
 	do
 		grep -Fq "$path" "$PACKAGE_MAKEFILE" || fail "package lifecycle omits $path"
 	done
@@ -79,8 +98,12 @@ test_worker_package_lifecycle() {
 	grep -Fq '/etc/init.d/vnt2-worker restart' "$PACKAGE_MAKEFILE" || fail "postinst does not start the worker"
 	grep -Fq '/etc/init.d/vnt2-worker stop' "$PACKAGE_MAKEFILE" || fail "prerm does not stop the worker"
 	grep -Fq '/etc/init.d/vnt2-worker disable' "$PACKAGE_MAKEFILE" || fail "prerm does not disable the worker"
+	grep -Fq '/etc/init.d/vnt2-version-worker enable' "$PACKAGE_MAKEFILE" || fail "postinst does not enable the version worker"
+	grep -Fq '/etc/init.d/vnt2-version-worker restart' "$PACKAGE_MAKEFILE" || fail "postinst does not start the version worker"
+	grep -Fq '/etc/init.d/vnt2-version-worker stop' "$PACKAGE_MAKEFILE" || fail "prerm does not stop the version worker"
+	grep -Fq '/etc/init.d/vnt2-version-worker disable' "$PACKAGE_MAKEFILE" || fail "prerm does not disable the version worker"
 
-	printf 'PASS: package installs and manages the restart worker\n'
+	printf 'PASS: package installs and manages both workers\n'
 }
 
 test_apply_stop_keeps_network() {
@@ -112,6 +135,31 @@ test_apply_stop_keeps_network() {
 	rm -rf "$dir"
 	trap - EXIT INT TERM
 	printf 'PASS: apply stop preserves network and normal stop cleans it\n'
+}
+
+test_start_service_propagates_component_failure() {
+	load_function start_service
+
+	ensure_log_files() { :; }
+	log_cli() { :; }
+	log_web() { :; }
+	log_server() { :; }
+	log_download() { :; }
+	export_toml_from_uci() { return 0; }
+	config_load() { :; }
+	get_first_section_id() { printf '%s\n' "$1"; }
+	migrate_legacy_client_server() { :; }
+	start_cli_instance() { return 1; }
+	start_web_instance() { return 0; }
+	start_server_instance() { return 0; }
+	CONF=vnt2
+
+	if start_service; then
+		fail "start_service hid a component startup failure"
+	fi
+	start_cli_instance() { return 0; }
+	start_service || fail "start_service failed when all components succeeded"
+	printf 'PASS: service startup propagates component failures\n'
 }
 
 test_idempotent_uci_helpers() {
@@ -172,8 +220,75 @@ test_idempotent_uci_helpers() {
 	printf 'PASS: unchanged UCI state produces no write\n'
 }
 
+test_private_toml_permissions() {
+	grep -Fq 'chmod 755 "$conf_dir"' "$INIT_SCRIPT" || fail "TOML parent directory is not restricted to 0755"
+	grep -Fq 'chmod 600 "$conf_path"' "$INIT_SCRIPT" || fail "existing TOML files are not restricted to 0600"
+	grep -Fq 'fs.chmod(dir, 493)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "Lua TOML parent permissions are not 0755"
+	grep -Fq 'return nil, "failed to create TOML parent directory"' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "Lua TOML parent creation failures are not propagated"
+	grep -Fq 'return nil, "failed to secure TOML parent directory"' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "Lua TOML parent permission failures are not propagated"
+	grep -Fq 'fs.chmod(temp, 384)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "Lua TOML file permissions are not 0600"
+	grep -Fq 'local function secure_existing_toml(path)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "existing TOML files do not have a permission repair helper"
+	grep -Fq 'fs.chmod(path, 384)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "existing TOML file permissions are not repaired to 0600"
+	grep -Fq 'return secure_existing_toml(client_toml)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "existing client TOML permissions are not repaired"
+	grep -Fq 'return secure_existing_toml(web_toml)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "existing Web TOML permissions are not repaired"
+	grep -Fq 'return secure_existing_toml(server_toml)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "existing server TOML permissions are not repaired"
+	grep -Fq 'os.rename(temp, path)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+		fail "Lua TOML writes are not atomically replaced"
+	grep -Fq 'local exported = toml.export_uci_to_toml(uci)' "$INIT_SCRIPT" || \
+		fail "init script does not inspect the TOML export result"
+	grep -Fq 'if not exported then' "$INIT_SCRIPT" || \
+		fail "init script does not report TOML export failures"
+	grep -Fq 'mkdir -p "$conf_dir" >/dev/null 2>&1 || return 1' "$INIT_SCRIPT" || \
+		fail "runtime config directory creation failures are ignored"
+	grep -Fq 'chmod 600 "$conf_path" >/dev/null 2>&1 || return 1' "$INIT_SCRIPT" || \
+		fail "runtime config permission failures are ignored"
+	grep -Fq 'if ! ensure_conf_path_ready "${CLI_CONF_FILE}"; then' "$INIT_SCRIPT" || \
+		fail "CLI runtime ignores config path preparation failures"
+	grep -Fq 'if ! ensure_conf_path_ready "${WEB_CONF_FILE}"; then' "$INIT_SCRIPT" || \
+		fail "Web runtime ignores config path preparation failures"
+	grep -Fq 'if ! ensure_conf_path_ready "${SERVER_CONF_FILE}"; then' "$INIT_SCRIPT" || \
+		fail "server runtime ignores config path preparation failures"
+	printf 'PASS: TOML files use private permissions and atomic replacement\n'
+}
+
+test_status_view_escaping() {
+	grep -Fq 'function escapeHtml(v)' "$STATUS_VIEW" || fail "status view does not define HTML escaping"
+	grep -Fq '.replace(/&/g, "&amp;")' "$STATUS_VIEW" || fail "status view does not escape ampersands"
+	grep -Fq '.replace(/</g, "&lt;")' "$STATUS_VIEW" || fail "status view does not escape opening brackets"
+	grep -Fq 'items.push(text(obj.message))' "$STATUS_VIEW" || fail "download status messages are not escaped"
+	grep -Fq 'items.push(text(v[i]))' "$STATUS_VIEW" || fail "status lists are not escaped"
+	grep -Fq '!/^https?:\/\/[^\s]+$/i.test(raw)' "$STATUS_VIEW" || fail "status Web links do not reject unsafe schemes"
+	grep -Fq 'rel="noopener noreferrer"' "$STATUS_VIEW" || fail "status Web links do not isolate the opener"
+	grep -Fq 'setHtml("web_url", webUrlHtml(data.web_url))' "$STATUS_VIEW" || fail "status Web URL bypasses safe rendering"
+	printf 'PASS: status values and Web links are safely rendered\n'
+}
+
+test_uploaded_archive_safety() {
+	grep -Fq 'entry = entry:gsub("\\", "/"):gsub("^%./", "")' "$CBI_SCRIPT" || \
+		fail "uploaded archive paths do not normalize backslashes"
+	grep -Fq 'entry:match("^[A-Za-z]:/")' "$CBI_SCRIPT" || \
+		fail "uploaded archives do not reject Windows absolute paths"
+	grep -Fq 'type != "-" && type != "d"' "$CBI_SCRIPT" || \
+		fail "uploaded archives do not reject links and special files"
+	printf 'PASS: uploaded archives reject unsafe paths and links\n'
+}
+
 test_reload_only_queues_marker
+test_luci_restart_marker_is_atomic
 test_worker_package_lifecycle
 test_apply_stop_keeps_network
+test_start_service_propagates_component_failure
 test_idempotent_uci_helpers
+test_private_toml_permissions
+test_status_view_escaping
+test_uploaded_archive_safety
 printf 'init-service tests passed\n'

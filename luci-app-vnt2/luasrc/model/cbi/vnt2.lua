@@ -24,14 +24,15 @@ local function schedule_vnt2_restart()
 	local pid = stat:match("^(%d+)") or tostring(os.time())
 	local temp = string.format("%s.%s", RESTART_PENDING_FILE, pid)
 
-	if fs.writefile(temp, value) then
-		if not os.rename(temp, RESTART_PENDING_FILE) then
-			fs.remove(temp)
-			fs.writefile(RESTART_PENDING_FILE, value)
-		end
-	else
-		fs.writefile(RESTART_PENDING_FILE, value)
+	if not fs.writefile(temp, value) then
+		fs.remove(temp)
+		return false
 	end
+	if not os.rename(temp, RESTART_PENDING_FILE) then
+		fs.remove(temp)
+		return false
+	end
+	return true
 end
 
 local function trim(v)
@@ -896,16 +897,19 @@ local function add_file_upload_handler(note_options)
 		if sys.call("tar -tzf " .. quoted .. " >/dev/null 2>&1") ~= 0 then
 			return false
 		end
-		if sys.call("tar -tzf " .. quoted .. " 2>/dev/null | awk '"
-			.. 'BEGIN { bad = 0 } '
-			.. '{ entry = $0; sub(/^\\.\\//, "", entry); '
-			.. 'if (entry ~ /^\\// || entry == ".." || entry ~ /^\\.\\.\\// || entry ~ /\\/\\.\\.\\// || entry ~ /\\/\\.\\.$/) bad = 1 } '
-			.. 'END { exit bad }' .. "'") ~= 0 then
-			return false
+
+		local entries = sys.exec("tar -tzf " .. quoted .. " 2>/dev/null") or ""
+		for entry in entries:gmatch("[^\r\n]+") do
+			entry = entry:gsub("\\", "/"):gsub("^%./", "")
+			if entry:match("^/") or entry:match("^[A-Za-z]:/") or entry == ".."
+				or entry:match("^%.%./") or entry:match("/%.%./") or entry:match("/%.%.$") then
+				return false
+			end
 		end
+
 		return sys.call("tar -tvzf " .. quoted .. " 2>/dev/null | awk '"
 			.. 'BEGIN { bad = 0 } '
-			.. '{ type = substr($0, 1, 1); if (type == "l" || type == "h") bad = 1 } '
+			.. '{ type = substr($0, 1, 1); if (type != "-" && type != "d") bad = 1 } '
 			.. 'END { exit bad }' .. "'") == 0
 	end
 
@@ -1999,7 +2003,7 @@ local cli_conf_shared_tip = s:taboption("advanced", DummyValue, "_cli_conf_share
 cli_conf_shared_tip.rawhtml = true
 cli_conf_shared_tip.cfgvalue = function()
 	return [[
-<div class="cbi-value-description">vnt2_cli 与 vnt2_web 为互斥运行方式，但共用同一个 TOML 配置文件 /vnt_config/vnt2_cli_web.toml；若目录不存在，启动时会自动创建并尽量设置为 777 权限。</div>
+<div class="cbi-value-description">vnt2_cli 与 vnt2_web 为互斥运行方式，但共用同一个 TOML 配置文件 /vnt_config/vnt2_cli_web.toml；若目录不存在，启动时会自动创建，配置文件权限设置为 600。</div>
 ]]
 end
 

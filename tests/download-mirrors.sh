@@ -86,7 +86,109 @@ test_defaults_and_retry_limits() {
 	printf 'PASS: mirror defaults, UI options, and retry limits\n'
 }
 
+test_release_tag_matching() {
+	dir="$(mktemp -d)"
+	trap 'rm -rf "$dir"' EXIT INT TERM
+	definition="$(awk '
+		/^extract_release_object_by_tag\(\) \{/ { copying = 1 }
+		/^fetch_release_metadata_from_mirror\(\) \{/ { exit }
+		copying { print }
+	' "$INIT_SCRIPT")"
+	[ -n "$definition" ] || fail "extract_release_object_by_tag was not found"
+	eval "$definition"
+
+	cat >"$dir/releases.json" <<'EOF'
+[
+  {"tag_name":"v2.0.53","assets":[{"name":"current"}]},
+  {"tag_name":"2.0.52","assets":[{"name":"previous"}]}
+]
+EOF
+	extract_release_object_by_tag "$dir/releases.json" "$dir/matched.json" "2.0.53" || \
+		fail "normalized tag did not match a v-prefixed release"
+	grep -Fq '"tag_name":"v2.0.53"' "$dir/matched.json" || fail "wrong release object was selected"
+
+	extract_release_object_by_tag "$dir/releases.json" "$dir/matched.json" "v2.0.52" || \
+		fail "v-prefixed requested tag did not match a normalized release"
+	grep -Fq '"tag_name":"2.0.52"' "$dir/matched.json" || fail "wrong normalized release object was selected"
+
+	if extract_release_object_by_tag "$dir/releases.json" "$dir/matched.json" "2.0.5"; then
+		fail "partial release tag matched unexpectedly"
+	fi
+
+	rm -rf "$dir"
+	trap - EXIT INT TERM
+	printf 'PASS: release list tag matching normalizes only the v prefix\n'
+}
+
+test_download_timeouts_and_archive_checks() {
+	download_definition="$(awk '
+		/^download_file\(\) \{/ { copying = 1 }
+		copying { print }
+		copying && /^}$/ { exit }
+	' "$INIT_SCRIPT")"
+	printf '%s\n' "$download_definition" | grep -Fq 'connect_timeout=10' || fail "API connect timeout is not bounded"
+	printf '%s\n' "$download_definition" | grep -Fq 'transfer_timeout=30' || fail "API transfer timeout is not bounded"
+	printf '%s\n' "$download_definition" | grep -Fq 'transfer_timeout=600' || fail "asset transfer timeout changed unexpectedly"
+	grep -Fq 'archive_is_safe "$asset_file" || return 1' "$INIT_SCRIPT" || fail "release extraction bypasses archive safety checks"
+	printf 'PASS: API timeouts and release archive checks are enabled\n'
+}
+
+test_archive_safety() {
+	dir="$(mktemp -d)"
+	trap 'rm -rf "$dir"' EXIT INT TERM
+	definition="$(awk '
+		/^archive_paths_are_safe\(\) \{/ { copying = 1 }
+		/^validate_asset_file\(\) \{/ { exit }
+		copying { print }
+	' "$INIT_SCRIPT")"
+	[ -n "$definition" ] || fail "archive safety functions were not found"
+	eval "$definition"
+
+	mkdir -p "$dir/source"
+	printf 'binary\n' >"$dir/source/vnt2_cli"
+	tar -czf "$dir/safe.tar.gz" -C "$dir/source" vnt2_cli
+	archive_is_safe "$dir/safe.tar.gz" || fail "safe tar archive was rejected"
+
+	tar -czf "$dir/traversal.tar.gz" -C "$dir/source" --transform='s#vnt2_cli#../vnt2_cli#' vnt2_cli 2>/dev/null
+	if archive_is_safe "$dir/traversal.tar.gz"; then
+		fail "tar archive containing parent traversal was accepted"
+	fi
+
+	ln -s vnt2_cli "$dir/source/vnt2_link"
+	if [ -L "$dir/source/vnt2_link" ]; then
+		tar -czf "$dir/link.tar.gz" -C "$dir/source" vnt2_link
+		if archive_is_safe "$dir/link.tar.gz"; then
+			fail "tar archive containing a symbolic link was accepted"
+		fi
+	fi
+
+	if mkfifo "$dir/source/vnt2_fifo" 2>/dev/null; then
+		tar -czf "$dir/special.tar.gz" -C "$dir/source" vnt2_fifo
+		if archive_is_safe "$dir/special.tar.gz"; then
+			fail "tar archive containing a special file was accepted"
+		fi
+	fi
+
+	printf 'not an archive\n' >"$dir/broken.tar.gz"
+	if archive_is_safe "$dir/broken.tar.gz"; then
+		fail "corrupted tar archive was accepted"
+	fi
+
+	if [ -n "${VNT2_TEST_RELEASE_ARCHIVE:-}" ]; then
+		[ -f "$VNT2_TEST_RELEASE_ARCHIVE" ] || fail "real Release archive does not exist"
+		archive_is_safe "$VNT2_TEST_RELEASE_ARCHIVE" || fail "real Release archive was rejected"
+		printf 'PASS: real Release archive passed project safety checks\n'
+	fi
+
+	rm -rf "$dir"
+	trap - EXIT INT TERM
+	printf 'PASS: release archive path and link protections reject unsafe input\n'
+}
+
 test_mirror_candidates
 test_custom_url_handling
 test_defaults_and_retry_limits
+test_release_tag_matching
+test_download_timeouts_and_archive_checks
+test_archive_safety
 printf 'download-mirror tests passed\n'

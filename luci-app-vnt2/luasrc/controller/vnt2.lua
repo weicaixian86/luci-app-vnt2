@@ -7,6 +7,7 @@ local uci = require "luci.model.uci".cursor()
 local toml = require "luci.model.vnt2_toml"
 local textutil = require "luci.model.vnt2_text"
 local LOG_DISPLAY_LINES = 300
+local VERSION_CHECK_PENDING_FILE = "/tmp/vnt2-version-check.pending"
 
 function index()
 	if not fs.access("/etc/config/vnt2") and not fs.access(toml.CLIENT_TOML) and not fs.access(toml.SERVER_TOML) then
@@ -23,6 +24,7 @@ function index()
 	entry({ "admin", "vpn", "vnt2", "download_log" }, cbi("vnt2_download_log"), _("下载日志"), 50).leaf = true
 
 	entry({ "admin", "vpn", "vnt2", "status" }, call("act_status")).leaf = true
+	entry({ "admin", "vpn", "vnt2", "check_latest" }, call("act_check_latest")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_client_log" }, call("get_client_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "clear_client_log" }, call("clear_client_log")).leaf = true
 	entry({ "admin", "vpn", "vnt2", "get_web_log" }, call("get_web_log")).leaf = true
@@ -226,6 +228,10 @@ local function get_cpu_count()
 	return count
 end
 
+local CLK_TCK = get_clk_tck()
+local PAGE_SIZE = get_page_size()
+local CPU_COUNT = get_cpu_count()
+
 local function get_cpu_usage(pid)
 	pid = trim(pid)
 	if pid == "" or not pid:match("^%d+$") then
@@ -260,17 +266,15 @@ local function get_cpu_usage(pid)
 		return ""
 	end
 
-	local clk_tck = get_clk_tck()
-	local cpu_count = get_cpu_count()
-	local elapsed = uptime - (starttime / clk_tck)
+	local elapsed = uptime - (starttime / CLK_TCK)
 	if elapsed <= 0 then
 		return "0.00%"
 	end
 
-	local total = (utime + stime) / clk_tck
+	local total = (utime + stime) / CLK_TCK
 	local cpu = (total / elapsed) * 100
-	if cpu_count > 1 then
-		cpu = cpu / cpu_count
+	if CPU_COUNT > 1 then
+		cpu = cpu / CPU_COUNT
 	end
 	if cpu < 0 then
 		cpu = 0
@@ -291,7 +295,7 @@ local function get_mem_usage(pid)
 		local statm = fs.readfile("/proc/" .. pid .. "/statm") or ""
 		local rss_pages = tonumber(statm:match("^%S+%s+(%d+)"))
 		if rss_pages then
-			rss_kb = (rss_pages * get_page_size()) / 1024
+			rss_kb = (rss_pages * PAGE_SIZE) / 1024
 		end
 	end
 
@@ -348,67 +352,6 @@ local function normalize_custom_mirror_url(url)
 	return (url:gsub("/*$", "/"))
 end
 
-local function repo_to_mirror_project(repo)
-	repo = trim(repo)
-	if repo == "vnt-dev/vnt" then
-		return "vnt"
-	elseif repo == "vnt-dev/vnts" then
-		return "vnts"
-	end
-	return nil
-end
-
-local function get_download_mirror_candidates(repo, mirror)
-	repo = trim(repo)
-	if repo == "" then
-		repo = "vnt-dev/vnt"
-	end
-
-	mirror = normalize_download_mirror(mirror)
-	if mirror == "auto" then
-		return { "gh-proxy", "github", "gitee", "gitlab", "cloudflare" }
-	elseif mirror == "gh-proxy" then
-		return { "gh-proxy", "github" }
-	elseif mirror == "github" then
-		return { "github" }
-	elseif mirror == "custom" then
-		return { "custom", "github" }
-	elseif mirror == "gitee" or mirror == "gitlab" or mirror == "cloudflare" then
-		return { mirror, "github" }
-	end
-	return { "gh-proxy", "github", "gitee", "gitlab", "cloudflare" }
-end
-
-local function build_latest_release_endpoint_for_mirror(repo, mirror)
-	repo = trim(repo)
-	if repo == "" then
-		repo = "vnt-dev/vnt"
-	end
-
-	mirror = normalize_download_mirror(mirror)
-	if mirror == "github" or mirror == "gh-proxy" or mirror == "auto" then
-		return string.format("https://api.github.com/repos/%s/releases", repo), mirror
-	end
-	if mirror == "custom" then
-		return string.format("https://api.github.com/repos/%s/releases", repo), mirror
-	end
-
-	local proj = repo_to_mirror_project(repo)
-	if not proj then
-		return string.format("https://api.github.com/repos/%s/releases", repo), "github"
-	end
-
-	if mirror == "gitee" then
-		return string.format("https://gitee.com/api/v5/repos/whzhni/%s/releases", proj), mirror
-	elseif mirror == "gitlab" then
-		return string.format("https://gitlab.com/api/v4/projects/whzhni%%2F%s/releases", proj), mirror
-	elseif mirror == "cloudflare" then
-		return string.format("https://pub-8a57d35d70d5423aac22a3316867e7ce.r2.dev/%s/releases", proj), mirror
-	end
-
-	return string.format("https://api.github.com/repos/%s/releases", repo), "github"
-end
-
 local function get_cached_latest_tag(repo, mirror, custom_mirror_url)
 	repo = trim(repo)
 	if repo == "" then
@@ -416,19 +359,15 @@ local function get_cached_latest_tag(repo, mirror, custom_mirror_url)
 	end
 
 	local strategy = normalize_download_mirror(mirror)
-	for _, candidate in ipairs(get_download_mirror_candidates(repo, mirror)) do
-		local _, effective_mirror = build_latest_release_endpoint_for_mirror(repo, candidate)
-		local cache_key = strategy .. "_" .. effective_mirror .. "_" .. repo
-		if effective_mirror == "custom" then
-			cache_key = cache_key .. "_" .. normalize_custom_mirror_url(custom_mirror_url)
-		end
-		local cache = "/tmp/vnt2_latest_v2_" .. sanitize_cache_name(cache_key) .. ".tag"
-
-		if fs.access(cache) then
-			local cached = trim(fs.readfile(cache) or "")
-			if cached ~= "" then
-				return cached
-			end
+	local canonical_key = strategy .. "_" .. repo
+	if strategy == "custom" then
+		canonical_key = canonical_key .. "_" .. normalize_custom_mirror_url(custom_mirror_url)
+	end
+	local canonical_cache = "/tmp/vnt2_latest_v3_" .. sanitize_cache_name(canonical_key) .. ".tag"
+	if fs.access(canonical_cache) then
+		local cached = trim(fs.readfile(canonical_cache) or "")
+		if cached ~= "" then
+			return cached
 		end
 	end
 
@@ -444,32 +383,36 @@ local function normalize_display_tag(tag)
 	return tag
 end
 
-local function get_vnt2_latest_tag(repo, configured_tag, mirror, custom_mirror_url)
+local function get_vnt2_latest_tag(repo, mirror, custom_mirror_url)
 	repo = trim(repo)
-	configured_tag = trim(configured_tag)
 
 	if repo == "" then
 		repo = "vnt-dev/vnt"
 	end
 
-	if repo == "vnt-dev/vnt" or repo == "vnt-dev/vnts" then
-		if configured_tag ~= "" and configured_tag ~= "latest" then
-			return normalize_display_tag(configured_tag)
-		end
-
-		local latest = normalize_display_tag(get_cached_latest_tag(repo, mirror, custom_mirror_url))
-		if latest ~= "" then
-			return latest
-		end
-
-		return repo == "vnt-dev/vnts" and "2.0.6" or "2.0.9"
+	local latest = normalize_display_tag(get_cached_latest_tag(repo, mirror, custom_mirror_url))
+	if latest ~= "" then
+		return latest
 	end
 
-	if configured_tag ~= "" and configured_tag ~= "latest" then
-		return normalize_display_tag(configured_tag)
+	return ""
+end
+
+function act_check_latest()
+	local stat = fs.readfile("/proc/self/stat") or ""
+	local pid = stat:match("^(%d+)") or tostring(os.time())
+	local temp = string.format("%s.%s", VERSION_CHECK_PENDING_FILE, pid)
+	local value = tostring(os.time()) .. "\n"
+	local ok = fs.writefile(temp, value)
+
+	if ok then
+		ok = os.rename(temp, VERSION_CHECK_PENDING_FILE) and true or false
+	end
+	if not ok then
+		fs.remove(temp)
 	end
 
-	return normalize_display_tag(get_cached_latest_tag(repo, mirror, custom_mirror_url))
+	json_write({ ok = ok and true or false })
 end
 
 local function sanitize_text_content(content)
@@ -779,21 +722,9 @@ function act_status()
 	e.web_tag = get_local_tag(get_web_bin(), web_dl, cli_dl)
 	e.server_tag = get_local_tag(get_server_bin(), server_dl)
 
-	local latest_tag = get_vnt2_latest_tag(cli_cfg.download_repo, cli_cfg.download_tag, cli_cfg.download_mirror, cli_cfg.custom_download_mirror)
-	if latest_tag == "" then
-		latest_tag = get_vnt2_latest_tag(web_cfg.download_repo, web_cfg.download_tag, web_cfg.download_mirror, web_cfg.custom_download_mirror)
-	end
-	if latest_tag == "" then
-		latest_tag = get_vnt2_latest_tag("vnt-dev/vnt", "latest", "auto")
-	end
-
-	local latest_server_tag = get_vnt2_latest_tag(server_cfg.download_repo, server_cfg.download_tag, server_cfg.download_mirror, server_cfg.custom_download_mirror)
-	if latest_server_tag == "" then
-		latest_server_tag = get_vnt2_latest_tag("vnt-dev/vnts", "latest", "auto")
-	end
-
-	e.latest_tag = latest_tag
-	e.latest_server_tag = latest_server_tag
+	e.latest_tag = get_vnt2_latest_tag(cli_cfg.download_repo, cli_cfg.download_mirror, cli_cfg.custom_download_mirror)
+	e.latest_web_tag = get_vnt2_latest_tag(web_cfg.download_repo, web_cfg.download_mirror, web_cfg.custom_download_mirror)
+	e.latest_server_tag = get_vnt2_latest_tag(server_cfg.download_repo, server_cfg.download_mirror, server_cfg.custom_download_mirror)
 
 	e.ctrl_port = cli_cfg.ctrl_port
 	e.web_host = get_web_host()

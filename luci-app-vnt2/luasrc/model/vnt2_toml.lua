@@ -1,5 +1,6 @@
 local fs = require "nixio.fs"
 local util = require "luci.util"
+local nixio = require "nixio"
 
 local M = {}
 
@@ -650,13 +651,32 @@ end
 local function ensure_toml_parent(path)
 	local dir = path:match("^(.+)/[^/]+$")
 	if dir and dir ~= "" then
-		fs.mkdirr(dir)
-		fs.chmod(dir, 511)
+		if not fs.mkdirr(dir) and not fs.access(dir) then
+			return nil, "failed to create TOML parent directory"
+		end
+		if not fs.chmod(dir, 493) then
+			return nil, "failed to secure TOML parent directory"
+		end
 	end
+	return true
+end
+
+local function secure_existing_toml(path)
+	local parent_ok, parent_err = ensure_toml_parent(path)
+	if not parent_ok then
+		return nil, parent_err
+	end
+	if not fs.chmod(path, 384) then
+		return nil, "failed to secure existing TOML file"
+	end
+	return true
 end
 
 function M.write_toml(path, data, order)
-	ensure_toml_parent(path)
+	local parent_ok, parent_err = ensure_toml_parent(path)
+	if not parent_ok then
+		return nil, parent_err
+	end
 
 	local lines = {}
 	for _, key in ipairs(order) do
@@ -719,10 +739,21 @@ function M.write_toml(path, data, order)
 		end
 	end
 	lines[#lines + 1] = ""
-	fs.writefile(path, table.concat(lines, "\n"))
-	if fs.access(path) then
-		fs.chmod(path, 511)
+	local temp = string.format("%s.tmp.%s", path, tostring(nixio.getpid()))
+	local content = table.concat(lines, "\n")
+	if not fs.writefile(temp, content) then
+		fs.remove(temp)
+		return nil, "failed to write temporary TOML file"
 	end
+	if not fs.chmod(temp, 384) then
+		fs.remove(temp)
+		return nil, "failed to secure temporary TOML file"
+	end
+	if not os.rename(temp, path) then
+		fs.remove(temp)
+		return nil, "failed to replace TOML file"
+	end
+	return true
 end
 
 local function ensure_section(uci, config, stype)
@@ -756,7 +787,7 @@ function M.ensure_client_toml_from_uci(uci)
 	local section = uci:get_first("vnt2", "vnt2_cli")
 
 	if fs.access(client_toml) then
-		return
+		return secure_existing_toml(client_toml)
 	end
 
 	local data = clone_defaults(client_defaults)
@@ -779,7 +810,7 @@ function M.ensure_client_toml_from_uci(uci)
 		data.tunnel_port = nil
 	end
 
-	M.write_toml(client_toml, data, client_order)
+	return M.write_toml(client_toml, data, client_order)
 end
 
 function M.ensure_web_toml_from_uci(uci)
@@ -788,12 +819,11 @@ function M.ensure_web_toml_from_uci(uci)
 	local section = uci:get_first("vnt2", "vnt2_cli")
 
 	if web_toml == client_toml then
-		M.ensure_client_toml_from_uci(uci)
-		return
+		return M.ensure_client_toml_from_uci(uci)
 	end
 
 	if fs.access(web_toml) then
-		return
+		return secure_existing_toml(web_toml)
 	end
 
 	local data = clone_defaults(client_defaults)
@@ -817,7 +847,7 @@ function M.ensure_web_toml_from_uci(uci)
 		data.tunnel_port = nil
 	end
 
-	M.write_toml(web_toml, data, web_order)
+	return M.write_toml(web_toml, data, web_order)
 end
 
 function M.ensure_server_toml_from_uci(uci)
@@ -825,7 +855,7 @@ function M.ensure_server_toml_from_uci(uci)
 	local section = uci:get_first("vnt2", "vnts2")
 
 	if fs.access(server_toml) then
-		return
+		return secure_existing_toml(server_toml)
 	end
 
 	local data = clone_defaults(server_defaults)
@@ -858,13 +888,19 @@ function M.ensure_server_toml_from_uci(uci)
 		data[nested_section] = nested
 	end
 
-	M.write_toml(server_toml, data, server_order)
+	return M.write_toml(server_toml, data, server_order)
 end
 
 function M.ensure_toml_files(uci)
-	M.ensure_client_toml_from_uci(uci)
-	M.ensure_web_toml_from_uci(uci)
-	M.ensure_server_toml_from_uci(uci)
+	local ok, err = M.ensure_client_toml_from_uci(uci)
+	if not ok then
+		return nil, err
+	end
+	ok, err = M.ensure_web_toml_from_uci(uci)
+	if not ok then
+		return nil, err
+	end
+	return M.ensure_server_toml_from_uci(uci)
 end
 
 function M.export_uci_to_toml(uci)
@@ -943,11 +979,20 @@ function M.export_uci_to_toml(uci)
 		server[nested_section] = nested
 	end
 
-	M.write_toml(client_toml, cli, client_order)
-	if web_toml ~= client_toml then
-		M.write_toml(web_toml, web, web_order)
+	local ok, err = M.write_toml(client_toml, cli, client_order)
+	if not ok then
+		return nil, err
 	end
-	M.write_toml(server_toml, server, server_order)
+	if web_toml ~= client_toml then
+		ok, err = M.write_toml(web_toml, web, web_order)
+		if not ok then
+			return nil, err
+		end
+	end
+	ok, err = M.write_toml(server_toml, server, server_order)
+	if not ok then
+		return nil, err
+	end
 
 	return cli, web, server
 end
