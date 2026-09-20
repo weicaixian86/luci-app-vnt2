@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-vnt2
 PKG_VERSION:=2.0.53
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 LUCI_TITLE:=luci-app-vnt2 - LuCI support for VNT2
 LUCI_DESCRIPTION:=luci-app-vnt2 OpenWrt LuCI application for managing VNT2 CLI/CTRL/Web services
@@ -21,6 +21,10 @@ endef
 
 define Package/$(PKG_NAME)/prerm
 #!/bin/sh
+if [ -z "$${IPKG_INSTROOT}" ] && [ -x /etc/init.d/vnt2-worker ] ; then
+  /etc/init.d/vnt2-worker stop >/dev/null 2>&1
+  /etc/init.d/vnt2-worker disable >/dev/null 2>&1
+fi
 if [ -f /etc/config/vnt2 ] ; then
   echo "备份vnt2配置文件 /etc/config/vnt2 到 /tmp/vnt2_backup"
   echo "不重启设备前重新安装 luci-app-vnt2 可保留原配置"
@@ -30,12 +34,19 @@ endef
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
-chmod +x /etc/init.d/vnt2 >/dev/null 2>&1
-[ -n "$${IPKG_INSTROOT}" ] || /etc/init.d/vnt2 enable >/dev/null 2>&1
+chmod 0755 \
+  "$${IPKG_INSTROOT}/etc/init.d/vnt2" \
+  "$${IPKG_INSTROOT}/etc/init.d/vnt2-worker" \
+  "$${IPKG_INSTROOT}/usr/libexec/vnt2/restart-worker" >/dev/null 2>&1
 if [ -f /tmp/vnt2_backup ] ; then
   echo "发现 vnt2 备份配置文件 /tmp/vnt2_backup，开始恢复到 /etc/config/vnt2"
   mv -f /tmp/vnt2_backup /etc/config/vnt2
   echo "请前往 VPN -> VNT2 页面按需重启服务"
+fi
+if [ -z "$${IPKG_INSTROOT}" ] ; then
+  /etc/init.d/vnt2 enable >/dev/null 2>&1
+  /etc/init.d/vnt2-worker enable >/dev/null 2>&1
+  /etc/init.d/vnt2-worker restart >/dev/null 2>&1
 fi
 endef
 

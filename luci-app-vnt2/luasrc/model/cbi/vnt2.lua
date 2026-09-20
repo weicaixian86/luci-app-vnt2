@@ -7,6 +7,8 @@ local uci = require "luci.model.uci".cursor()
 local dispatcher = require "luci.dispatcher"
 local toml = require "luci.model.vnt2_toml"
 
+local RESTART_PENDING_FILE = "/tmp/vnt2-restart.pending"
+
 toml.ensure_toml_files(uci)
 
 local m = Map("vnt2", translate("VNT2"))
@@ -16,9 +18,20 @@ m.description = translate(
 
 m:section(SimpleSection).template = "vnt2/vnt2_status"
 
-local function restart_vnt2_async()
-	-- Let the init script detach from LuCI and coalesce repeated requests.
-	sys.call("/etc/init.d/vnt2 schedule_restart >/dev/null 2>&1")
+local function schedule_vnt2_restart()
+	local value = tostring(os.time()) .. "\n"
+	local stat = fs.readfile("/proc/self/stat") or ""
+	local pid = stat:match("^(%d+)") or tostring(os.time())
+	local temp = string.format("%s.%s", RESTART_PENDING_FILE, pid)
+
+	if fs.writefile(temp, value) then
+		if not os.rename(temp, RESTART_PENDING_FILE) then
+			fs.remove(temp)
+			fs.writefile(RESTART_PENDING_FILE, value)
+		end
+	else
+		fs.writefile(RESTART_PENDING_FILE, value)
+	end
 end
 
 local function trim(v)
@@ -1775,7 +1788,7 @@ restart_btn.inputstyle = "apply"
 restart_btn.description = translate("在未修改参数时快速重启 vnt2_cli")
 restart_btn:depends("enabled", "1")
 restart_btn.write = function()
-	restart_vnt2_async()
+	schedule_vnt2_restart()
 end
 
 local network_code = s:taboption("general", Value, "network_code", translate("网络编号"),
@@ -2278,7 +2291,7 @@ web_restart.inputstyle = "apply"
 web_restart.description = translate("在未修改参数时快速重启 vnt2_web")
 web_restart:depends("enabled", "1")
 web_restart.write = function()
-	restart_vnt2_async()
+	schedule_vnt2_restart()
 end
 
 local auto_download_web = w:taboption("general", Flag, "auto_download", translate("自动下载程序"),
@@ -2408,7 +2421,7 @@ server_restart.inputstyle = "apply"
 server_restart.description = translate("快速重启 vnts2")
 server_restart:depends("enabled", "1")
 server_restart.write = function()
-	restart_vnt2_async()
+	schedule_vnt2_restart()
 end
 
 local auto_download_server = v:taboption("general", Flag, "auto_download", translate("自动下载程序"),

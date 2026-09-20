@@ -39,6 +39,19 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Validate restart worker
+        shell: bash
+        run: |
+          dash -n luci-app-vnt2/root/etc/init.d/vnt2
+          dash -n luci-app-vnt2/root/etc/init.d/vnt2-worker
+          dash -n luci-app-vnt2/root/usr/libexec/vnt2/restart-worker
+          dash -n tests/download-mirrors.sh
+          dash -n tests/init-service.sh
+          dash -n tests/restart-worker.sh
+          sh tests/download-mirrors.sh
+          sh tests/init-service.sh
+          sh tests/restart-worker.sh
+
       - name: Install build dependencies
         shell: bash
         run: |

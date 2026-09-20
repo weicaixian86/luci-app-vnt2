@@ -1,0 +1,69 @@
+#!/bin/sh
+
+PENDING_FILE="${VNT2_RESTART_PENDING_FILE:-/tmp/vnt2-restart.pending}"
+CLAIMED_FILE="${VNT2_RESTART_CLAIMED_FILE:-/tmp/vnt2-restart.claimed}"
+DOWNLOAD_LOG="${VNT2_RESTART_LOG_FILE:-/tmp/vnt2-download.log}"
+RESTART_COMMAND="${VNT2_RESTART_COMMAND:-/etc/init.d/vnt2}"
+RESTART_DELAY="${VNT2_RESTART_DELAY:-15}"
+POLL_INTERVAL="${VNT2_RESTART_POLL_INTERVAL:-1}"
+
+log_worker() {
+	printf '%s download : %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"${DOWNLOAD_LOG}"
+}
+
+read_request_time() {
+	local request_time
+
+	request_time="$(sed -n '1p' "$1" 2>/dev/null)"
+	case "$request_time" in
+		''|*[!0-9]*) request_time="$(date +%s)" ;;
+	esac
+	printf '%s\n' "$request_time"
+}
+
+claim_latest_request() {
+	[ -f "$PENDING_FILE" ] || return 1
+	mv -f "$PENDING_FILE" "$CLAIMED_FILE" 2>/dev/null
+}
+
+run_restart() {
+	local rc
+
+	log_worker "worker starts queued restart"
+	VNT2_RESTART_MODE=apply "$RESTART_COMMAND" restart </dev/null >/dev/null 2>&1
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		log_worker "worker completed queued restart"
+	else
+		log_worker "worker restart failed rc=${rc}"
+	fi
+	return "$rc"
+}
+
+trap 'exit 0' INT TERM
+
+while :; do
+	if [ ! -f "$CLAIMED_FILE" ]; then
+		claim_latest_request || {
+			sleep "$POLL_INTERVAL"
+			continue
+		}
+	fi
+
+	request_time="$(read_request_time "$CLAIMED_FILE")"
+	now="$(date +%s)"
+	age=$((now - request_time))
+	if [ "$age" -le "$RESTART_DELAY" ]; then
+		sleep "$POLL_INTERVAL"
+		continue
+	fi
+
+	# A newer marker replaces the claimed request and restarts the debounce
+	# window. This coalesces repeated Save & Apply and reload events.
+	if claim_latest_request; then
+		continue
+	fi
+
+	run_restart
+	rm -f "$CLAIMED_FILE"
+done

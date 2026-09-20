@@ -3,7 +3,7 @@
 START=99
 USE_PROCD=1
 EXTRA_COMMANDS="schedule_restart"
-EXTRA_HELP="\tschedule_restart\tSchedule a detached delayed restart"
+EXTRA_HELP="\tschedule_restart\tQueue a restart for the vnt2 worker"
 
 CONF="vnt2"
 
@@ -34,8 +34,7 @@ DOWNLOAD_WEB_STATE="/tmp/vnt2-download-web.state"
 DOWNLOAD_SERVER_STATE="/tmp/vnt2-download-server.state"
 GH_PROXY_PREFIX="https://gh-proxy.com/"
 DOWNLOAD_MIRROR_RETRIES=3
-RESTART_DELAY=5
-RESTART_LOCK_DIR="/var/run/vnt2-restart.lock"
+RESTART_PENDING_FILE="/tmp/vnt2-restart.pending"
 
 INSTALL_BIN_DIR="/usr/bin"
 
@@ -328,7 +327,6 @@ if not ok_uci or not ok_toml then
 end
 local uci = uci_mod.cursor()
 toml.export_uci_to_toml(uci)
-uci:commit("vnt2")
 EOF
 }
 
@@ -1809,6 +1807,23 @@ toml_validate_server_config() {
 	return 0
 }
 
+uci_set_if_changed() {
+	local key="$1"
+	local value="$2"
+	local current
+
+	current="$(uci -q get "$key" 2>/dev/null)" || current=""
+	[ "$current" = "$value" ] && return 0
+	uci set "${key}=${value}"
+}
+
+uci_delete_if_exists() {
+	local key="$1"
+
+	uci -q get "$key" >/dev/null 2>&1 || return 0
+	uci -q delete "$key"
+}
+
 configure_network() {
 	local tun_name="$1"
 	local forward_list="$2"
@@ -1819,83 +1834,81 @@ configure_network() {
 	lan_zone="$(find_firewall_zone_name "lan" 2>/dev/null || true)"
 	wan_zone="$(find_firewall_zone_name "wan" 2>/dev/null || true)"
 
-	uci -q delete network.VNT2
-	uci set network.VNT2='interface'
-	uci set network.VNT2.proto='none'
-	uci set network.VNT2.device="$tun_name"
-	uci set network.VNT2.ifname="$tun_name"
+	uci_set_if_changed network.VNT2 'interface'
+	uci_set_if_changed network.VNT2.proto 'none'
+	uci_set_if_changed network.VNT2.device "$tun_name"
+	uci_set_if_changed network.VNT2.ifname "$tun_name"
 
-	uci -q delete firewall.vnt2zone
-	uci set firewall.vnt2zone='zone'
-	uci set firewall.vnt2zone.name='VNT2'
-	uci set firewall.vnt2zone.input='ACCEPT'
-	uci set firewall.vnt2zone.output='ACCEPT'
-	uci set firewall.vnt2zone.forward='ACCEPT'
+	uci_set_if_changed firewall.vnt2zone 'zone'
+	uci_set_if_changed firewall.vnt2zone.name 'VNT2'
+	uci_set_if_changed firewall.vnt2zone.input 'ACCEPT'
+	uci_set_if_changed firewall.vnt2zone.output 'ACCEPT'
+	uci_set_if_changed firewall.vnt2zone.forward 'ACCEPT'
 	if [ "${no_nat:-0}" = "1" ]; then
-		uci set firewall.vnt2zone.masq='0'
+		uci_set_if_changed firewall.vnt2zone.masq '0'
 	else
-		uci set firewall.vnt2zone.masq='1'
+		uci_set_if_changed firewall.vnt2zone.masq '1'
 	fi
-	uci set firewall.vnt2zone.mtu_fix='1'
-	uci set firewall.vnt2zone.network='VNT2'
+	uci_set_if_changed firewall.vnt2zone.mtu_fix '1'
+	uci_set_if_changed firewall.vnt2zone.network 'VNT2'
 
 	case " $forward_list " in
 		*" vnt2fwlan "*)
 			if [ -n "$lan_zone" ]; then
-				uci set firewall.vnt2fwlan='forwarding'
-				uci set firewall.vnt2fwlan.src='VNT2'
-				uci set firewall.vnt2fwlan.dest="${lan_zone}"
+				uci_set_if_changed firewall.vnt2fwlan 'forwarding'
+				uci_set_if_changed firewall.vnt2fwlan.src 'VNT2'
+				uci_set_if_changed firewall.vnt2fwlan.dest "${lan_zone}"
 			else
-				uci -q delete firewall.vnt2fwlan
+				uci_delete_if_exists firewall.vnt2fwlan
 			fi
 		;;
 		*)
-			uci -q delete firewall.vnt2fwlan
+			uci_delete_if_exists firewall.vnt2fwlan
 		;;
 	esac
 
 	case " $forward_list " in
 		*" vnt2fwwan "*)
 			if [ -n "$wan_zone" ]; then
-				uci set firewall.vnt2fwwan='forwarding'
-				uci set firewall.vnt2fwwan.src='VNT2'
-				uci set firewall.vnt2fwwan.dest="${wan_zone}"
+				uci_set_if_changed firewall.vnt2fwwan 'forwarding'
+				uci_set_if_changed firewall.vnt2fwwan.src 'VNT2'
+				uci_set_if_changed firewall.vnt2fwwan.dest "${wan_zone}"
 			else
-				uci -q delete firewall.vnt2fwwan
+				uci_delete_if_exists firewall.vnt2fwwan
 			fi
 		;;
 		*)
-			uci -q delete firewall.vnt2fwwan
+			uci_delete_if_exists firewall.vnt2fwwan
 		;;
 	esac
 
 	case " $forward_list " in
 		*" lanfwvnt2 "*)
 			if [ -n "$lan_zone" ]; then
-				uci set firewall.lanfwvnt2='forwarding'
-				uci set firewall.lanfwvnt2.src="${lan_zone}"
-				uci set firewall.lanfwvnt2.dest='VNT2'
+				uci_set_if_changed firewall.lanfwvnt2 'forwarding'
+				uci_set_if_changed firewall.lanfwvnt2.src "${lan_zone}"
+				uci_set_if_changed firewall.lanfwvnt2.dest 'VNT2'
 			else
-				uci -q delete firewall.lanfwvnt2
+				uci_delete_if_exists firewall.lanfwvnt2
 			fi
 		;;
 		*)
-			uci -q delete firewall.lanfwvnt2
+			uci_delete_if_exists firewall.lanfwvnt2
 		;;
 	esac
 
 	case " $forward_list " in
 		*" wanfwvnt2 "*)
 			if [ -n "$wan_zone" ]; then
-				uci set firewall.wanfwvnt2='forwarding'
-				uci set firewall.wanfwvnt2.src="${wan_zone}"
-				uci set firewall.wanfwvnt2.dest='VNT2'
+				uci_set_if_changed firewall.wanfwvnt2 'forwarding'
+				uci_set_if_changed firewall.wanfwvnt2.src "${wan_zone}"
+				uci_set_if_changed firewall.wanfwvnt2.dest 'VNT2'
 			else
-				uci -q delete firewall.wanfwvnt2
+				uci_delete_if_exists firewall.wanfwvnt2
 			fi
 		;;
 		*)
-			uci -q delete firewall.wanfwvnt2
+			uci_delete_if_exists firewall.wanfwvnt2
 		;;
 	esac
 
@@ -1905,12 +1918,12 @@ configure_network() {
 }
 
 cleanup_network() {
-	uci -q delete network.VNT2
-	uci -q delete firewall.vnt2zone
-	uci -q delete firewall.vnt2fwlan
-	uci -q delete firewall.vnt2fwwan
-	uci -q delete firewall.lanfwvnt2
-	uci -q delete firewall.wanfwvnt2
+	uci_delete_if_exists network.VNT2
+	uci_delete_if_exists firewall.vnt2zone
+	uci_delete_if_exists firewall.vnt2fwlan
+	uci_delete_if_exists firewall.vnt2fwwan
+	uci_delete_if_exists firewall.lanfwvnt2
+	uci_delete_if_exists firewall.wanfwvnt2
 	[ -n "$(uci changes network)" ] && uci commit network && /etc/init.d/network reload >/dev/null 2>&1
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
@@ -1922,13 +1935,13 @@ ensure_firewall_rule() {
 	local port="$4"
 	local src_zone="${5:-wan}"
 
-	uci set firewall.${rule}='rule'
-	uci set firewall.${rule}.name="${name}"
-	uci set firewall.${rule}.src="${src_zone}"
-	uci set firewall.${rule}.target='ACCEPT'
-	uci set firewall.${rule}.proto="${proto}"
-	uci set firewall.${rule}.dest_port="${port}"
-	uci set firewall.${rule}.enabled='1'
+	uci_set_if_changed "firewall.${rule}" 'rule'
+	uci_set_if_changed "firewall.${rule}.name" "${name}"
+	uci_set_if_changed "firewall.${rule}.src" "${src_zone}"
+	uci_set_if_changed "firewall.${rule}.target" 'ACCEPT'
+	uci_set_if_changed "firewall.${rule}.proto" "${proto}"
+	uci_set_if_changed "firewall.${rule}.dest_port" "${port}"
+	uci_set_if_changed "firewall.${rule}.enabled" '1'
 }
 
 configure_web_firewall() {
@@ -1939,15 +1952,16 @@ configure_web_firewall() {
 
 	wan_zone="$(find_firewall_zone_name "wan" 2>/dev/null || true)"
 
-	uci -q delete firewall.vnt2web
 	if [ "$wan" = "1" ] && valid_port "$port" && [ -n "$wan_zone" ] && host_allows_external_access "$host"; then
 		ensure_firewall_rule "vnt2web" "vnt2_web" "tcp" "$port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnt2web
 	fi
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
 cleanup_web_firewall() {
-	uci -q delete firewall.vnt2web
+	uci_delete_if_exists firewall.vnt2web
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
@@ -1983,36 +1997,59 @@ configure_server_firewall() {
 	wireguard_port="${wireguard_bind##*:}"
 	wan_zone="$(find_firewall_zone_name "wan" 2>/dev/null || true)"
 
-	uci -q delete firewall.vnts2_tcp
-	uci -q delete firewall.vnts2_quic
-	uci -q delete firewall.vnts2_server_quic
-	uci -q delete firewall.vnts2_ws
-	uci -q delete firewall.vnts2_web
-	uci -q delete firewall.vnts2_ikev2_ike
-	uci -q delete firewall.vnts2_ikev2_natt
-	uci -q delete firewall.vnts2_wireguard
-
-	[ "$open_tcp" = "1" ] && valid_port "$tcp_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$tcp_bind" && ensure_firewall_rule "vnts2_tcp" "vnts2_tcp" "tcp" "$tcp_port" "$wan_zone"
-	[ "$open_quic" = "1" ] && valid_port "$quic_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$quic_bind" && ensure_firewall_rule "vnts2_quic" "vnts2_quic" "udp" "$quic_port" "$wan_zone"
-	[ "$open_server_quic" = "1" ] && valid_port "$server_quic_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$server_quic_bind" && ensure_firewall_rule "vnts2_server_quic" "vnts2_server_quic" "udp" "$server_quic_port" "$wan_zone"
-	[ "$open_ws" = "1" ] && valid_port "$ws_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ws_bind" && ensure_firewall_rule "vnts2_ws" "vnts2_ws" "tcp" "$ws_port" "$wan_zone"
-	[ "$open_web" = "1" ] && valid_port "$web_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$web_bind" && ensure_firewall_rule "vnts2_web" "vnts2_web" "tcp" "$web_port" "$wan_zone"
-	[ "$ikev2_enabled" = "1" ] && [ "$open_ikev2_ike" = "1" ] && valid_port "$ikev2_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ikev2_bind" && ensure_firewall_rule "vnts2_ikev2_ike" "vnts2_ikev2_ike" "udp" "$ikev2_port" "$wan_zone"
-	[ "$ikev2_enabled" = "1" ] && [ "$open_ikev2_natt" = "1" ] && valid_port "$ikev2_natt_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ikev2_natt_bind" && ensure_firewall_rule "vnts2_ikev2_natt" "vnts2_ikev2_natt" "udp" "$ikev2_natt_port" "$wan_zone"
-	[ "$wireguard_enabled" = "1" ] && [ "$open_wireguard" = "1" ] && valid_port "$wireguard_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$wireguard_bind" && ensure_firewall_rule "vnts2_wireguard" "vnts2_wireguard" "udp" "$wireguard_port" "$wan_zone"
+	if [ "$open_tcp" = "1" ] && valid_port "$tcp_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$tcp_bind"; then
+		ensure_firewall_rule "vnts2_tcp" "vnts2_tcp" "tcp" "$tcp_port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnts2_tcp
+	fi
+	if [ "$open_quic" = "1" ] && valid_port "$quic_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$quic_bind"; then
+		ensure_firewall_rule "vnts2_quic" "vnts2_quic" "udp" "$quic_port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnts2_quic
+	fi
+	if [ "$open_server_quic" = "1" ] && valid_port "$server_quic_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$server_quic_bind"; then
+		ensure_firewall_rule "vnts2_server_quic" "vnts2_server_quic" "udp" "$server_quic_port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnts2_server_quic
+	fi
+	if [ "$open_ws" = "1" ] && valid_port "$ws_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ws_bind"; then
+		ensure_firewall_rule "vnts2_ws" "vnts2_ws" "tcp" "$ws_port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnts2_ws
+	fi
+	if [ "$open_web" = "1" ] && valid_port "$web_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$web_bind"; then
+		ensure_firewall_rule "vnts2_web" "vnts2_web" "tcp" "$web_port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnts2_web
+	fi
+	if [ "$ikev2_enabled" = "1" ] && [ "$open_ikev2_ike" = "1" ] && valid_port "$ikev2_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ikev2_bind"; then
+		ensure_firewall_rule "vnts2_ikev2_ike" "vnts2_ikev2_ike" "udp" "$ikev2_port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnts2_ikev2_ike
+	fi
+	if [ "$ikev2_enabled" = "1" ] && [ "$open_ikev2_natt" = "1" ] && valid_port "$ikev2_natt_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$ikev2_natt_bind"; then
+		ensure_firewall_rule "vnts2_ikev2_natt" "vnts2_ikev2_natt" "udp" "$ikev2_natt_port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnts2_ikev2_natt
+	fi
+	if [ "$wireguard_enabled" = "1" ] && [ "$open_wireguard" = "1" ] && valid_port "$wireguard_port" && [ -n "$wan_zone" ] && bind_allows_external_access "$wireguard_bind"; then
+		ensure_firewall_rule "vnts2_wireguard" "vnts2_wireguard" "udp" "$wireguard_port" "$wan_zone"
+	else
+		uci_delete_if_exists firewall.vnts2_wireguard
+	fi
 
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
 cleanup_server_firewall() {
-	uci -q delete firewall.vnts2_tcp
-	uci -q delete firewall.vnts2_quic
-	uci -q delete firewall.vnts2_server_quic
-	uci -q delete firewall.vnts2_ws
-	uci -q delete firewall.vnts2_web
-	uci -q delete firewall.vnts2_ikev2_ike
-	uci -q delete firewall.vnts2_ikev2_natt
-	uci -q delete firewall.vnts2_wireguard
+	uci_delete_if_exists firewall.vnts2_tcp
+	uci_delete_if_exists firewall.vnts2_quic
+	uci_delete_if_exists firewall.vnts2_server_quic
+	uci_delete_if_exists firewall.vnts2_ws
+	uci_delete_if_exists firewall.vnts2_web
+	uci_delete_if_exists firewall.vnts2_ikev2_ike
+	uci_delete_if_exists firewall.vnts2_ikev2_natt
+	uci_delete_if_exists firewall.vnts2_wireguard
 	[ -n "$(uci changes firewall)" ] && uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1
 }
 
@@ -2136,6 +2173,7 @@ start_cli_instance() {
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
 		log_cli "vnt2_cli disabled, skip start"
+		cleanup_network
 		return 0
 	fi
 
@@ -2193,6 +2231,7 @@ start_web_instance() {
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
 		log_web 'not enabled, skip start'
+		cleanup_web_firewall
 		return 0
 	fi
 
@@ -2253,6 +2292,7 @@ start_server_instance() {
 	config_get_bool enabled "$cfg" "enabled" "0"
 	if [ "$enabled" != "1" ]; then
 		log_server "vnts2 disabled, skip start"
+		cleanup_server_firewall
 		return 0
 	fi
 
@@ -2338,9 +2378,16 @@ stop_service() {
 	log_download 'service stop flow begin'
 
 	rm -f "${CLI_TIME}" "${WEB_TIME}" "${SERVER_TIME}"
-	cleanup_network
-	cleanup_web_firewall
-	cleanup_server_firewall
+	if [ "${VNT2_RESTART_MODE:-}" = "apply" ]; then
+		# Keep the router management path alive while a queued Save & Apply
+		# restart replaces the managed processes. start_service reconciles any
+		# changed network and firewall settings immediately afterwards.
+		log_download 'queued apply restart keeps network and firewall state'
+	else
+		cleanup_network
+		cleanup_web_firewall
+		cleanup_server_firewall
+	fi
 
 	log_cli 'service stopped'
 	log_web 'service stopped'
@@ -2349,48 +2396,24 @@ stop_service() {
 }
 
 reload_service() {
-	ensure_log_files
-	log_download 'reload requested, schedule delayed detached restart'
 	schedule_restart
 	return 0
 }
 
 schedule_restart() {
-	local lock_pid=""
-	local child_pid=""
+	local marker_tmp="${RESTART_PENDING_FILE}.$$"
 
-	if ! mkdir "$RESTART_LOCK_DIR" >/dev/null 2>&1; then
-		lock_pid="$(cat "${RESTART_LOCK_DIR}/pid" 2>/dev/null)"
-		if [ -n "$lock_pid" ] && kill -0 "$lock_pid" >/dev/null 2>&1; then
-			log_download "restart already scheduled pid=${lock_pid}"
-			return 0
-		fi
-
-		rm -f "${RESTART_LOCK_DIR}/pid" >/dev/null 2>&1
-		rmdir "$RESTART_LOCK_DIR" >/dev/null 2>&1
-		mkdir "$RESTART_LOCK_DIR" >/dev/null 2>&1 || return 0
+	# This path runs inside LuCI/procd reload requests. It must only write a
+	# marker; the separately managed vnt2-worker owns every slow operation.
+	if (umask 077; printf '%s\n' "$(date +%s)" >"${marker_tmp}"); then
+		mv -f "${marker_tmp}" "${RESTART_PENDING_FILE}" >/dev/null 2>&1 || {
+			rm -f "${marker_tmp}"
+			return 1
+		}
+	else
+		rm -f "${marker_tmp}"
+		return 1
 	fi
-	printf '%s\n' "$$" >"${RESTART_LOCK_DIR}/pid"
-
-	/bin/sh -c '
-		lock_dir="$1"
-		delay="$2"
-		trap '\''rm -f "${lock_dir}/pid"; rmdir "$lock_dir" >/dev/null 2>&1'\'' EXIT INT TERM
-
-		# A fresh -c shell has no init-script input descriptor. It can safely
-		# close every descriptor inherited from LuCI, uhttpd, ubus, and procd.
-		fd=3
-		while [ "$fd" -le 255 ]; do
-			eval "exec ${fd}>&-" 2>/dev/null
-			fd=$((fd + 1))
-		done
-
-		sleep "$delay"
-		/etc/init.d/vnt2 restart
-	' vnt2-restart "$RESTART_LOCK_DIR" "$RESTART_DELAY" </dev/null >/dev/null 2>&1 &
-	child_pid="$!"
-	printf '%s\n' "$child_pid" >"${RESTART_LOCK_DIR}/pid"
-	log_download "detached restart scheduled pid=${child_pid} delay=${RESTART_DELAY}s"
 	return 0
 }
 
