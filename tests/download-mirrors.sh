@@ -71,7 +71,7 @@ test_custom_url_handling() {
 test_defaults_and_retry_limits() {
 	[ "$(grep -c "option download_mirror 'auto'" "$DEFAULT_CONFIG")" -eq 3 ] || \
 		fail "CLI, Web, and server defaults are not all auto"
-	grep -Fq 'option:value("auto", translate("自动（从上到下）"))' "$CBI_SCRIPT" || \
+	grep -Fq 'option:value("auto", translate("自动"))' "$CBI_SCRIPT" || \
 		fail "automatic option is missing from LuCI"
 	grep -Fq 'option:value("cloudflare", "Cloudflare R2")' "$CBI_SCRIPT" || \
 		fail "Cloudflare R2 option is missing from LuCI"

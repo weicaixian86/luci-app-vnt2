@@ -1713,7 +1713,7 @@ local function bind_dynamiclist(option)
 end
 
 local function bind_download_mirror(option)
-	option:value("auto", translate("自动（从上到下）"))
+	option:value("auto", translate("自动"))
 	option:value("gh-proxy", "gh-proxy")
 	option:value("github", "GitHub")
 	-- Keep legacy values visible for existing UCI configurations; init normalizes them.
@@ -1962,7 +1962,7 @@ auto_download_cli.rmempty = false
 auto_download_cli.default = "1"
 
 local download_mirror_cli = s:taboption("advanced", ListValue, "download_mirror", translate("客户端下载镜像源"),
-	translate("选择自动（从上到下）时依次尝试 gh-proxy、GitHub、Gitee、GitLab、Cloudflare R2，每个源最多重试 3 次；latest 会先识别 Release tag，再匹配当前架构的精确资源文件名"))
+	translate("选择自动时依次尝试 gh-proxy、GitHub、Gitee、GitLab、Cloudflare R2，每个源最多重试 3 次；latest 会先识别 Release tag，再匹配当前架构的精确资源文件名"))
 bind_download_mirror(download_mirror_cli)
 local custom_download_mirror_cli = s:taboption("advanced", Value, "custom_download_mirror", translate("客户端自定义镜像地址"))
 bind_custom_download_mirror(custom_download_mirror_cli, "download_mirror")
@@ -2300,7 +2300,7 @@ auto_download_web.rmempty = false
 auto_download_web.default = "1"
 
 local download_mirror_web = w:taboption("general", ListValue, "download_mirror", translate("Web 下载镜像源"),
-	translate("自动（从上到下）依次尝试 gh-proxy、GitHub、Gitee、GitLab、Cloudflare R2，每个源最多重试 3 次；客户端 ZIP 必须包含 vnt2_cli、vnt2_ctrl、vnt2_web"))
+	translate("自动依次尝试 gh-proxy、GitHub、Gitee、GitLab、Cloudflare R2，每个源最多重试 3 次；客户端 ZIP 必须包含 vnt2_cli、vnt2_ctrl、vnt2_web"))
 bind_download_mirror(download_mirror_web)
 local custom_download_mirror_web = w:taboption("general", Value, "custom_download_mirror", translate("Web 自定义镜像地址"))
 bind_custom_download_mirror(custom_download_mirror_web, "download_mirror")
@@ -2430,7 +2430,7 @@ auto_download_server.rmempty = false
 auto_download_server.default = "1"
 
 local download_mirror_server = v:taboption("general", ListValue, "download_mirror", translate("服务端下载镜像源"),
-	translate("自动（从上到下）依次尝试 gh-proxy、GitHub、Gitee、GitLab、Cloudflare R2，每个源最多重试 3 次；服务端资源为无扩展名 ELF 文件"))
+	translate("自动依次尝试 gh-proxy、GitHub、Gitee、GitLab、Cloudflare R2，每个源最多重试 3 次；服务端资源为无扩展名 ELF 文件"))
 bind_download_mirror(download_mirror_server)
 local custom_download_mirror_server = v:taboption("general", Value, "custom_download_mirror", translate("服务端自定义镜像地址"))
 bind_custom_download_mirror(custom_download_mirror_server, "download_mirror")
