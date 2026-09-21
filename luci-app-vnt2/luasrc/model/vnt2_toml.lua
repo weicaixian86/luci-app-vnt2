@@ -654,7 +654,7 @@ local function ensure_toml_parent(path)
 		if not fs.mkdirr(dir) and not fs.access(dir) then
 			return nil, "failed to create TOML parent directory"
 		end
-		if not fs.chmod(dir, 493) then
+		if not fs.chmod(dir, "0755") then
 			return nil, "failed to secure TOML parent directory"
 		end
 	end
@@ -666,7 +666,7 @@ local function secure_existing_toml(path)
 	if not parent_ok then
 		return nil, parent_err
 	end
-	if not fs.chmod(path, 384) then
+	if not fs.chmod(path, "0600") then
 		return nil, "failed to secure existing TOML file"
 	end
 	return true
@@ -745,7 +745,7 @@ function M.write_toml(path, data, order)
 		fs.remove(temp)
 		return nil, "failed to write temporary TOML file"
 	end
-	if not fs.chmod(temp, 384) then
+	if not fs.chmod(temp, "0600") then
 		fs.remove(temp)
 		return nil, "failed to secure temporary TOML file"
 	end

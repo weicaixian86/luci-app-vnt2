@@ -13,7 +13,7 @@ toml.ensure_toml_files(uci)
 
 local m = Map("vnt2", translate("VNT2"))
 m.description = translate(
-	'VNT2 是一个简单、高效、可快速组建虚拟局域网的工具。<br>官网：<a href="https://rustvnt.com/" target="_blank">rustvnt.com</a>&nbsp;&nbsp;项目：<a href="https://github.com/vnt-dev/vnt" target="_blank">github.com/vnt-dev/vnt</a>&nbsp;&nbsp;当前 LuCI 适配同时覆盖 vnt2_cli / vnt2_ctrl / vnt2_web / vnts2，适用于 OpenWrt 24.10，其中 CLI 与 Web 共用同一个配置文件 /vnt_config/vnt2_cli_web.toml，服务端配置文件为 /etc/config/vnts2.toml。'
+	'VNT2 是一个简单、高效、可快速组建虚拟局域网的工具。<br>官网：<a href="https://rustvnt.com/" target="_blank">rustvnt.com</a>&nbsp;&nbsp;项目：<a href="https://github.com/vnt-dev/vnt" target="_blank">github.com/vnt-dev/vnt</a>&nbsp;&nbsp;当前 LuCI 适配同时覆盖 vnt2_cli / vnt2_ctrl / vnt2_web / vnts2，适用于 OpenWrt 24.10、25.12，其中 CLI 与 Web 共用同一个配置文件 /vnt_config/vnt2_cli_web.toml，服务端配置文件为 /etc/config/vnts2.toml。'
 )
 
 m:section(SimpleSection).template = "vnt2/vnt2_status"

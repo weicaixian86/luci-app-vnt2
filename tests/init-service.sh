@@ -223,17 +223,17 @@ test_idempotent_uci_helpers() {
 test_private_toml_permissions() {
 	grep -Fq 'chmod 755 "$conf_dir"' "$INIT_SCRIPT" || fail "TOML parent directory is not restricted to 0755"
 	grep -Fq 'chmod 600 "$conf_path"' "$INIT_SCRIPT" || fail "existing TOML files are not restricted to 0600"
-	grep -Fq 'fs.chmod(dir, 493)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'fs.chmod(dir, "0755")' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML parent permissions are not 0755"
 	grep -Fq 'return nil, "failed to create TOML parent directory"' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML parent creation failures are not propagated"
 	grep -Fq 'return nil, "failed to secure TOML parent directory"' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML parent permission failures are not propagated"
-	grep -Fq 'fs.chmod(temp, 384)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'fs.chmod(temp, "0600")' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML file permissions are not 0600"
 	grep -Fq 'local function secure_existing_toml(path)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
 		fail "existing TOML files do not have a permission repair helper"
-	grep -Fq 'fs.chmod(path, 384)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'fs.chmod(path, "0600")' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
 		fail "existing TOML file permissions are not repaired to 0600"
 	grep -Fq 'return secure_existing_toml(client_toml)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
 		fail "existing client TOML permissions are not repaired"
