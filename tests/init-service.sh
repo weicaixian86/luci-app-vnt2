@@ -3,14 +3,16 @@
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/etc/init.d/vnt2"
-WORKER_INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/etc/init.d/vnt2-worker"
-WORKER_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/usr/libexec/vnt2/restart-worker"
-VERSION_WORKER_INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/etc/init.d/vnt2-version-worker"
-VERSION_WORKER_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/usr/libexec/vnt2/version-worker"
-PACKAGE_MAKEFILE="${ROOT_DIR}/luci-app-vnt2/Makefile"
-CBI_SCRIPT="${ROOT_DIR}/luci-app-vnt2/luasrc/model/cbi/vnt2.lua"
-STATUS_VIEW="${ROOT_DIR}/luci-app-vnt2/luasrc/view/vnt2/vnt2_status.htm"
+INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/etc/init.d/vnt2"
+WORKER_INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/etc/init.d/vnt2-worker"
+WORKER_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/usr/libexec/vnt2/restart-worker"
+UPLOAD_WORKER_INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/etc/init.d/vnt2-upload-worker"
+UPLOAD_WORKER_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/usr/libexec/vnt2/upload-worker"
+VERSION_WORKER_INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/etc/init.d/vnt2-version-worker"
+VERSION_WORKER_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/usr/libexec/vnt2/version-worker"
+PACKAGE_MAKEFILE="${ROOT_DIR}/luci-app-vnt2web/Makefile"
+CBI_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/luasrc/model/cbi/vnt2.lua"
+STATUS_VIEW="${ROOT_DIR}/luci-app-vnt2web/luasrc/view/vnt2/vnt2_status.htm"
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
@@ -78,6 +80,7 @@ test_luci_restart_marker_is_atomic() {
 
 test_worker_package_lifecycle() {
 	grep -Fq 'START=98' "$WORKER_INIT_SCRIPT" || fail "worker does not start before the main service"
+	grep -Fq 'START=96' "$UPLOAD_WORKER_INIT_SCRIPT" || fail "upload worker does not start before the restart worker"
 	grep -Fq 'START=97' "$VERSION_WORKER_INIT_SCRIPT" || fail "version worker does not start before the restart worker"
 	grep -Fq 'START=99' "$INIT_SCRIPT" || fail "main service start priority changed unexpectedly"
 	grep -Fq 'RESTART_DELAY="${VNT2_RESTART_DELAY:-15}"' "$WORKER_SCRIPT" || fail "worker debounce is not 15 seconds"
@@ -87,9 +90,11 @@ test_worker_package_lifecycle() {
 
 	for path in \
 		'/etc/init.d/vnt2' \
+		'/etc/init.d/vnt2-upload-worker' \
 		'/etc/init.d/vnt2-worker' \
 		'/etc/init.d/vnt2-version-worker' \
 		'/usr/libexec/vnt2/restart-worker' \
+		'/usr/libexec/vnt2/upload-worker' \
 		'/usr/libexec/vnt2/version-worker'
 	do
 		grep -Fq "$path" "$PACKAGE_MAKEFILE" || fail "package lifecycle omits $path"
@@ -98,12 +103,16 @@ test_worker_package_lifecycle() {
 	grep -Fq '/etc/init.d/vnt2-worker restart' "$PACKAGE_MAKEFILE" || fail "postinst does not start the worker"
 	grep -Fq '/etc/init.d/vnt2-worker stop' "$PACKAGE_MAKEFILE" || fail "prerm does not stop the worker"
 	grep -Fq '/etc/init.d/vnt2-worker disable' "$PACKAGE_MAKEFILE" || fail "prerm does not disable the worker"
+	grep -Fq '/etc/init.d/vnt2-upload-worker enable' "$PACKAGE_MAKEFILE" || fail "postinst does not enable the upload worker"
+	grep -Fq '/etc/init.d/vnt2-upload-worker restart' "$PACKAGE_MAKEFILE" || fail "postinst does not start the upload worker"
+	grep -Fq '/etc/init.d/vnt2-upload-worker stop' "$PACKAGE_MAKEFILE" || fail "prerm does not stop the upload worker"
+	grep -Fq '/etc/init.d/vnt2-upload-worker disable' "$PACKAGE_MAKEFILE" || fail "prerm does not disable the upload worker"
 	grep -Fq '/etc/init.d/vnt2-version-worker enable' "$PACKAGE_MAKEFILE" || fail "postinst does not enable the version worker"
 	grep -Fq '/etc/init.d/vnt2-version-worker restart' "$PACKAGE_MAKEFILE" || fail "postinst does not start the version worker"
 	grep -Fq '/etc/init.d/vnt2-version-worker stop' "$PACKAGE_MAKEFILE" || fail "prerm does not stop the version worker"
 	grep -Fq '/etc/init.d/vnt2-version-worker disable' "$PACKAGE_MAKEFILE" || fail "prerm does not disable the version worker"
 
-	printf 'PASS: package installs and manages both workers\n'
+	printf 'PASS: package installs and manages all workers\n'
 }
 
 test_apply_stop_keeps_network() {
@@ -113,16 +122,11 @@ test_apply_stop_keeps_network() {
 
 	load_function stop_service
 	ensure_log_files() { :; }
-	log_cli() { :; }
 	log_web() { :; }
-	log_server() { :; }
 	log_download() { :; }
 	cleanup_network() { printf '%s\n' cleanup_network >>"$calls"; }
 	cleanup_web_firewall() { printf '%s\n' cleanup_web_firewall >>"$calls"; }
-	cleanup_server_firewall() { printf '%s\n' cleanup_server_firewall >>"$calls"; }
-	CLI_TIME="$dir/cli-time"
 	WEB_TIME="$dir/web-time"
-	SERVER_TIME="$dir/server-time"
 
 	VNT2_RESTART_MODE=apply
 	stop_service
@@ -130,7 +134,7 @@ test_apply_stop_keeps_network() {
 
 	unset VNT2_RESTART_MODE
 	stop_service
-	[ "$(wc -l <"$calls" | tr -d ' ')" -eq 3 ] || fail "normal stop did not invoke all cleanup functions"
+	[ "$(wc -l <"$calls" | tr -d ' ')" -eq 2 ] || fail "normal stop did not invoke all cleanup functions"
 
 	rm -rf "$dir"
 	trap - EXIT INT TERM
@@ -141,23 +145,18 @@ test_start_service_propagates_component_failure() {
 	load_function start_service
 
 	ensure_log_files() { :; }
-	log_cli() { :; }
 	log_web() { :; }
-	log_server() { :; }
 	log_download() { :; }
 	export_toml_from_uci() { return 0; }
 	config_load() { :; }
 	get_first_section_id() { printf '%s\n' "$1"; }
-	migrate_legacy_client_server() { :; }
-	start_cli_instance() { return 1; }
-	start_web_instance() { return 0; }
-	start_server_instance() { return 0; }
+	start_web_instance() { return 1; }
 	CONF=vnt2
 
 	if start_service; then
 		fail "start_service hid a component startup failure"
 	fi
-	start_cli_instance() { return 0; }
+	start_web_instance() { return 0; }
 	start_service || fail "start_service failed when all components succeeded"
 	printf 'PASS: service startup propagates component failures\n'
 }
@@ -221,27 +220,35 @@ test_idempotent_uci_helpers() {
 }
 
 test_private_toml_permissions() {
+	grep -Fq 'M.TOML_FILE = "/etc/config/vnt2.toml"' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
+		fail "Lua TOML path is not fixed to /etc/config/vnt2.toml"
+	grep -Fq 'WEB_CONF_DEFAULT="/etc/config/vnt2.toml"' "$INIT_SCRIPT" || \
+		fail "init TOML path is not fixed to /etc/config/vnt2.toml"
+	if grep -Fq 'web_conf_file' "$INIT_SCRIPT" "${ROOT_DIR}/luci-app-vnt2web/root/etc/config/vnt2" "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua"; then
+		fail "runtime TOML path is still configurable through UCI"
+	fi
+	grep -Fq 'DummyValue, "_web_conf_path"' "$CBI_SCRIPT" || \
+		fail "LuCI TOML path is not read-only"
+	if grep -Fq 'Value, "web_conf_file"' "$CBI_SCRIPT"; then
+		fail "LuCI TOML path remains editable"
+	fi
 	grep -Fq 'chmod 755 "$conf_dir"' "$INIT_SCRIPT" || fail "TOML parent directory is not restricted to 0755"
 	grep -Fq 'chmod 600 "$conf_path"' "$INIT_SCRIPT" || fail "existing TOML files are not restricted to 0600"
-	grep -Fq 'fs.chmod(dir, "0755")' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'fs.chmod(dir, "0755")' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML parent permissions are not 0755"
-	grep -Fq 'return nil, "failed to create TOML parent directory"' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'return nil, "failed to create TOML parent directory"' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML parent creation failures are not propagated"
-	grep -Fq 'return nil, "failed to secure TOML parent directory"' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'return nil, "failed to secure TOML parent directory"' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML parent permission failures are not propagated"
-	grep -Fq 'fs.chmod(temp, "0600")' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'fs.chmod(temp, "0600")' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML file permissions are not 0600"
-	grep -Fq 'local function secure_existing_toml(path)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'local function secure_existing_toml(path)' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
 		fail "existing TOML files do not have a permission repair helper"
-	grep -Fq 'fs.chmod(path, "0600")' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'fs.chmod(path, "0600")' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
 		fail "existing TOML file permissions are not repaired to 0600"
-	grep -Fq 'return secure_existing_toml(client_toml)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
-		fail "existing client TOML permissions are not repaired"
-	grep -Fq 'return secure_existing_toml(web_toml)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
-		fail "existing Web TOML permissions are not repaired"
-	grep -Fq 'return secure_existing_toml(server_toml)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
-		fail "existing server TOML permissions are not repaired"
-	grep -Fq 'os.rename(temp, path)' "${ROOT_DIR}/luci-app-vnt2/luasrc/model/vnt2_toml.lua" || \
+	grep -Fq 'return secure_existing_toml(M.TOML_FILE)' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
+		fail "existing TOML permissions are not repaired"
+	grep -Fq 'os.rename(temp, path)' "${ROOT_DIR}/luci-app-vnt2web/luasrc/model/vnt2_toml.lua" || \
 		fail "Lua TOML writes are not atomically replaced"
 	grep -Fq 'local exported = toml.export_uci_to_toml(uci)' "$INIT_SCRIPT" || \
 		fail "init script does not inspect the TOML export result"
@@ -251,12 +258,8 @@ test_private_toml_permissions() {
 		fail "runtime config directory creation failures are ignored"
 	grep -Fq 'chmod 600 "$conf_path" >/dev/null 2>&1 || return 1' "$INIT_SCRIPT" || \
 		fail "runtime config permission failures are ignored"
-	grep -Fq 'if ! ensure_conf_path_ready "${CLI_CONF_FILE}"; then' "$INIT_SCRIPT" || \
-		fail "CLI runtime ignores config path preparation failures"
 	grep -Fq 'if ! ensure_conf_path_ready "${WEB_CONF_FILE}"; then' "$INIT_SCRIPT" || \
 		fail "Web runtime ignores config path preparation failures"
-	grep -Fq 'if ! ensure_conf_path_ready "${SERVER_CONF_FILE}"; then' "$INIT_SCRIPT" || \
-		fail "server runtime ignores config path preparation failures"
 	printf 'PASS: TOML files use private permissions and atomic replacement\n'
 }
 
@@ -273,13 +276,36 @@ test_status_view_escaping() {
 }
 
 test_uploaded_archive_safety() {
-	grep -Fq 'entry = entry:gsub("\\", "/"):gsub("^%./", "")' "$CBI_SCRIPT" || \
-		fail "uploaded archive paths do not normalize backslashes"
-	grep -Fq 'entry:match("^[A-Za-z]:/")' "$CBI_SCRIPT" || \
-		fail "uploaded archives do not reject Windows absolute paths"
-	grep -Fq 'type != "-" && type != "d"' "$CBI_SCRIPT" || \
-		fail "uploaded archives do not reject links and special files"
-	printf 'PASS: uploaded archives reject unsafe paths and links\n'
+	grep -Fq 'archive_paths_are_safe()' "$UPLOAD_WORKER_SCRIPT" || \
+		fail "upload worker does not define archive path validation"
+	grep -Fq 'gsub(/\\/, "/", entry)' "$UPLOAD_WORKER_SCRIPT" || \
+		fail "upload worker does not normalize backslash paths"
+	grep -Fq 'entry ~ /^[A-Za-z]:\//' "$UPLOAD_WORKER_SCRIPT" || \
+		fail "upload worker does not reject Windows absolute paths"
+	grep -Fq 'type != "-" && type != "d"' "$UPLOAD_WORKER_SCRIPT" || \
+		fail "upload worker does not reject links and special files"
+	grep -Fq 'if ! archive_is_safe "$upload_path"; then' "$UPLOAD_WORKER_SCRIPT" || \
+		fail "upload worker does not gate extraction on archive safety"
+	printf 'PASS: upload worker rejects unsafe paths and links\n'
+}
+
+test_upload_is_deferred_to_worker() {
+	grep -Fq 'UPLOAD_PENDING_FILE = "/etc/vnt2/upload.pending"' "$CBI_SCRIPT" || \
+		fail "LuCI upload handler does not queue a pending upload marker"
+	grep -Fq 'if not write_atomic(UPLOAD_PENDING_FILE, marker) then' "$CBI_SCRIPT" || \
+		fail "LuCI upload handler does not atomically queue the upload"
+	if grep -Eq 'tar -x|cp -f|install -m|os\.execute|nixio\.exec' "$CBI_SCRIPT"; then
+		fail "LuCI upload handler still performs synchronous archive install work"
+	fi
+	grep -Fq 'PROG="/usr/libexec/vnt2/upload-worker"' "$UPLOAD_WORKER_INIT_SCRIPT" || \
+		fail "upload worker init does not launch the upload worker"
+	grep -Fq 'install_binary_atomic "$source_bin"' "$UPLOAD_WORKER_SCRIPT" || \
+		fail "upload worker does not install the extracted binary atomically"
+	grep -Fq 'queue_restart' "$UPLOAD_WORKER_SCRIPT" || \
+		fail "upload worker does not queue a service restart after install"
+	grep -Fq 'is_elf_binary "$temp_path"' "$UPLOAD_WORKER_SCRIPT" || \
+		fail "upload worker does not revalidate the installed ELF binary"
+	printf 'PASS: uploads are staged by LuCI and installed by the worker\n'
 }
 
 test_reload_only_queues_marker
@@ -291,4 +317,5 @@ test_idempotent_uci_helpers
 test_private_toml_permissions
 test_status_view_escaping
 test_uploaded_archive_safety
+test_upload_is_deferred_to_worker
 printf 'init-service tests passed\n'

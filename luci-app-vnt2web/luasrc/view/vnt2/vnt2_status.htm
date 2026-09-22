@@ -3,10 +3,7 @@ local dsp = require "luci.dispatcher"
 local status_url = dsp.build_url("admin", "vpn", "vnt2", "status")
 local check_latest_url = dsp.build_url("admin", "vpn", "vnt2", "check_latest")
 local open_web_url = dsp.build_url("admin", "vpn", "vnt2", "open_web")
-local client_log_url = dsp.build_url("admin", "vpn", "vnt2", "client_log")
 local web_log_url = dsp.build_url("admin", "vpn", "vnt2", "web_log")
-local server_log_url = dsp.build_url("admin", "vpn", "vnt2", "server_log")
-local open_server_web_url = dsp.build_url("admin", "vpn", "vnt2", "open_server_web")
 local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 %>
 
@@ -98,31 +95,6 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 	<div class="vnt2-status-grid">
 		<div class="vnt2-card">
 			<h3>
-				vnt2_cli 客户端
-				<span id="cli_status_badge" class="vnt2-badge vnt2-off">未运行</span>
-			</h3>
-			<table>
-				<tr><td>本地版本</td><td id="cli_tag">-</td></tr>
-				<tr><td>最新版本</td><td id="latest_tag">-</td></tr>
-				<tr><td>运行时长</td><td id="cli_runtime">-</td></tr>
-				<tr><td>进程/PID</td><td id="cli_pid">-</td></tr>
-				<tr><td>CPU / 内存</td><td id="cli_usage">-</td></tr>
-				<tr><td>网络编号</td><td id="cli_network_code">-</td></tr>
-				<tr><td>设备名称</td><td id="cli_device_name">-</td></tr>
-				<tr><td>设备 ID</td><td id="cli_device_id">-</td></tr>
-				<tr><td>服务器地址</td><td id="cli_servers">-</td></tr>
-				<tr><td>TUN / NAT</td><td id="cli_tun_nat">-</td></tr>
-				<tr><td>控制端口</td><td id="ctrl_port">-</td></tr>
-				<tr><td>下载状态</td><td id="cli_download">-</td></tr>
-			</table>
-			<div class="vnt2-links">
-				<a href="<%=client_log_url%>">查看客户端日志</a>
-				<a href="<%=download_log_url%>">查看下载日志</a>
-			</div>
-		</div>
-
-		<div class="vnt2-card">
-			<h3>
 				vnt2_web 客户端
 				<span id="web_status_badge" class="vnt2-badge vnt2-off">未运行</span>
 			</h3>
@@ -139,34 +111,8 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 				<tr><td>下载状态</td><td id="web_download">-</td></tr>
 			</table>
 			<div class="vnt2-links">
-				<a href="<%=open_web_url%>" target="_blank">打开 Web 页面</a>
+				<a href="<%=open_web_url%>" target="_blank" rel="noopener noreferrer">打开 Web 页面</a>
 				<a href="<%=web_log_url%>">查看 Web 日志</a>
-			</div>
-		</div>
-
-		<div class="vnt2-card">
-			<h3>
-				vnts2 服务端
-				<span id="server_status_badge" class="vnt2-badge vnt2-off">未运行</span>
-			</h3>
-			<table>
-				<tr><td>本地版本</td><td id="server_tag">-</td></tr>
-				<tr><td>最新版本</td><td id="latest_server_tag">-</td></tr>
-				<tr><td>运行时长</td><td id="server_runtime">-</td></tr>
-				<tr><td>进程/PID</td><td id="server_pid">-</td></tr>
-				<tr><td>CPU / 内存</td><td id="server_usage">-</td></tr>
-				<tr><td>TCP / QUIC</td><td id="server_tcp_quic">-</td></tr>
-				<tr><td>WS / WEB</td><td id="server_ws_web">-</td></tr>
-				<tr><td>IKEv2 / NAT-T</td><td id="server_ikev2">-</td></tr>
-				<tr><td>WireGuard</td><td id="server_wireguard">-</td></tr>
-				<tr><td>虚拟网段</td><td id="server_network">-</td></tr>
-				<tr><td>持久化 / 租约</td><td id="server_persistence">-</td></tr>
-				<tr><td>集群节点</td><td id="server_peer_servers">-</td></tr>
-				<tr><td>下载状态</td><td id="server_download">-</td></tr>
-			</table>
-			<div class="vnt2-links">
-				<a href="<%=open_server_web_url%>" target="_blank" rel="noopener noreferrer">打开 Web 页面</a>
-				<a href="<%=server_log_url%>">查看服务端日志</a>
 				<a href="<%=download_log_url%>">查看下载日志</a>
 			</div>
 		</div>
@@ -250,26 +196,7 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 	}
 
 	function render(data) {
-		setBadge("cli_status_badge", data.cli_running);
 		setBadge("web_status_badge", data.web_running);
-		setBadge("server_status_badge", data.server_running);
-
-		setHtml("cli_tag", text(data.cli_tag));
-		setHtml("latest_tag", text(data.latest_tag));
-		setHtml("cli_runtime", text(data.cli_runtime));
-		setHtml("cli_pid", data.cli_running ? ("PID " + text(data.cli_pid)) : "未运行");
-		setHtml("cli_usage", [text(data.cli_cpu, "0"), text(data.cli_ram, "0 MB")].join(" / "));
-		setHtml("cli_network_code", text(data.cli_network_code));
-		setHtml("cli_device_name", text(data.cli_device_name));
-		setHtml("cli_device_id", text(data.cli_device_id));
-		setHtml("cli_servers", joinList(data.cli_servers));
-		var deviceMode = String(data.cli_device_mode || "tun");
-		var deviceLabel = deviceMode === "no" ? "无虚拟网卡" : (deviceMode === "tap" ? "TAP" : (data.cli_tun_name ? "TUN (" + text(data.cli_tun_name) + ")" : "TUN"));
-		setHtml("cli_tun_nat", deviceLabel
-			+ " / 内置NAT：" + (String(data.cli_no_nat) === "1" ? "关闭" : "开启")
-			+ " / 转发：" + (String(data.cli_no_nat) === "1" ? "OpenWrt系统" : "VNT2内置"));
-		setHtml("ctrl_port", text(data.ctrl_port));
-		setHtml("cli_download", stateText(data.cli_download));
 
 		setHtml("web_tag", text(data.web_tag));
 		setHtml("web_latest_tag", text(data.latest_web_tag));
@@ -281,26 +208,6 @@ local download_log_url = dsp.build_url("admin", "vpn", "vnt2", "download_log")
 		setHtml("web_wan", yesNo(data.web_wan));
 		setHtml("web_url", webUrlHtml(data.web_url));
 		setHtml("web_download", stateText(data.web_download));
-
-		setHtml("server_tag", text(data.server_tag));
-		setHtml("latest_server_tag", text(data.latest_server_tag));
-		setHtml("server_runtime", text(data.server_runtime));
-		setHtml("server_pid", data.server_running ? ("PID " + text(data.server_pid)) : "未运行");
-		setHtml("server_usage", [text(data.server_cpu, "0"), text(data.server_ram, "0 MB")].join(" / "));
-		setHtml("server_tcp_quic", "TCP：" + text(data.server_tcp_bind) + "（WAN " + yesNo(data.server_open_wan_tcp) + "）"
-			+ "<br />QUIC：" + text(data.server_quic_bind) + "（WAN " + yesNo(data.server_open_wan_quic) + "）"
-			+ "<br />服务端互联 QUIC：" + text(data.server_quic_proxy, "未启用") + "（WAN " + yesNo(data.server_open_wan_server_quic) + "）");
-		setHtml("server_ws_web", "WS/WSS：" + text(data.server_ws_bind) + "（WAN " + yesNo(data.server_open_wan_ws) + "）"
-			+ "<br />WEB：" + text(data.server_web_bind) + "（WAN " + yesNo(data.server_open_wan_web) + "）");
-		setHtml("server_ikev2", yesNo(data.server_ikev2_enabled) + "<br />IKE：" + text(data.server_ikev2_ike_bind) + "（WAN " + yesNo(data.server_open_wan_ikev2_ike) + "）"
-			+ "<br />NAT-T：" + text(data.server_ikev2_natt_bind) + "（WAN " + yesNo(data.server_open_wan_ikev2_natt) + "）");
-		setHtml("server_wireguard", yesNo(data.server_wireguard_enabled) + "<br />Bind：" + text(data.server_wireguard_bind) + "（WAN " + yesNo(data.server_open_wan_wireguard) + "）"
-			+ "<br />Endpoint：" + text(data.server_wireguard_endpoint));
-		setHtml("server_network", text(data.server_network));
-		setHtml("server_persistence", "持久化：" + yesNo(data.server_persistence) + " / 租约：" + text(data.server_lease_duration) + " 秒");
-		setHtml("server_peer_servers", joinList(data.server_peer_servers));
-		setHtml("server_download", stateText(data.server_download));
-
 	}
 
 	function updateStatus() {

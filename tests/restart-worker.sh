@@ -3,7 +3,7 @@
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-WORKER="${ROOT_DIR}/luci-app-vnt2/root/usr/libexec/vnt2/restart-worker"
+WORKER="${ROOT_DIR}/luci-app-vnt2web/root/usr/libexec/vnt2/restart-worker"
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2

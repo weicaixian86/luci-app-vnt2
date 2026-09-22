@@ -39,44 +39,21 @@ local function run_iconv_command(cmd)
 end
 
 local log_message_exact_map = {
-	["legacy default server detected, cleared client server list"] = "检测到旧默认服务器地址，已清空客户端服务器列表",
-	["client config missing network_code"] = "客户端配置缺少 network_code",
-	["client config server list format is invalid"] = "客户端配置中的服务器地址列表格式无效",
-	["start requested"] = "收到启动请求",
-	["start command submitted"] = "启动命令已提交",
-	["client runtime preparation failed"] = "客户端运行环境准备失败",
-	["not enabled, skip start"] = "未启用，跳过启动",
 	["start failed: missing executable vnt2_web"] = "启动失败：缺少可执行文件 vnt2_web",
 	["start failed: client TOML validation failed"] = "启动失败：客户端 TOML 配置校验失败",
 	["start failed: client network runtime preparation failed"] = "启动失败：客户端网络运行环境准备失败",
-	["vnts2 disabled, skip start"] = "vnts2 未启用，跳过启动",
-	["start failed: missing usable vnts2 binary"] = "启动失败：缺少可用的 vnts2 程序",
-	["server runtime preparation failed"] = "服务端运行环境准备失败",
 	["service start flow begin"] = "服务启动流程开始",
 	["UCI to TOML export completed"] = "UCI 到 TOML 导出完成",
 	["UCI to TOML export failed, continue with existing config"] = "UCI 到 TOML 导出失败，继续使用现有配置",
-	["vnt2_cli config section not found"] = "未找到 vnt2_cli 配置节",
 	["vnt2_web config section not found"] = "未找到 vnt2_web 配置节",
-	["vnts2 config section not found"] = "未找到 vnts2 配置节",
 	["start_service finished"] = "服务启动流程结束",
 	["service stop flow begin"] = "服务停止流程开始",
 	["service stopped"] = "服务已停止",
-	["existing CLI/CTRL incomplete, trying auto-download or uploaded fallback"] = "现有 CLI/CTRL 不完整，正在尝试自动下载或回退到已上传程序",
-	["start failed: missing vnt2_cli or vnt2_ctrl"] = "启动失败：缺少 vnt2_cli 或 vnt2_ctrl",
-	["start failed: vnt2_ctrl missing after recovery"] = "启动失败：恢复后仍缺少 vnt2_ctrl",
-	["vnt2_cli disabled, skip start"] = "vnt2_cli 未启用，跳过启动",
-	["bundle missing vnt2_cli or vnt2_ctrl"] = "压缩包中缺少 vnt2_cli 或 vnt2_ctrl",
-	["install CLI bundle to /usr/bin failed"] = "安装 CLI 程序包到 /usr/bin 失败",
 	["bundle missing vnt2_web"] = "压缩包中缺少 vnt2_web",
-	["install web bundle to /usr/bin failed"] = "安装 Web 程序包到 /usr/bin 失败",
-	["bundle missing usable vnts2 or vnts"] = "压缩包中缺少可用的 vnts2 或 vnts",
-	["install server bundle to /usr/bin failed"] = "安装服务端程序包到 /usr/bin 失败"
+	["install web bundle to /usr/bin failed"] = "安装 Web 程序包到 /usr/bin 失败"
 }
 
 local log_message_pattern_rules = {
-	{ "^client config file missing: (.+)$", "客户端配置文件不存在：%1" },
-	{ "^server config file missing: (.+)$", "服务端配置文件不存在：%1" },
-	{ "^existing CLI/CTRL detected: cli=(.+) ctrl=(.+)$", "检测到现有 CLI/CTRL：cli=%1 ctrl=%2" },
 	{ "^starting (.+) with config (.+)$", "正在启动 %1，配置文件：%2" },
 	{ "^using (.+) on (.+), conf=(.+)$", "使用 %1 监听 %2，配置文件：%3" },
 	{ "^checking (.+) releases list: (.+)$", "正在检查 %1 的 Releases 列表：%2" },
@@ -108,15 +85,9 @@ local log_message_pattern_rules = {
 	{ "^retry asset download failed tool=(.+) url=(.+)$", "重试下载资源失败：工具=%1 地址=%2" },
 	{ "^retried asset still invalid (.+)$", "重试后资源仍然无效：%1" },
 	{ "^extract asset failed (.+)$", "解压资源失败：%1" },
-	{ "^bundle missing vnt2_cli or vnt2_ctrl mirror=(.+)$", "压缩包中缺少 vnt2_cli 或 vnt2_ctrl：mirror=%1" },
 	{ "^bundle missing vnt2_web mirror=(.+)$", "压缩包中缺少 vnt2_web：mirror=%1" },
-	{ "^bundle missing usable vnts2 or vnts mirror=(.+)$", "压缩包中缺少可用的 vnts2 或 vnts：mirror=%1" },
-	{ "^CLI installed: cli=(.+) ctrl=(.+) mirror=(.+)$", "CLI 安装完成：cli=%1 ctrl=%2 mirror=%3" },
-	{ "^CLI installed: cli=(.+) ctrl=(.+)$", "CLI 安装完成：cli=%1 ctrl=%2" },
 	{ "^web installed: web=(.+) mirror=(.+)$", "Web 安装完成：web=%1 mirror=%2" },
 	{ "^web installed: web=(.+)$", "Web 安装完成：web=%1" },
-	{ "^server installed: server=(.+) mirror=(.+)$", "服务端安装完成：server=%1 mirror=%2" },
-	{ "^server installed: server=(.+)$", "服务端安装完成：server=%1" },
 	{ "^all download mirrors failed repo=(.+) tag=(.+) strategy=(.+) arch=(.+) scope=(.+)$", "所有下载镜像均失败：repo=%1 tag=%2 strategy=%3 arch=%4 scope=%5" },
 	{ "^(.+) auto download failed, fallback to uploaded binary (.+)$", "%1 自动下载失败，已回退到已上传程序：%2" }
 }

@@ -3,10 +3,10 @@
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-CONTROLLER="${ROOT_DIR}/luci-app-vnt2/luasrc/controller/vnt2.lua"
-STATUS_VIEW="${ROOT_DIR}/luci-app-vnt2/luasrc/view/vnt2/vnt2_status.htm"
-INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/etc/init.d/vnt2"
-WORKER="${ROOT_DIR}/luci-app-vnt2/root/usr/libexec/vnt2/version-worker"
+CONTROLLER="${ROOT_DIR}/luci-app-vnt2web/luasrc/controller/vnt2.lua"
+STATUS_VIEW="${ROOT_DIR}/luci-app-vnt2web/luasrc/view/vnt2/vnt2_status.htm"
+INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/etc/init.d/vnt2"
+WORKER="${ROOT_DIR}/luci-app-vnt2web/root/usr/libexec/vnt2/version-worker"
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
@@ -58,6 +58,33 @@ test_luci_request_is_local_only() {
 	grep -Fq 'e.latest_web_tag = get_vnt2_latest_tag(web_cfg.download_repo' "$CONTROLLER" || \
 		fail "controller does not read the Web section latest-version cache"
 	printf 'PASS: page load only queues the latest-version worker\n'
+}
+
+test_local_version_state() {
+	grep -Fq 'local VERSION_STATE_FILE = "/etc/config/vnt2-web.version"' "$CONTROLLER" || \
+		fail "controller does not read the version sidecar"
+	grep -Fq 'local function parse_version_state(path)' "$CONTROLLER" || \
+		fail "controller does not parse the version sidecar"
+	grep -Fq 'local function get_local_tag(bin_path)' "$CONTROLLER" || \
+		fail "local version helper does not validate against the version sidecar"
+	grep -Fq 'e.web_tag = get_local_tag(get_web_bin())' "$CONTROLLER" || \
+		fail "status endpoint does not resolve the local version from the sidecar"
+	grep -Fq 'state.path ~= bin_path' "$CONTROLLER" || \
+		fail "local version helper does not reject a sidecar for a different path"
+	grep -Fq 'stat_value_matches(stat.size, state.size)' "$CONTROLLER" || \
+		fail "local version helper does not verify the recorded size"
+	grep -Fq 'stat_value_matches(stat.mtime, state.mtime)' "$CONTROLLER" || \
+		fail "local version helper does not verify the recorded mtime"
+	grep -Fq 'VERSION_STATE_FILE="/etc/config/vnt2-web.version"' "$INIT_SCRIPT" || \
+		fail "init script does not define the version sidecar path"
+	grep -Fq 'write_version_state()' "$INIT_SCRIPT" || \
+		fail "init script does not write the version sidecar"
+	grep -Fq 'clear_version_state()' "$INIT_SCRIPT" || \
+		fail "init script does not clear the version sidecar"
+	if grep -Fq 'fallback_state' "$CONTROLLER"; then
+		fail "local version helper still depends on a removed fallback tool state"
+	fi
+	printf 'PASS: local version is validated against the version sidecar\n'
 }
 
 test_release_refresh_path() {
@@ -115,6 +142,7 @@ test_latest_cache_scope() {
 }
 
 test_luci_request_is_local_only
+test_local_version_state
 test_release_refresh_path
 test_latest_cache_scope
 printf 'version-refresh tests passed\n'

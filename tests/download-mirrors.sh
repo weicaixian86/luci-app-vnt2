@@ -3,9 +3,9 @@
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2/root/etc/init.d/vnt2"
-CBI_SCRIPT="${ROOT_DIR}/luci-app-vnt2/luasrc/model/cbi/vnt2.lua"
-DEFAULT_CONFIG="${ROOT_DIR}/luci-app-vnt2/root/etc/config/vnt2"
+INIT_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/root/etc/init.d/vnt2"
+CBI_SCRIPT="${ROOT_DIR}/luci-app-vnt2web/luasrc/model/cbi/vnt2.lua"
+DEFAULT_CONFIG="${ROOT_DIR}/luci-app-vnt2web/root/etc/config/vnt2"
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
@@ -69,8 +69,8 @@ test_custom_url_handling() {
 }
 
 test_defaults_and_retry_limits() {
-	[ "$(grep -c "option download_mirror 'auto'" "$DEFAULT_CONFIG")" -eq 3 ] || \
-		fail "CLI, Web, and server defaults are not all auto"
+	[ "$(grep -c "option download_mirror 'auto'" "$DEFAULT_CONFIG")" -eq 1 ] || \
+		fail "Web default is not auto"
 	grep -Fq 'option:value("auto", translate("自动"))' "$CBI_SCRIPT" || \
 		fail "automatic option is missing from LuCI"
 	grep -Fq 'option:value("cloudflare", "Cloudflare R2")' "$CBI_SCRIPT" || \
@@ -145,16 +145,16 @@ test_archive_safety() {
 	eval "$definition"
 
 	mkdir -p "$dir/source"
-	printf 'binary\n' >"$dir/source/vnt2_cli"
-	tar -czf "$dir/safe.tar.gz" -C "$dir/source" vnt2_cli
+	printf 'binary\n' >"$dir/source/vnt2_web"
+	tar -czf "$dir/safe.tar.gz" -C "$dir/source" vnt2_web
 	archive_is_safe "$dir/safe.tar.gz" || fail "safe tar archive was rejected"
 
-	tar -czf "$dir/traversal.tar.gz" -C "$dir/source" --transform='s#vnt2_cli#../vnt2_cli#' vnt2_cli 2>/dev/null
+	tar -czf "$dir/traversal.tar.gz" -C "$dir/source" --transform='s#vnt2_web#../vnt2_web#' vnt2_web 2>/dev/null
 	if archive_is_safe "$dir/traversal.tar.gz"; then
 		fail "tar archive containing parent traversal was accepted"
 	fi
 
-	ln -s vnt2_cli "$dir/source/vnt2_link"
+	ln -s vnt2_web "$dir/source/vnt2_link"
 	if [ -L "$dir/source/vnt2_link" ]; then
 		tar -czf "$dir/link.tar.gz" -C "$dir/source" vnt2_link
 		if archive_is_safe "$dir/link.tar.gz"; then

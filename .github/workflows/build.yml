@@ -1,4 +1,4 @@
-name: Build luci-app-vnt2 for OpenWrt x86_64
+name: Build luci-app-vnt2web for OpenWrt x86_64
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ permissions:
 
 env:
   TZ: Asia/Shanghai
-  PACKAGE_NAME: "luci-app-vnt2"
+  PACKAGE_NAME: "luci-app-vnt2web"
   OPENWRT_TARGET: "x86/64"
 
 jobs:
@@ -39,25 +39,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Validate background workers
-        shell: bash
-        run: |
-          dash -n luci-app-vnt2/root/etc/init.d/vnt2
-          dash -n luci-app-vnt2/root/etc/init.d/vnt2-worker
-          dash -n luci-app-vnt2/root/etc/init.d/vnt2-version-worker
-          dash -n luci-app-vnt2/root/usr/libexec/vnt2/restart-worker
-          dash -n luci-app-vnt2/root/usr/libexec/vnt2/version-worker
-          dash -n tests/download-mirrors.sh
-          dash -n tests/init-service.sh
-          dash -n tests/restart-worker.sh
-          dash -n tests/version-refresh.sh
-          dash -n tests/version-worker.sh
-          sh tests/download-mirrors.sh
-          sh tests/init-service.sh
-          sh tests/restart-worker.sh
-          sh tests/version-refresh.sh
-          sh tests/version-worker.sh
-
       - name: Install build dependencies
         shell: bash
         run: |
@@ -68,21 +49,21 @@ jobs:
             genisoimage gettext git gperf haveged help2man intltool libc6-dev-i386 libelf-dev \
             libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
             libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool \
-            lrzsz mkisofs msmtp nano ninja-build p7zip-full patch pkgconf python3 python3-pip \
-            python3-ply python3-docutils qemu-utils rsync scons squashfs-tools subversion swig \
-            texinfo uglifyjs unzip vim wget xmlto xxd zlib1g-dev zstd
+            lrzsz lua5.1 mkisofs msmtp nano ninja-build p7zip-full patch pkgconf python3 python3-pip \
+            python3-ply python3-docutils python3-yaml qemu-utils rsync scons squashfs-tools \
+            subversion swig texinfo uglifyjs unzip vim wget xmlto xxd zlib1g-dev zstd
 
       - name: Detect package source dir
         shell: bash
         run: |
-          if [ -f "$GITHUB_WORKSPACE/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/Makefile"; then
+          if [ -f "$GITHUB_WORKSPACE/Makefile" ] && sed 's/\r$//' "$GITHUB_WORKSPACE/Makefile" | grep -qx "PKG_NAME:=${PACKAGE_NAME}"; then
             APP_SOURCE_DIR="."
-          elif [ -f "$GITHUB_WORKSPACE/${PACKAGE_NAME}/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/${PACKAGE_NAME}/Makefile"; then
+          elif [ -f "$GITHUB_WORKSPACE/${PACKAGE_NAME}/Makefile" ] && sed 's/\r$//' "$GITHUB_WORKSPACE/${PACKAGE_NAME}/Makefile" | grep -qx "PKG_NAME:=${PACKAGE_NAME}"; then
             APP_SOURCE_DIR="${PACKAGE_NAME}"
-          elif [ -f "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/luci-app-vnt2/Makefile"; then
-            APP_SOURCE_DIR="luci-app-vnt2"
-          elif [ -f "$GITHUB_WORKSPACE/luci-app-vnt2/${PACKAGE_NAME}/Makefile" ] && grep -q "^PKG_NAME:=${PACKAGE_NAME}$" "$GITHUB_WORKSPACE/luci-app-vnt2/${PACKAGE_NAME}/Makefile"; then
-            APP_SOURCE_DIR="luci-app-vnt2/${PACKAGE_NAME}"
+          elif [ -f "$GITHUB_WORKSPACE/luci-app-vnt2web/Makefile" ] && sed 's/\r$//' "$GITHUB_WORKSPACE/luci-app-vnt2web/Makefile" | grep -qx "PKG_NAME:=${PACKAGE_NAME}"; then
+            APP_SOURCE_DIR="luci-app-vnt2web"
+          elif [ -f "$GITHUB_WORKSPACE/luci-app-vnt2web/${PACKAGE_NAME}/Makefile" ] && sed 's/\r$//' "$GITHUB_WORKSPACE/luci-app-vnt2web/${PACKAGE_NAME}/Makefile" | grep -qx "PKG_NAME:=${PACKAGE_NAME}"; then
+            APP_SOURCE_DIR="luci-app-vnt2web/${PACKAGE_NAME}"
           else
             echo "Unable to locate package source directory"
             find "$GITHUB_WORKSPACE" -maxdepth 4 -type f -name Makefile | sort
@@ -90,6 +71,10 @@ jobs:
           fi
           echo "APP_SOURCE_DIR=$APP_SOURCE_DIR" >> "$GITHUB_ENV"
           echo "Resolved APP_SOURCE_DIR=$APP_SOURCE_DIR"
+
+      - name: Validate source tree
+        shell: bash
+        run: sh tests/validate-source.sh
 
       - name: Apply package version from release tag
         shell: bash
@@ -113,9 +98,27 @@ jobs:
               exit 1
               ;;
           esac
+          # A tag such as v2.0.53-2 carries an explicit package release. Split it
+          # so PKG_VERSION stays 2.0.53 and PKG_RELEASE becomes 2 instead of
+          # embedding the release inside the version.
+          PACKAGE_RELEASE=""
+          case "$VERSION" in
+            *-[0-9]|[0-9]*-[0-9][0-9]*)
+              PACKAGE_RELEASE="${VERSION##*-}"
+              PACKAGE_VERSION_BASE="${VERSION%-*}"
+              ;;
+            *)
+              PACKAGE_VERSION_BASE="$VERSION"
+              ;;
+          esac
+          test -n "$PACKAGE_VERSION_BASE"
           echo "RAW_TAG=$RAW_TAG" >> "$GITHUB_ENV"
-          echo "PACKAGE_VERSION=$VERSION" >> "$GITHUB_ENV"
-          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${VERSION}/" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION_BASE" >> "$GITHUB_ENV"
+          echo "PACKAGE_RELEASE=$PACKAGE_RELEASE" >> "$GITHUB_ENV"
+          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${PACKAGE_VERSION_BASE}/" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
+          if [ -n "$PACKAGE_RELEASE" ]; then
+            sed -i -E "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${PACKAGE_RELEASE}/" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
+          fi
           grep -E "^PKG_NAME:=|^PKG_VERSION:=|^PKG_RELEASE:=" "$GITHUB_WORKSPACE/${APP_SOURCE_DIR}/Makefile"
 
       - name: Download OpenWrt SDK
@@ -171,9 +174,19 @@ jobs:
           mkdir -p output
           mapfile -t package_files < <(find sdk/bin/packages -type f \( -name "${PACKAGE_NAME}_*.${{ matrix.package_format }}" -o -name "${PACKAGE_NAME}-*.${{ matrix.package_format }}" \) | sort)
           test "${#package_files[@]}" -eq 1
-          FINAL_PACKAGE_FILE="${PACKAGE_NAME}_${PACKAGE_VERSION}-x86_64.${{ matrix.package_format }}"
-          cp -f "${package_files[0]}" "output/${FINAL_PACKAGE_FILE}"
+          # Keep the exact file name produced by OpenWrt. The real name encodes
+          # the package version, release and architecture, so rewriting it here
+          # could publish a name that no longer matches the package metadata.
+          cp -f "${package_files[0]}" "output/"
+          FINAL_PACKAGE_FILE="$(basename "${package_files[0]}")"
           test -f "output/${FINAL_PACKAGE_FILE}"
+          case "${FINAL_PACKAGE_FILE}" in
+            "${PACKAGE_NAME}"[-_]*) ;;
+            *)
+              echo "Unexpected package file name: ${FINAL_PACKAGE_FILE}"
+              exit 1
+              ;;
+          esac
           echo "Final package file: ${FINAL_PACKAGE_FILE}"
           ls -lah output
 

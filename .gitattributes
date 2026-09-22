@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.ipk binary
+*.apk binary
+*.zip binary
+*.gz binary
